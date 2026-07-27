@@ -1,0 +1,11 @@
+{"type":"session.started","cwd":"/workspace/project","env":{"API_TOKEN":"synthetic-token-aaaaaaaa","SHELL":"/bin/zsh"}}
+
+{"type":"tool.call","name":"http_request","input":{"url":"https://example.invalid/v1/runs","headers":{"authorization_token":"synthetic-token-aaaaaaaa","accept":"application/json"},"retry_secret":["synthetic-secret-bbbbbbbb","synthetic-secret-cccccccc"]}}
+{"type":"tool.call","name":"write_file","input":{"path":"/workspace/project/config/settings.json","content":{"db_password":"synthetic-password-dddddddd","db_user":"appuser","nested":{"service_api_key":"synthetic-apikey-eeeeeeee","token_id":"tok_1234567890","mode":"prod"}}}}
+{"type":"tool.result","name":"write_file","status":"ok","bytes_written":214,"path":"/workspace/project/config/settings.json"}
+{"type":"session.ended","cwd":"/workspace/project","env":{"API_TOKEN":"synthetic-token-aaaaaaaa","SHORT_TOKEN":"abc123"},"exit_code":0}
+{"type":"tool.call","name":"run_command","input":{"cwd":"/workspace/project","command":"export API_TOKEN=synthetic-env-token-11111111; DB_PASSWORD=\"synthetic-env-pass-22222222\" ./scripts/migrate.sh"}}
+{"type":"tool.call","name":"http_request","input":{"url":"https://example.invalid/v1/deploy","command":"curl -H 'Authorization: Bearer synthetic-bearer-credential-44444444' -H 'X-GitHub-Token: ghp_syntheticAAAABBBBCCCCDDDD' https://example.invalid/v1/deploy","note":"id token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljLXNpZ25hdHVyZQ expired"}}
+{"type":"tool.call","name":"run_command","input":{"cwd":"/workspace/project","command":"aws s3 cp build.tar s3://ci-bucket/ --profile AKIASYNTHETIC0000000; OPENAI_API_KEY=sk-synthetic0000000000000000AAAA node ship.js; curl -d key=AIzaSyC-synthetic0000000000000 -d stripe=sk_live_synthetic0000000 https://example.invalid/v1/ship"}}
+{"type":"tool.call","name":"write_file","input":{"path":"/workspace/project/secrets/bundle.json","payload":"{\"db_password\":\"synthetic-nested-pass-33333333\",\"db_user\":\"appuser\"}","content":"-----BEGIN RSA PRIVATE KEY-----\nc3ludGhldGljLXJzYS1rZXktYm9keQ==\n-----END RSA PRIVATE KEY-----"}}
+{"type":"tool.call","name":"run_command","input":{"cwd":"/workspace/project","command":"echo retry; API_TOKEN=synthetic-env-token-11111111 ./scripts/migrate.sh"}}
