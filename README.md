@@ -4,7 +4,7 @@ Agentrec records Claude Code and Codex tool calls, commands, results, final repo
 
 ## Status
 
-Provider parsing, structural secret redaction, secure run-bundle persistence, explicit Claude/Codex trace command preparation, Unix process-group supervision, and deterministic terminal/Markdown timelines are implemented. The normalized action model and synthetic provider fixtures are also in place; the remaining implementation follows `docs/plans/2026-07-27-agentrec-flight-recorder.md`.
+The local `trace`, `list`, and `show` vertical slice is implemented for Claude Code and Codex, including provider parsing, structural secret redaction, secure run-bundle persistence, explicit command preparation, Unix process-group supervision, and deterministic terminal/Markdown timeline rendering. Repository gates, observed final delta, independent verification, and integrated evidence reporting remain under construction.
 
 ## Development
 

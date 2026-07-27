@@ -21,6 +21,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	switch args[0] {
+	case "trace":
+		return runTrace(args[1:], stdout, stderr)
+	case "list":
+		return runList(args[1:], stdout, stderr)
+	case "show":
+		return runShow(args[1:], stdout, stderr)
+	}
+
 	fmt.Fprintf(stderr, "unknown command: %s\nrun 'agentrec --help' to see the available commands\n", args[0])
 	return 2
 }

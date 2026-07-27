@@ -1,0 +1,1310 @@
+package cli
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/runner"
+	"github.com/seongwoo-choi/agentrec/internal/storage"
+)
+
+// Fixed instants keep every rendered timestamp deterministic, and UTC keeps it
+// independent of the machine the tests run on.
+var (
+	early = time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
+	late  = time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
+)
+
+// home points the CLI at a private data directory and returns the runs root
+// underneath it, which is where the fixtures below write their bundles.
+func home(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("AGENTREC_HOME", dir)
+	return filepath.Join(dir, "runs")
+}
+
+// writeRun records one bundle: a manifest, one action, and, unless exitReason
+// is empty, a process result and the finalization that ends the run.
+func writeRun(t *testing.T, root, id, provider string, startedAt time.Time, exitReason string) {
+	t.Helper()
+
+	b, err := storage.Create(root, id, storage.Manifest{
+		Provider:  provider,
+		Argv:      []string{provider, "-p", "hello"},
+		CWD:       "/tmp",
+		StartedAt: startedAt,
+	})
+	if err != nil {
+		t.Fatalf("create run %s: %v", id, err)
+	}
+	if err := b.WriteAction(readAction(startedAt)); err != nil {
+		t.Fatalf("write action for %s: %v", id, err)
+	}
+	if exitReason == "" {
+		return
+	}
+	if err := b.WriteProcessResult(processResultJSON(t, startedAt, exitReason)); err != nil {
+		t.Fatalf("write result for %s: %v", id, err)
+	}
+	if err := b.Finalize(storage.Finalization{
+		EndedAt:    startedAt.Add(1500 * time.Millisecond),
+		ExitReason: exitReason,
+	}); err != nil {
+		t.Fatalf("finalize %s: %v", id, err)
+	}
+}
+
+// readAction is one recorded file read whose payloads carry values that must
+// never reach the rendered report.
+func readAction(startedAt time.Time) action.Action {
+	return action.Action{
+		ID:         "a1",
+		Type:       action.TypeFileRead,
+		Provider:   "claude",
+		Assurance:  action.AssuranceProviderReported,
+		StartedAt:  startedAt.Add(time.Second),
+		FinishedAt: startedAt.Add(2 * time.Second),
+		Status:     "completed",
+		Input:      json.RawMessage(`{"file_path":"README.md","unshown_input":"input-payload-marker"}`),
+		Result:     json.RawMessage(`{"content":"result-payload-marker"}`),
+	}
+}
+
+func processResultJSON(t *testing.T, startedAt time.Time, exitReason string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"startedAt":      startedAt,
+		"endedAt":        startedAt.Add(1500 * time.Millisecond),
+		"durationMillis": 1500,
+		"exitCode":       0,
+		"exitReason":     exitReason,
+		"unshownField":   "result-json-marker",
+	})
+	if err != nil {
+		t.Fatalf("encode process result: %v", err)
+	}
+	return raw
+}
+
+// run invokes the CLI and reports what the operator would have seen.
+func run(t *testing.T, args ...string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestListReportsRunsNewestFirstWithStableTieBreak(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	writeRun(t, root, "run-b", "codex", late, "failed")
+	writeRun(t, root, "run-c", "claude", late, "")
+
+	code, stdout, stderr := run(t, "list")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := strings.Join([]string{
+		"RUN ID  PROVIDER  STARTED  EXIT",
+		"run-c  claude  2026-07-27T10:00:00Z  unknown",
+		"run-b  codex  2026-07-27T10:00:00Z  failed",
+		"run-a  claude  2026-07-27T09:00:00Z  completed",
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("stdout =\n%q\nwant\n%q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListWithoutRunsRootReportsNoRuns(t *testing.T) {
+	home(t)
+
+	code, stdout, stderr := run(t, "list")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if stdout != "No runs.\n" {
+		t.Errorf("stdout = %q, want %q", stdout, "No runs.\n")
+	}
+}
+
+// junk fills a runs root with everything that is not a readable run: two run
+// directories whose manifests cannot be read, and three entries that are not
+// run directories at all.
+func junk(t *testing.T, root string) {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(root, "empty"), 0o700); err != nil {
+		t.Fatalf("create empty run: %v", err)
+	}
+	broken := filepath.Join(root, "broken")
+	if err := os.Mkdir(broken, 0o700); err != nil {
+		t.Fatalf("create broken run: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "manifest.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("write broken manifest: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "run-a"), filepath.Join(root, "linked")); err != nil {
+		t.Fatalf("create symlinked run: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("stray\n"), 0o600); err != nil {
+		t.Fatalf("create stray file: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "bad\x1bname"), 0o700); err != nil {
+		t.Fatalf("create invalidly named entry: %v", err)
+	}
+}
+
+func TestListSkipsAndCountsUnreadableRuns(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	junk(t, root)
+
+	code, stdout, stderr := run(t, "list")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "run-a") {
+		t.Errorf("stdout = %q, want the readable run listed", stdout)
+	}
+	for _, skipped := range []string{"empty", "broken", "linked", "notes.txt", "name"} {
+		if strings.Contains(stdout, skipped) {
+			t.Errorf("stdout = %q, want %q skipped", stdout, skipped)
+		}
+	}
+	// A run directory that cannot be read is a run missing from the table, so
+	// it is counted; a stray file or an impossible name never was a run. The
+	// count is a diagnostic, so it belongs on stderr and not in the table.
+	if strings.Contains(stdout, "Warnings") {
+		t.Errorf("stdout = %q, want the warning off the table", stdout)
+	}
+	if !strings.Contains(stderr, "Warnings: 2 unreadable run(s).") {
+		t.Errorf("stderr = %q, want it to report 2 unreadable runs", stderr)
+	}
+}
+
+func TestListEscapesControlCharactersInRecordedValues(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "cla\nude\x1b[31m", early, "completed")
+
+	code, stdout, _ := run(t, "list")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if strings.Count(stdout, "\n") != 2 {
+		t.Errorf("stdout = %q, want exactly a header and one row", stdout)
+	}
+	if !strings.Contains(stdout, `cla\nude\x1b[31m`) {
+		t.Errorf("stdout = %q, want the control characters escaped", stdout)
+	}
+}
+
+func TestListRejectsExtraArguments(t *testing.T) {
+	home(t)
+
+	code, stdout, stderr := run(t, "list", "extra")
+
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "usage") {
+		t.Errorf("stderr = %q, want it to state the usage", stderr)
+	}
+}
+
+// wantShow is the whole report for a run written by writeRun: the recorded
+// action, then the supervisor's fields in their fixed order.
+const wantShow = `ACTION TIMELINE
+
+PROVIDER-REPORTED ACTIONS
+10:00:01  READ  README.md
+  Source       claude
+  Assurance    provider_reported
+  Result       success
+  Duration     1s
+
+SUPERVISOR-OBSERVED RESULT
+  Provider     claude
+  Exit Reason  completed
+  Exit Code    0
+  Duration     1.5s
+  Warnings     0
+
+REPOSITORY-OBSERVED CHANGES
+  (none)
+
+VERIFICATION-OBSERVED RESULT
+  (none)
+`
+
+func TestShowRendersTheRecordedRun(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-b", "claude", late, "completed")
+
+	code, stdout, stderr := run(t, "show", "run-b")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if stdout != wantShow {
+		t.Errorf("stdout =\n%s\nwant\n%s", stdout, wantShow)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestShowLatestSelectsTheNewestRun(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "codex", early, "completed")
+	writeRun(t, root, "run-b", "claude", late, "completed")
+
+	code, stdout, stderr := run(t, "show", "latest")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if stdout != wantShow {
+		t.Errorf("stdout =\n%s\nwant\n%s", stdout, wantShow)
+	}
+}
+
+func TestShowLatestBreaksTiesByRunID(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "codex", late, "completed")
+	writeRun(t, root, "run-b", "claude", late, "completed")
+
+	code, stdout, _ := run(t, "show", "latest")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "Provider     claude") {
+		t.Errorf("stdout = %q, want the highest run id (run-b, claude) chosen", stdout)
+	}
+}
+
+func TestShowLatestWithoutRunsFails(t *testing.T) {
+	home(t)
+
+	code, stdout, stderr := run(t, "show", "latest")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "no runs") {
+		t.Errorf("stderr = %q, want it to say there are no runs", stderr)
+	}
+}
+
+// Which run is newest cannot be known while some run directory refuses to say
+// when it started, so latest names the difficulty instead of quietly showing
+// the newest run it happened to be able to read.
+func TestShowLatestRefusesToGuessPastUnreadableRuns(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	if err := os.Mkdir(filepath.Join(root, "run-b"), 0o700); err != nil {
+		t.Fatalf("create unreadable run: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "latest")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr %q)", code, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "1") || !strings.Contains(stderr, "unreadable") {
+		t.Errorf("stderr = %q, want it to report the unreadable run", stderr)
+	}
+}
+
+// Entries that never were runs say nothing about which run is newest.
+func TestShowLatestIgnoresEntriesThatAreNotRuns(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	if err := os.Symlink(filepath.Join(root, "run-a"), filepath.Join(root, "linked")); err != nil {
+		t.Fatalf("create symlinked run: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("stray\n"), 0o600); err != nil {
+		t.Fatalf("create stray file: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "bad\x1bname"), 0o700); err != nil {
+		t.Fatalf("create invalidly named entry: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "latest")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "Provider     claude") {
+		t.Errorf("stdout =\n%s\nwant the one readable run", stdout)
+	}
+}
+
+// A run ID comes off the command line and is reported back on stderr, so one
+// carrying terminal control characters must be refused and escaped, never
+// echoed as it was typed.
+func TestShowNeverEchoesAControlCharacterRunIDRaw(t *testing.T) {
+	home(t)
+
+	for _, id := range []string{"run\x1b[31m", "run\x00a", "run‮a", "run​a"} {
+		code, stdout, stderr := run(t, "show", id)
+
+		if code != 2 {
+			t.Errorf("show %q exit code = %d, want 2", id, code)
+		}
+		if stdout != "" {
+			t.Errorf("show %q stdout = %q, want empty", id, stdout)
+		}
+		if stderr == "" {
+			t.Errorf("show %q stderr is empty, want an explanation", id)
+		}
+		for _, raw := range []string{"\x1b", "\x00", "‮", "​"} {
+			if strings.Contains(stderr, raw) {
+				t.Errorf("show %q stderr = %q, want the control character escaped", id, stderr)
+			}
+		}
+	}
+}
+
+func TestShowNeverPrintsRawProviderPayloads(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+
+	code, stdout, _ := run(t, "show", "run-a")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	for _, leaked := range []string{
+		"input-payload-marker",
+		"result-payload-marker",
+		"result-json-marker",
+		"durationMillis",
+		"{",
+	} {
+		if strings.Contains(stdout, leaked) {
+			t.Errorf("stdout contains %q, want no raw payload", leaked)
+		}
+	}
+}
+
+func TestShowDerivesSupervisorFieldsFromAnActiveRun(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "")
+
+	code, stdout, stderr := run(t, "show", "run-a")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	for _, want := range []string{
+		"Provider     claude",
+		"Exit Reason  unknown",
+		"Duration     unknown",
+		"Warnings     0",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout =\n%s\nwant it to contain %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "Exit Code") {
+		t.Errorf("stdout =\n%s\nwant no exit code for a run that has none", stdout)
+	}
+}
+
+func TestShowReportsTheProviderVersionWhenRecorded(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-a", storage.Manifest{
+		Provider:        "claude",
+		ProviderVersion: "1.4.2",
+		Argv:            []string{"claude"},
+		StartedAt:       late,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: late.Add(time.Second), ExitReason: "completed"}); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-a")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "Version      1.4.2") {
+		t.Errorf("stdout =\n%s\nwant the recorded provider version", stdout)
+	}
+	// No process result, so the duration comes from the manifest alone.
+	if !strings.Contains(stdout, "Duration     1s") {
+		t.Errorf("stdout =\n%s\nwant the manifest-derived duration", stdout)
+	}
+}
+
+func TestShowReportsTheTerminatingSignal(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-a", storage.Manifest{
+		Provider:  "claude",
+		Argv:      []string{"claude"},
+		StartedAt: late,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"startedAt":      late,
+		"endedAt":        late.Add(time.Second),
+		"durationMillis": 1000,
+		"exitCode":       nil,
+		"signal":         "SIGKILL",
+		"exitReason":     "timeout",
+	})
+	if err != nil {
+		t.Fatalf("encode result: %v", err)
+	}
+	if err := b.WriteProcessResult(raw); err != nil {
+		t.Fatalf("write result: %v", err)
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: late.Add(time.Second), ExitReason: "timeout", WarningCount: 2}); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-a")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	for _, want := range []string{"Exit Reason  timeout", "Signal       SIGKILL", "Warnings     2"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout =\n%s\nwant it to contain %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "Exit Code") {
+		t.Errorf("stdout =\n%s\nwant no exit code for a signalled run", stdout)
+	}
+}
+
+func TestShowRejectsRunIDsThatAreNotOneCleanComponent(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+
+	for _, id := range []string{"", ".", "..", "../run-a", "sub/run-a", "run-a/"} {
+		code, stdout, stderr := run(t, "show", id)
+
+		if code != 2 {
+			t.Errorf("show %q exit code = %d, want 2", id, code)
+		}
+		if stdout != "" {
+			t.Errorf("show %q stdout = %q, want empty", id, stdout)
+		}
+		if stderr == "" {
+			t.Errorf("show %q stderr is empty, want an explanation", id)
+		}
+	}
+}
+
+func TestShowRequiresExactlyOneRunID(t *testing.T) {
+	home(t)
+
+	for _, args := range [][]string{{"show"}, {"show", "run-a", "extra"}} {
+		code, _, stderr := run(t, args...)
+
+		if code != 2 {
+			t.Errorf("Run(%q) exit code = %d, want 2", args, code)
+		}
+		if !strings.Contains(stderr, "usage") {
+			t.Errorf("Run(%q) stderr = %q, want it to state the usage", args, stderr)
+		}
+	}
+}
+
+func TestShowRefusesASymlinkedRunDirectory(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	if err := os.Symlink(filepath.Join(root, "run-a"), filepath.Join(root, "linked")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "linked")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "linked") {
+		t.Errorf("stderr = %q, want it to name the refused run", stderr)
+	}
+}
+
+func TestShowRefusesASymlinkedBundleFile(t *testing.T) {
+	for _, name := range []string{"manifest.json", "actions.jsonl"} {
+		t.Run(name, func(t *testing.T) {
+			root := home(t)
+			writeRun(t, root, "run-a", "claude", late, "completed")
+			writeRun(t, root, "run-b", "claude", late, "completed")
+
+			path := filepath.Join(root, "run-a", name)
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("remove %s: %v", name, err)
+			}
+			if err := os.Symlink(filepath.Join(root, "run-b", name), path); err != nil {
+				t.Fatalf("symlink %s: %v", name, err)
+			}
+
+			code, stdout, stderr := run(t, "show", "run-a")
+
+			if code != 1 {
+				t.Errorf("exit code = %d, want 1", code)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+			if !strings.Contains(stderr, name) {
+				t.Errorf("stderr = %q, want it to name the refused file", stderr)
+			}
+		})
+	}
+}
+
+// A symlink standing where the process directory should be is a directory
+// component, not a file, and the file underneath it is outside the bundle: the
+// run must be refused rather than reported from evidence it does not hold.
+func TestShowRefusesASymlinkedProcessDirectory(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "")
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, resultFile), []byte(`{"exitReason":"outside-marker","durationMillis":1}`), 0o600); err != nil {
+		t.Fatalf("write outside result: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "run-a", processDir)); err != nil {
+		t.Fatalf("symlink process directory: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-a")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, processDir) {
+		t.Errorf("stderr = %q, want it to name the refused directory", stderr)
+	}
+	if strings.Contains(stdout+stderr, "outside-marker") {
+		t.Errorf("the CLI reported content from outside the bundle:\n%s%s", stdout, stderr)
+	}
+}
+
+func TestShowRefusesASymlinkedProcessResult(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "")
+
+	outside := filepath.Join(t.TempDir(), resultFile)
+	if err := os.WriteFile(outside, []byte(`{"exitReason":"outside-marker","durationMillis":1}`), 0o600); err != nil {
+		t.Fatalf("write outside result: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "run-a", processDir), 0o700); err != nil {
+		t.Fatalf("create process directory: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "run-a", processDir, resultFile)); err != nil {
+		t.Fatalf("symlink result: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-a")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, resultFile) {
+		t.Errorf("stderr = %q, want it to name the refused file", stderr)
+	}
+	if strings.Contains(stdout+stderr, "outside-marker") {
+		t.Errorf("the CLI reported content from outside the bundle:\n%s%s", stdout, stderr)
+	}
+}
+
+// The handle a read is given must be the file that was checked, not whatever
+// the same name resolves to afterwards.
+func TestOpenRegularReturnsTheFileItChecked(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	dir := filepath.Join(root, "run-a")
+
+	f, err := openRegular(dir, manifestFile)
+	if err != nil {
+		t.Fatalf("open %s: %v", manifestFile, err)
+	}
+	defer f.Close()
+
+	opened, err := f.Stat()
+	if err != nil {
+		t.Fatalf("stat opened file: %v", err)
+	}
+	onDisk, err := os.Lstat(filepath.Join(dir, manifestFile))
+	if err != nil {
+		t.Fatalf("lstat %s: %v", manifestFile, err)
+	}
+	if !os.SameFile(opened, onDisk) {
+		t.Errorf("opened a different file than the one named in the bundle")
+	}
+}
+
+func TestShowReportsMalformedActions(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	path := filepath.Join(root, "run-a", "actions.jsonl")
+	if err := os.WriteFile(path, []byte("{\"id\":\"a1\"}\nnot json\n"), 0o600); err != nil {
+		t.Fatalf("corrupt actions: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-a")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "actions.jsonl") || !strings.Contains(stderr, "line 2") {
+		t.Errorf("stderr = %q, want it to name the file and the line", stderr)
+	}
+}
+
+func TestShowReportsAnOversizeActionLine(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	huge := append([]byte(`{"id":"a1","type":"file.read","assurance":"provider_reported","x":"`), bytes.Repeat([]byte("a"), 5<<20)...)
+	huge = append(huge, []byte("\"}\n")...)
+	if err := os.WriteFile(filepath.Join(root, "run-a", "actions.jsonl"), huge, 0o600); err != nil {
+		t.Fatalf("write oversize actions: %v", err)
+	}
+
+	code, _, stderr := run(t, "show", "run-a")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "actions.jsonl") {
+		t.Errorf("stderr = %q, want it to name the oversize stream", stderr)
+	}
+}
+
+// A stream of individually acceptable lines is still a stream that must not be
+// loaded without end, so the whole stream is bounded as well as each line.
+func TestShowReportsAnOversizeActionStream(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+
+	f, err := os.Create(filepath.Join(root, "run-a", actionsFile))
+	if err != nil {
+		t.Fatalf("write actions: %v", err)
+	}
+	line := append([]byte(`{"id":"a1","type":"file.read","assurance":"provider_reported","pad":"`), bytes.Repeat([]byte("a"), 64<<10)...)
+	line = append(line, []byte(`"}`+"\n")...)
+	w := bufio.NewWriter(f)
+	for written := 0; written <= maxActionStreamBytes; written += len(line) {
+		if _, err := w.Write(line); err != nil {
+			t.Fatalf("write actions: %v", err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("flush actions: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close actions: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-a")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, actionsFile) {
+		t.Errorf("stderr = %q, want it to name the oversize stream", stderr)
+	}
+}
+
+func TestShowReportsAnOversizeManifest(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	path := filepath.Join(root, "run-a", "manifest.json")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("a"), (1<<20)+1), 0o600); err != nil {
+		t.Fatalf("write oversize manifest: %v", err)
+	}
+
+	code, _, stderr := run(t, "show", "run-a")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "manifest.json") {
+		t.Errorf("stderr = %q, want it to name the oversize manifest", stderr)
+	}
+}
+
+func TestShowReportsAMalformedProcessResult(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	path := filepath.Join(root, "run-a", "process", "result.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("corrupt result: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-a")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "result.json") {
+		t.Errorf("stderr = %q, want it to name the unreadable result", stderr)
+	}
+}
+
+func TestShowReportsAMissingRun(t *testing.T) {
+	home(t)
+
+	code, _, stderr := run(t, "show", "absent")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "absent") {
+		t.Errorf("stderr = %q, want it to name the missing run", stderr)
+	}
+}
+
+// The bundle is evidence, so reading it must leave every byte as it was.
+func TestReadingARunDoesNotMutateItsBundle(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	before := snapshot(t, filepath.Join(root, "run-a"))
+
+	if code, _, stderr := run(t, "show", "run-a"); code != 0 {
+		t.Fatalf("show exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if code, _, stderr := run(t, "list"); code != 0 {
+		t.Fatalf("list exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+
+	after := snapshot(t, filepath.Join(root, "run-a"))
+	if len(before) != len(after) {
+		t.Fatalf("bundle holds %d files after reading, had %d", len(after), len(before))
+	}
+	for name, content := range before {
+		if after[name] != content {
+			t.Errorf("%s changed after reading", name)
+		}
+	}
+}
+
+func snapshot(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[path] = string(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot %s: %v", dir, err)
+	}
+	return files
+}
+
+// --- provider helper mode ---------------------------------------------------
+//
+// The trace tests exercise the real CLI path, which launches a provider by
+// name off PATH. No provider is installed on a test machine, so the test binary
+// stands in for one: it is symlinked into a temporary PATH as `claude` and
+// `codex`, and TestMain dispatches on the name it was invoked under. The helper
+// reports a supported version, checks the invocation agentrec built for it, and
+// emits a minimal event stream of its own — nothing here is copied from a real
+// provider's output.
+
+// Versions the helper reports, each inside the range its provider package
+// supports and spelled the way that provider spells it.
+const (
+	claudeHelperVersion = "2.1.220 (Claude Code)"
+	codexHelperVersion  = "codex-cli 0.144.6"
+)
+
+// helperContractExit is what a helper exits with when agentrec launched it
+// wrongly, so a broken invocation fails the test that expected a clean run
+// rather than passing on a stream the provider would never have produced.
+const helperContractExit = 3
+
+// failPrompt asks the helper to end nonzero after a complete stream, which is
+// what a provider does when the work it recorded did not succeed.
+const failPrompt = "fail"
+
+// forbiddenFlags are the permission, sandbox and approval overrides agentrec
+// must never inject: what the operator may do is the operator's decision, and a
+// recorder that widens it silently is recording a different run than the one
+// asked for.
+var forbiddenFlags = []string{
+	"--dangerously-skip-permissions",
+	"--dangerously-bypass-approvals-and-sandbox",
+	"--permission-mode",
+	"--allowedTools",
+	"--allowed-tools",
+	"--sandbox",
+	"--ask-for-approval",
+	"--full-auto",
+	"--yolo",
+}
+
+// claudeStream is a minimal stream-json Read lifecycle: the tool use, then the
+// result that closes it.
+const claudeStream = `{"type":"assistant","timestamp":"2026-07-27T10:00:01Z","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{"file_path":"README.md"}}]}}
+{"type":"user","timestamp":"2026-07-27T10:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"file contents"}]}}
+`
+
+// codexStream is a minimal JSONL command lifecycle: the item started, then the
+// item completed with its exit code.
+const codexStream = `{"type":"item.started","timestamp":"2026-07-27T10:00:01Z","item":{"id":"item-1","type":"command_execution","command":"echo hi","status":"in_progress"}}
+{"type":"item.completed","timestamp":"2026-07-27T10:00:02Z","item":{"id":"item-1","type":"command_execution","command":"echo hi","status":"completed","aggregated_output":"hi","exit_code":0}}
+`
+
+func TestMain(m *testing.M) {
+	switch filepath.Base(os.Args[0]) {
+	case "claude":
+		os.Exit(claudeHelper(os.Args[1:]))
+	case "codex":
+		os.Exit(codexHelper(os.Args[1:]))
+	}
+	os.Exit(m.Run())
+}
+
+func claudeHelper(args []string) int {
+	if slices.Equal(args, []string{"--version"}) {
+		fmt.Println(claudeHelperVersion)
+		return 0
+	}
+	if err := checkInvocation(args, [][]string{
+		{"--output-format", "stream-json"},
+		{"--verbose"},
+		{"--include-hook-events"},
+		{"-p"},
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "claude helper:", err)
+		return helperContractExit
+	}
+	fmt.Print(claudeStream)
+	return providerExit(args)
+}
+
+func codexHelper(args []string) int {
+	if slices.Equal(args, []string{"--version"}) {
+		fmt.Println(codexHelperVersion)
+		return 0
+	}
+	if len(args) == 0 || args[0] != "exec" {
+		fmt.Fprintln(os.Stderr, "codex helper: exec must be the first argument")
+		return helperContractExit
+	}
+	if err := checkInvocation(args, [][]string{{"--json"}}); err != nil {
+		fmt.Fprintln(os.Stderr, "codex helper:", err)
+		return helperContractExit
+	}
+	fmt.Print(codexStream)
+	return providerExit(args)
+}
+
+// providerExit lets one test drive a provider that ends nonzero after having
+// emitted a complete stream.
+func providerExit(args []string) int {
+	if slices.Contains(args, failPrompt) {
+		return 7
+	}
+	return 0
+}
+
+// checkInvocation reports what is wrong with the argument list agentrec built:
+// a required flag sequence that is missing, or an override agentrec must never
+// have added.
+func checkInvocation(args []string, required [][]string) error {
+	for _, want := range required {
+		if !containsSequence(args, want) {
+			return fmt.Errorf("missing %s in %q", strings.Join(want, " "), args)
+		}
+	}
+	for _, arg := range args {
+		name, _, _ := strings.Cut(arg, "=")
+		if slices.Contains(forbiddenFlags, name) {
+			return fmt.Errorf("agentrec injected %q", arg)
+		}
+	}
+	return nil
+}
+
+func containsSequence(args, want []string) bool {
+	for i := range args {
+		if slices.Equal(args[i:min(i+len(want), len(args))], want) {
+			return true
+		}
+	}
+	return false
+}
+
+// stubProviders puts the test binary on an otherwise empty PATH under each
+// given provider name.
+func stubProviders(t *testing.T, names ...string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locate test binary: %v", err)
+	}
+	dir := t.TempDir()
+	for _, name := range names {
+		if err := os.Symlink(exe, filepath.Join(dir, name)); err != nil {
+			t.Fatalf("stub %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", dir)
+}
+
+// traceRunID reads the run ID off the header trace prints before the report,
+// which is the only place an operator learns what the run was called.
+func traceRunID(t *testing.T, stdout string) string {
+	t.Helper()
+	header, rest, ok := strings.Cut(stdout, "\n")
+	id, hasPrefix := strings.CutPrefix(header, "Run ID: ")
+	if !ok || !hasPrefix || id == "" || !strings.HasPrefix(rest, "\n") {
+		t.Fatalf("stdout =\n%s\nwant it to start with %q", stdout, "Run ID: <id>\n\n")
+	}
+	return id
+}
+
+// wantNoRawJSON fails when a rendered timeline carries provider event text
+// rather than the summary the report is supposed to reduce it to.
+func wantNoRawJSON(t *testing.T, stdout string) {
+	t.Helper()
+	for _, leaked := range []string{"{", "tool_use", "item.completed", "aggregated_output", "file_contents"} {
+		if strings.Contains(stdout, leaked) {
+			t.Errorf("stdout contains %q, want no raw event text:\n%s", leaked, stdout)
+		}
+	}
+}
+
+func TestTraceRecordsAClaudeRunAndRendersItsTimeline(t *testing.T) {
+	root := home(t)
+	stubProviders(t, "claude")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "read the README")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	runID := traceRunID(t, stdout)
+	for _, want := range []string{"READ", "README.md", "Provider     claude", "Version      2.1.220", "Exit Reason  completed"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout =\n%s\nwant it to contain %q", stdout, want)
+		}
+	}
+	wantNoRawJSON(t, stdout)
+
+	code, shown, stderr := run(t, "show", "latest")
+	if code != 0 {
+		t.Fatalf("show latest exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(shown, "READ") {
+		t.Errorf("show latest =\n%s\nwant the recorded read", shown)
+	}
+
+	code, listed, stderr := run(t, "list")
+	if code != 0 {
+		t.Fatalf("list exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(listed, runID) || !strings.Contains(listed, "claude") {
+		t.Errorf("list =\n%s\nwant it to name run %s and its provider", listed, runID)
+	}
+	if _, err := os.Stat(filepath.Join(root, runID, "manifest.json")); err != nil {
+		t.Errorf("recorded bundle: %v", err)
+	}
+}
+
+func TestTraceRecordsACodexRunAndRendersItsTimeline(t *testing.T) {
+	home(t)
+	stubProviders(t, "codex")
+
+	code, stdout, stderr := run(t, "trace", "codex", "--", "exec", "run echo hi")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	runID := traceRunID(t, stdout)
+	for _, want := range []string{"SHELL", "echo hi", "Provider     codex", "Version      0.144.6", "Exit Reason  completed"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout =\n%s\nwant it to contain %q", stdout, want)
+		}
+	}
+	wantNoRawJSON(t, stdout)
+
+	code, listed, stderr := run(t, "list")
+	if code != 0 {
+		t.Fatalf("list exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(listed, runID) || !strings.Contains(listed, "codex") {
+		t.Errorf("list =\n%s\nwant it to name run %s and its provider", listed, runID)
+	}
+}
+
+// The recorded invocation is what agentrec decided to launch, so it is checked
+// directly as well as by the helper that received it.
+func TestTraceLaunchesTheProviderWithStructuredOutputAndNoInjectedPermissions(t *testing.T) {
+	root := home(t)
+	stubProviders(t, "claude")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "read the README")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+
+	manifest, err := readManifest(filepath.Join(root, traceRunID(t, stdout)))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if len(manifest.Argv) == 0 || manifest.Argv[0] != "claude" {
+		t.Fatalf("argv = %q, want it to start with the executable", manifest.Argv)
+	}
+	for _, want := range [][]string{{"--output-format", "stream-json"}, {"--verbose"}, {"--include-hook-events"}, {"-p", "read the README"}} {
+		if !containsSequence(manifest.Argv, want) {
+			t.Errorf("argv = %q, want it to contain %q", manifest.Argv, want)
+		}
+	}
+	for _, arg := range manifest.Argv {
+		name, _, _ := strings.Cut(arg, "=")
+		if slices.Contains(forbiddenFlags, name) {
+			t.Errorf("argv = %q, want no injected %q", manifest.Argv, arg)
+		}
+	}
+	if manifest.CWD == "" {
+		t.Errorf("manifest records no working directory")
+	}
+}
+
+// A token the operator passed on the command line reaches the prompt, the
+// manifest's argv and, through them, every artifact derived from either. None
+// of it may hold the secret itself.
+func TestTraceNeverRecordsOrPrintsASecretFromTheInvocation(t *testing.T) {
+	const secret = "sk-agentrecTESTSECRET0123456789"
+	root := home(t)
+	stubProviders(t, "claude")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "export API_TOKEN="+secret+" then read the README")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	dir := filepath.Join(root, traceRunID(t, stdout))
+	for name, content := range snapshot(t, dir) {
+		if strings.Contains(content, secret) {
+			t.Errorf("%s holds the secret verbatim", name)
+		}
+	}
+	// The prompt was recorded, and the secret in it was replaced rather than
+	// the whole prompt being dropped: a bundle that never held the prompt would
+	// pass the scan above without proving anything.
+	recorded, err := os.ReadFile(filepath.Join(dir, "prompt.txt"))
+	if err != nil {
+		t.Fatalf("read recorded prompt: %v", err)
+	}
+	if !strings.Contains(string(recorded), "[REDACTED:") || !strings.Contains(string(recorded), "then read the README") {
+		t.Errorf("prompt.txt = %q, want the prompt with its secret replaced by a marker", recorded)
+	}
+	if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+		t.Errorf("the CLI printed the secret")
+	}
+}
+
+func TestTraceReportsTheProviderExitCode(t *testing.T) {
+	home(t)
+	stubProviders(t, "claude")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", failPrompt)
+
+	if code != 7 {
+		t.Fatalf("exit code = %d, want the provider's 7 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "Exit Reason  nonzero") {
+		t.Errorf("stdout =\n%s\nwant the run reported as nonzero", stdout)
+	}
+}
+
+func TestTraceRejectsInvocationsItCannotRecord(t *testing.T) {
+	for _, args := range [][]string{
+		{"trace"},
+		{"trace", "claude"},
+		{"trace", "claude", "-p", "hello"},
+		{"trace", "claude", "--"},
+		{"trace", "gemini", "--", "-p", "hello"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			root := home(t)
+			stubProviders(t, "claude", "codex")
+
+			code, stdout, stderr := run(t, args...)
+
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2", code)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+			if !strings.Contains(stderr, "usage") {
+				t.Errorf("stderr = %q, want it to state the usage", stderr)
+			}
+			if entries, err := os.ReadDir(root); err == nil && len(entries) > 0 {
+				t.Errorf("runs root holds %d entries, want no bundle", len(entries))
+			}
+		})
+	}
+}
+
+// --- trace bookkeeping ------------------------------------------------------
+
+// An interrupted run is still the operator's ending, but a supervisor failure
+// on the way out is why the evidence may be short and must be said out loud.
+func TestTraceExitReportsWhyAnInterruptedRunFailed(t *testing.T) {
+	var stderr bytes.Buffer
+
+	code := traceExit(runner.Result{ExitReason: runner.ReasonInterrupted}, errors.New("synthetic supervisor failure"), &stderr, "run-a")
+
+	if code != exitInterrupted {
+		t.Errorf("exit code = %d, want %d", code, exitInterrupted)
+	}
+	if !strings.Contains(stderr.String(), "synthetic supervisor failure") {
+		t.Errorf("stderr = %q, want it to report why the run failed", stderr.String())
+	}
+}
+
+// A run whose own request could not be recorded leaves a finalized bundle: one
+// that describes a run that stopped, and that refuses every later write.
+func TestUnrecordableFinalizesTheBundle(t *testing.T) {
+	root := home(t)
+	bundle, err := storage.Create(root, "run-a", storage.Manifest{
+		Provider:  "claude",
+		Argv:      []string{"claude"},
+		StartedAt: late,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	var stderr bytes.Buffer
+
+	code := unrecordable(bundle, &stderr, "run-a", errors.New("synthetic storage failure"))
+
+	if code != exitFailure {
+		t.Errorf("exit code = %d, want %d", code, exitFailure)
+	}
+	if !strings.Contains(stderr.String(), "synthetic storage failure") {
+		t.Errorf("stderr = %q, want it to report the cause", stderr.String())
+	}
+	manifest, err := readManifest(filepath.Join(root, "run-a"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if manifest.ExitReason != runner.ReasonStorageError {
+		t.Errorf("exit reason = %q, want %q", manifest.ExitReason, runner.ReasonStorageError)
+	}
+	if manifest.EndedAt == nil {
+		t.Errorf("manifest records no ending")
+	}
+	if err := bundle.WriteAction(readAction(late)); !errors.Is(err, storage.ErrFinalized) {
+		t.Errorf("write after finalize = %v, want %v", err, storage.ErrFinalized)
+	}
+}
+
+// A prompt agentrec cannot identify is left unrecorded: a wrong prompt is worse
+// evidence than none, and an option's value is not a prompt.
+func TestCodexPromptRecordsOnlyAnUnambiguousPrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"prompt last", []string{"exec", "read the README"}, "read the README"},
+		{"option value last", []string{"exec", "read the README", "--model", "o3"}, ""},
+		{"short option value last", []string{"exec", "-m", "o3"}, ""},
+		{"prompt after an option", []string{"exec", "--model", "o3", "read the README"}, "read the README"},
+		{"prompt after an inline option value", []string{"exec", "--model=o3", "read the README"}, "read the README"},
+		{"prompt after the inner delimiter", []string{"exec", "--", "-leading-dash prompt"}, "-leading-dash prompt"},
+		{"flag last", []string{"exec", "--json"}, ""},
+		{"no prompt", []string{"exec"}, ""},
+		{"nothing", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codexPrompt(tc.args); got != tc.want {
+				t.Errorf("codexPrompt(%q) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaudePromptRecordsOnlyAnUnambiguousPrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"prompt after -p", []string{"-p", "read the README"}, "read the README"},
+		{"prompt after --print", []string{"--print", "read the README"}, "read the README"},
+		{"prompt among other options", []string{"--model", "opus", "-p", "read the README", "--verbose"}, "read the README"},
+		{"flag after -p", []string{"-p", "--verbose"}, ""},
+		{"nothing after -p", []string{"--verbose", "-p"}, ""},
+		{"no print flag", []string{"read the README"}, ""},
+		{"nothing", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claudePrompt(tc.args); got != tc.want {
+				t.Errorf("claudePrompt(%q) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}

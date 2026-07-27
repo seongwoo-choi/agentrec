@@ -1,0 +1,282 @@
+package cli
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/seongwoo-choi/agentrec/internal/provider"
+	"github.com/seongwoo-choi/agentrec/internal/provider/claude"
+	"github.com/seongwoo-choi/agentrec/internal/provider/codex"
+	"github.com/seongwoo-choi/agentrec/internal/report"
+	"github.com/seongwoo-choi/agentrec/internal/runner"
+	"github.com/seongwoo-choi/agentrec/internal/storage"
+)
+
+// traceDelimiter separates agentrec's own arguments from the provider's. It is
+// required rather than inferred: everything after it belongs to the provider,
+// including flags agentrec itself understands.
+const traceDelimiter = "--"
+
+const traceUsage = "usage: agentrec trace <claude|codex> -- <provider args...>\n"
+
+// versionTimeout bounds preparation alone — running the provider's `--version`
+// — and nothing else. The recorded run itself is bounded by the operator, not
+// by a clock here.
+const versionTimeout = 10 * time.Second
+
+// Exit codes. A provider's own exit code is passed through when it is one a
+// shell would read back as the provider's; 126 and above are the shell's own
+// vocabulary for how a command failed to run, and 130 is reserved here for a
+// run the operator interrupted.
+const (
+	exitFailure         = 1
+	exitUsage           = 2
+	exitInterrupted     = 130
+	maxProviderExitCode = 125
+)
+
+// runIDTimeLayout stamps a run with the UTC instant it started, to the
+// nanosecond, so run IDs sort in the order their runs happened.
+const runIDTimeLayout = "20060102T150405.000000000Z"
+
+// runTrace records one provider run: it prepares the invocation, opens a
+// bundle for it, supervises the process, and then renders the run back from the
+// bundle it just wrote.
+func runTrace(args []string, stdout, stderr io.Writer) int {
+	// The provider and the delimiter are both required, and so is at least one
+	// argument for the provider: agentrec can only record a non-interactive run,
+	// which is never an empty argument list.
+	if len(args) < 3 || args[1] != traceDelimiter {
+		fmt.Fprint(stderr, traceUsage)
+		return exitUsage
+	}
+	name, providerArgs := args[0], args[2:]
+
+	var (
+		cmd    provider.Command
+		parse  runner.Parser
+		prompt string
+		err    error
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
+	switch name {
+	case "claude":
+		cmd, err = claude.PrepareCommand(ctx, providerArgs, nil)
+		parse, prompt = claudeParser, claudePrompt(providerArgs)
+	case "codex":
+		cmd, err = codex.PrepareCommand(ctx, providerArgs, nil)
+		parse, prompt = codexParser, codexPrompt(providerArgs)
+	default:
+		cancel()
+		fmt.Fprint(stderr, traceUsage)
+		return exitUsage
+	}
+	cancel()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "cli: locate working directory: %v\n", err)
+		return exitFailure
+	}
+	root, err := runsRoot()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+	runID, err := newRunID()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+
+	// Installed before the bundle exists, and buffered, so an interrupt arriving
+	// from here on is held rather than ending this process where it stands: a
+	// Ctrl-C between creating the bundle and running the provider would otherwise
+	// leave a run directory that never says how it ended. The run itself has no
+	// timeout: how long an agent may work is the operator's decision, taken with
+	// that same Ctrl-C.
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	defer signal.Stop(interrupt)
+
+	// The manifest records the invocation exactly as it will be launched,
+	// executable included, so the recorded argv is the command that ran and not
+	// the one the operator typed. Storage sets the redaction rule version.
+	bundle, err := storage.Create(root, runID, storage.Manifest{
+		Provider:        name,
+		ProviderVersion: cmd.Version,
+		Argv:            append([]string{cmd.Executable}, cmd.Args...),
+		CWD:             cwd,
+		StartedAt:       time.Now(),
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+
+	// The prompt is written before the provider starts: a run whose own request
+	// could not be recorded is not one to launch, because whatever it then did
+	// would be evidence with nothing to explain it.
+	if prompt != "" {
+		if err := bundle.WritePrompt(prompt); err != nil {
+			return unrecordable(bundle, stderr, runID, err)
+		}
+	}
+
+	res, runErr := runner.Run(context.Background(), runner.Request{
+		Command:   cmd,
+		CWD:       cwd,
+		Bundle:    bundle,
+		Parser:    parse,
+		Interrupt: interrupt,
+	})
+
+	// The report is read back from the finalized bundle rather than rendered
+	// from what this process still holds, so what the operator sees is what was
+	// persisted. It is attempted for every ending, including a bad one: partial
+	// evidence is what an interrupted or failed run has to show.
+	if err := renderRun(stdout, root, runID); err != nil {
+		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
+		return exitFailure
+	}
+	return traceExit(res, runErr, stderr, runID)
+}
+
+// unrecordable ends a run that could not be recorded before its provider was
+// ever launched. The bundle is finalized rather than left open, so the run
+// directory describes a run that stopped instead of one still going.
+func unrecordable(bundle *storage.Bundle, stderr io.Writer, runID string, cause error) int {
+	fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, cause)
+	if err := bundle.Finalize(storage.Finalization{
+		EndedAt:    time.Now(),
+		ExitReason: runner.ReasonStorageError,
+	}); err != nil {
+		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
+	}
+	return exitFailure
+}
+
+// traceExit reports the run to the shell. How the run was ended comes first: an
+// interrupted run is the operator's own ending, whatever else the supervisor
+// reported on the way out — but what else went wrong is still said, because it
+// is why the evidence the operator is looking at may be short.
+func traceExit(res runner.Result, runErr error, stderr io.Writer, runID string) int {
+	switch {
+	case res.ExitReason == runner.ReasonInterrupted:
+		if runErr != nil {
+			fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, runErr)
+		}
+		return exitInterrupted
+	case runErr != nil:
+		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, runErr)
+		return exitFailure
+	case res.ExitReason == runner.ReasonCompleted:
+		return 0
+	case res.ExitReason == runner.ReasonNonzero:
+		if res.ExitCode != nil && *res.ExitCode >= 1 && *res.ExitCode <= maxProviderExitCode {
+			return *res.ExitCode
+		}
+		return exitFailure
+	}
+	fmt.Fprintf(stderr, "cli: run %s ended: %s\n", runID, res.ExitReason)
+	return exitFailure
+}
+
+// renderRun prints the recorded run, announcing the run ID first so the
+// operator can ask for it again later.
+func renderRun(stdout io.Writer, root, runID string) error {
+	rep, err := readRun(root, runID)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "Run ID: %s\n\n", runID); err != nil {
+		return err
+	}
+	return report.RenderTerminal(stdout, rep)
+}
+
+// newRunID names a run: the instant it started, so runs sort in the order they
+// happened, and four random bytes, so two runs started in the same nanosecond
+// cannot claim the same directory. The result is one path component.
+func newRunID() (string, error) {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("cli: generate run id: %w", err)
+	}
+	return time.Now().UTC().Format(runIDTimeLayout) + "-" + hex.EncodeToString(suffix[:]), nil
+}
+
+// claudeParser and codexParser adapt each provider's parser to the one shape
+// the runner streams into.
+func claudeParser(r io.Reader) (runner.ParseResult, error) {
+	out, err := claude.Parse(r)
+	return runner.ParseResult{Actions: out.Actions, WarningCount: out.WarningCount}, err
+}
+
+func codexParser(r io.Reader) (runner.ParseResult, error) {
+	out, err := codex.Parse(r)
+	return runner.ParseResult{Actions: out.Actions, WarningCount: out.WarningCount}, err
+}
+
+// claudePrompt is what the operator asked Claude Code to do: the positional
+// argument immediately after -p/--print. Anything more elaborate — a prompt on
+// stdin, a prompt spelled across several arguments — is left unrecorded rather
+// than guessed at, because a wrong prompt is worse evidence than none.
+func claudePrompt(args []string) string {
+	for i, arg := range args {
+		if arg != "-p" && arg != "--print" {
+			continue
+		}
+		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			return args[i+1]
+		}
+		return ""
+	}
+	return ""
+}
+
+// codexValueOptions are the Codex options whose value is the argument after
+// them. An argument in that position is that option's value, not a prompt, and
+// telling them apart is the whole reason this list exists.
+var codexValueOptions = []string{
+	"-m", "--model",
+	"-s", "--sandbox",
+	"-c", "--config",
+	"--profile",
+	"--color",
+	"--cd",
+	"--add-dir",
+	"--output-schema",
+	"-o", "--output-last-message",
+}
+
+// codexPrompt is what the operator asked Codex to do: the final argument of
+// `codex exec`, which is where Codex reads its prompt from — but only when that
+// argument is a prompt and nothing else. An option's value, or a flag, is left
+// unrecorded rather than guessed at, because a wrong prompt is worse evidence
+// than none.
+func codexPrompt(args []string) string {
+	if len(args) < 2 {
+		return ""
+	}
+	last, before := args[len(args)-1], args[len(args)-2]
+	if strings.HasPrefix(last, "-") && before != traceDelimiter {
+		return ""
+	}
+	if slices.Contains(codexValueOptions, before) {
+		return ""
+	}
+	return last
+}
