@@ -4,7 +4,7 @@ Agentrec records Claude Code and Codex tool calls, commands, results, final repo
 
 ## Status
 
-Provider parsing and structural secret redaction are implemented for Claude `stream-json` and Codex `--json` fixtures. The normalized action model and synthetic provider fixtures are also in place; the remaining implementation follows `docs/plans/2026-07-27-agentrec-flight-recorder.md`.
+Provider parsing, structural secret redaction, and secure run-bundle persistence are implemented for Claude `stream-json` and Codex `--json` fixtures. The normalized action model and synthetic provider fixtures are also in place; the remaining implementation follows `docs/plans/2026-07-27-agentrec-flight-recorder.md`.
 
 ## Development
 
