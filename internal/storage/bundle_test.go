@@ -284,11 +284,20 @@ func TestOneSecretGetsOneMarkerAcrossEveryBundleFile(t *testing.T) {
 	if err := b.WriteProviderEvent([]byte(`{"type":"tool.call","command":"git push https://` + secret + `@example.invalid/repo"}`)); err != nil {
 		t.Fatalf("WriteProviderEvent: %v", err)
 	}
+	if err := b.WriteProcessStderr("fatal: authentication failed for " + secret + "\n"); err != nil {
+		t.Fatalf("WriteProcessStderr: %v", err)
+	}
+	if err := b.WriteProcessResult([]byte(`{"type":"result","stderr_tail":"failed for ` + secret + `"}`)); err != nil {
+		t.Fatalf("WriteProcessResult: %v", err)
+	}
 
 	// Assert: every file carries a marker, none carries the secret or a
-	// digest of it, and all four markers are the same one.
+	// digest of it, and all six markers are the same one.
 	markers := make(map[string]bool)
-	files := []string{"manifest.json", "prompt.txt", "actions.jsonl", "provider-events.sanitized.jsonl"}
+	files := []string{
+		"manifest.json", "prompt.txt", "actions.jsonl", "provider-events.sanitized.jsonl",
+		filepath.Join("process", "stderr.sanitized.log"), filepath.Join("process", "result.json"),
+	}
 	digest := sha256.Sum256([]byte(secret))
 	for _, name := range files {
 		path := filepath.Join(b.Dir(), name)
@@ -492,6 +501,8 @@ func TestAFailedStreamWriteStopsEveryLaterWrite(t *testing.T) {
 	later := map[string]error{
 		"WriteProviderEvent": b.WriteProviderEvent([]byte(`{"type":"after"}`)),
 		"WriteAction":        b.WriteAction(action.Action{ID: "a2", Type: action.TypeFileRead, Assurance: action.AssuranceProviderReported}),
+		"WriteProcessStderr": b.WriteProcessStderr("after\n"),
+		"WriteProcessResult": b.WriteProcessResult([]byte(`{"type":"result"}`)),
 	}
 	for name, err := range later {
 		if !errors.Is(err, first) {
@@ -500,6 +511,395 @@ func TestAFailedStreamWriteStopsEveryLaterWrite(t *testing.T) {
 	}
 	if lines := readLines(t, filepath.Join(b.Dir(), eventsFile)); len(lines) != 0 {
 		t.Errorf("a write after the failure reached %s", eventsFile)
+	}
+}
+
+// processPath resolves one process artifact inside a bundle.
+func processPath(b *Bundle, name string) string {
+	return filepath.Join(b.Dir(), "process", name)
+}
+
+func TestWriteProcessStderrStoresTheCaptureUnderPrivateModes(t *testing.T) {
+	// Arrange: a permissive umask masks nothing, so a too-wide mode shows here.
+	defer syscall.Umask(syscall.Umask(0))
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	const text = "starting claude\n  indented detail\n\nexit status 1\n"
+
+	// Act
+	if err := b.WriteProcessStderr(text); err != nil {
+		t.Fatalf("WriteProcessStderr: %v", err)
+	}
+
+	// Assert
+	if got := statMode(t, filepath.Join(b.Dir(), "process")); got != 0o700 {
+		t.Errorf("process directory mode = %04o, want 0700", got)
+	}
+	path := processPath(b, "stderr.sanitized.log")
+	if got := statMode(t, path); got != 0o600 {
+		t.Errorf("%s mode = %04o, want 0600", path, got)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	if string(raw) != text {
+		t.Errorf("stderr = %q, want the capture unchanged: %q", raw, text)
+	}
+}
+
+func TestWriteProcessStderrRedactsSecretsThatSpanLines(t *testing.T) {
+	// Arrange: a key block and an assignment, both of which only make sense to
+	// the redactor if the whole capture is sanitized in one pass.
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	const body = "c3ludGhldGljLXJzYS1rZXktYm9keQ==\nMIISYNTHETICKEYBODYSECONDLINE\n"
+	const text = "loading key\n" +
+		"-----BEGIN RSA PRIVATE KEY-----\n" + body + "-----END RSA PRIVATE KEY-----\n" +
+		"AWS_SECRET_ACCESS_KEY=synthetic-secret-bbbbbbbb\ndone\n"
+
+	// Act
+	if err := b.WriteProcessStderr(text); err != nil {
+		t.Fatalf("WriteProcessStderr: %v", err)
+	}
+
+	// Assert: no line of the key survives, in whole or in part, and the
+	// ordinary output around it is untouched.
+	raw, err := os.ReadFile(processPath(b, "stderr.sanitized.log"))
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	got := string(raw)
+	for _, leak := range []string{
+		"c3ludGhldGljLXJzYS1rZXktYm9keQ==",
+		"MIISYNTHETICKEYBODYSECONDLINE",
+		"BEGIN RSA PRIVATE KEY",
+		"synthetic-secret-bbbbbbbb",
+	} {
+		if strings.Contains(got, leak) {
+			t.Errorf("sanitized stderr leaked %q:\n%s", leak, got)
+		}
+	}
+	if !strings.HasPrefix(got, "loading key\n") || !strings.HasSuffix(got, "\ndone\n") {
+		t.Errorf("sanitized stderr = %q, want the ordinary lines and newlines preserved", got)
+	}
+	if !strings.Contains(got, "\nAWS_SECRET_ACCESS_KEY=[REDACTED:") {
+		t.Errorf("sanitized stderr = %q, want the assignment name kept and its value replaced", got)
+	}
+	if n := len(markerPattern.FindAllString(got, -1)); n != 2 {
+		t.Errorf("sanitized stderr holds %d markers, want 2 (the key block and the assignment)", n)
+	}
+}
+
+func TestWriteProcessResultInstallsOneSanitizedObject(t *testing.T) {
+	// Arrange
+	defer syscall.Umask(syscall.Umask(0))
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	raw := []byte(`{"type":"result","is_error":false,"api_key":"synthetic-token-aaaaaaaa","usage":{"input_tokens":12}}`)
+
+	// Act
+	if err := b.WriteProcessResult(raw); err != nil {
+		t.Fatalf("WriteProcessResult: %v", err)
+	}
+
+	// Assert
+	path := processPath(b, "result.json")
+	if got := statMode(t, path); got != 0o600 {
+		t.Errorf("%s mode = %04o, want 0600", path, got)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if strings.Contains(string(stored), "synthetic-token-aaaaaaaa") {
+		t.Errorf("result.json leaked the key")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(stored, &got); err != nil {
+		t.Fatalf("result.json is not one JSON object: %v", err)
+	}
+	if got["type"] != "result" || got["is_error"] != false {
+		t.Errorf("result.json = %v, want the document's own fields preserved", got)
+	}
+	if key, _ := got["api_key"].(string); !markerPattern.MatchString(key) {
+		t.Errorf("api_key = %v, want a marker", got["api_key"])
+	}
+	// The install is atomic, so nothing of the temporary file survives it.
+	entries, err := os.ReadDir(filepath.Join(b.Dir(), "process"))
+	if err != nil {
+		t.Fatalf("read process directory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("process directory holds %d entries, want only result.json", len(entries))
+	}
+}
+
+func TestWriteProcessResultFailsClosedAndLeavesTheRunWritable(t *testing.T) {
+	// Arrange
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	path := processPath(b, "result.json")
+
+	// Act & Assert: a result this package cannot parse as one object is one it
+	// cannot vouch for, so nothing about it reaches the bundle.
+	for _, bad := range []string{
+		`[{"type":"result"}]`,
+		`"result"`,
+		`42`,
+		`null`,
+		`{"type":"result"`,
+		`{"a":1} {"b":2}`,
+		``,
+	} {
+		if err := b.WriteProcessResult([]byte(bad)); err == nil {
+			t.Errorf("WriteProcessResult(%q) succeeded, want error", bad)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("rejected result %q reached disk", bad)
+		}
+	}
+
+	// Rejected input is not a storage failure: the run still has its evidence,
+	// so it stays open.
+	if err := b.WriteProcessResult([]byte(`{"type":"result"}`)); err != nil {
+		t.Errorf("WriteProcessResult after rejected input: %v", err)
+	}
+}
+
+// Each process artifact gets its own bundle below, because the first refusal
+// poisons the bundle: sharing one would leave the second artifact's own guard
+// untested behind the stored failure.
+func TestProcessArtifactsAreWrittenOnce(t *testing.T) {
+	for name, tc := range map[string]struct {
+		file   string
+		first  func(*Bundle) error
+		second func(*Bundle) error
+		kept   string
+	}{
+		"stderr": {
+			file:   "stderr.sanitized.log",
+			first:  func(b *Bundle) error { return b.WriteProcessStderr("first capture\n") },
+			second: func(b *Bundle) error { return b.WriteProcessStderr("second capture\n") },
+			kept:   "first capture",
+		},
+		"result": {
+			file:   "result.json",
+			first:  func(b *Bundle) error { return b.WriteProcessResult([]byte(`{"type":"result","attempt":1}`)) },
+			second: func(b *Bundle) error { return b.WriteProcessResult([]byte(`{"type":"result","attempt":2}`)) },
+			kept:   `"attempt":1`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Arrange
+			b, err := Create(t.TempDir(), "run-1", testManifest())
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if err := tc.first(b); err != nil {
+				t.Fatalf("first write: %v", err)
+			}
+
+			// Act: the process ended once, so a second call is a mistake that
+			// would destroy what the first one recorded.
+			second := tc.second(b)
+
+			// Assert
+			if second == nil {
+				t.Error("a second write succeeded, want error")
+			}
+			got, err := os.ReadFile(processPath(b, tc.file))
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.file, err)
+			}
+			if !strings.Contains(string(got), tc.kept) {
+				t.Errorf("%s = %q, want what the first write stored", tc.file, got)
+			}
+		})
+	}
+}
+
+func TestProcessWritesAfterFinalizeFail(t *testing.T) {
+	// Arrange
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := b.Finalize(Finalization{EndedAt: time.Date(2026, 7, 27, 10, 1, 0, 0, time.UTC), ExitReason: "exit:0"}); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	// Act & Assert
+	writes := map[string]error{
+		"WriteProcessStderr": b.WriteProcessStderr("late capture\n"),
+		"WriteProcessResult": b.WriteProcessResult([]byte(`{"type":"result"}`)),
+	}
+	for name, err := range writes {
+		if !errors.Is(err, ErrFinalized) {
+			t.Errorf("%s after Finalize returned %v, want ErrFinalized", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(b.Dir(), "process")); !os.IsNotExist(err) {
+		t.Errorf("a post-finalize process write created the process directory")
+	}
+}
+
+func TestAFailedProcessWritePoisonsTheBundleAndRemovesNothing(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a read-only directory does not stop root")
+	}
+	// Arrange: a process directory that already holds evidence and can no
+	// longer be written into, the way a full or read-only filesystem fails.
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	dir := filepath.Join(b.Dir(), "process")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("pre-create process directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("earlier evidence"), 0o600); err != nil {
+		t.Fatalf("pre-create process artifact: %v", err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("seal process directory: %v", err)
+	}
+	defer os.Chmod(dir, 0o700)
+
+	// Act
+	first := b.WriteProcessStderr("capture\n")
+
+	// Assert: the failure is reported, then remembered, and what was already
+	// in the process directory is still there.
+	if first == nil {
+		t.Fatal("WriteProcessStderr into a sealed directory returned nil, want an error")
+	}
+	later := b.WriteAction(action.Action{ID: "a1", Type: action.TypeFileRead, Assurance: action.AssuranceProviderReported})
+	if !errors.Is(later, first) {
+		t.Errorf("WriteAction after a failed process write returned %v, want the stored failure %v", later, first)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "keep.txt")); err != nil {
+		t.Errorf("a failed process write removed what the directory already held: %v", err)
+	}
+}
+
+func TestProcessArtifactsNeverFollowASymlink(t *testing.T) {
+	// Arrange: somewhere outside the bundle for a symlink to point at.
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "target.log")
+	if err := os.WriteFile(outsideFile, []byte("untouched\n"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	// Act & Assert: every entry a process write opens is refused when it is a
+	// symlink or is not the kind of thing it should be. Each writer gets its
+	// own bundle, since the first refusal poisons the one it was made against.
+	for _, tc := range []struct {
+		name    string
+		planted string
+		plant   func(t *testing.T, b *Bundle)
+	}{
+		{"process is a symlink", "process", func(t *testing.T, b *Bundle) {
+			if err := os.Symlink(outside, filepath.Join(b.Dir(), "process")); err != nil {
+				t.Fatalf("plant symlink: %v", err)
+			}
+		}},
+		{"process is a regular file", "process", func(t *testing.T, b *Bundle) {
+			if err := os.WriteFile(filepath.Join(b.Dir(), "process"), nil, 0o600); err != nil {
+				t.Fatalf("plant file: %v", err)
+			}
+		}},
+		{"stderr is a symlink", filepath.Join("process", "stderr.sanitized.log"), plantArtifactSymlink(outsideFile, "stderr.sanitized.log")},
+		{"result is a symlink", filepath.Join("process", "result.json"), plantArtifactSymlink(outsideFile, "result.json")},
+	} {
+		for name, write := range map[string]func(*Bundle) error{
+			"WriteProcessStderr": func(b *Bundle) error { return b.WriteProcessStderr("capture\n") },
+			"WriteProcessResult": func(b *Bundle) error { return b.WriteProcessResult([]byte(`{"type":"result"}`)) },
+		} {
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				b, err := Create(t.TempDir(), "run-1", testManifest())
+				if err != nil {
+					t.Fatalf("Create: %v", err)
+				}
+				tc.plant(t, b)
+				planted, err := os.Lstat(filepath.Join(b.Dir(), tc.planted))
+				if err != nil {
+					t.Fatalf("stat planted entry: %v", err)
+				}
+
+				// A write that names the planted entry has to be refused; one
+				// that names the other artifact may be refused too, but must
+				// never reach through the plant.
+				_ = write(b)
+
+				if strings.HasSuffix(tc.planted, filepath.Base(tc.planted)) {
+					after, err := os.Lstat(filepath.Join(b.Dir(), tc.planted))
+					if err != nil {
+						t.Fatalf("stat planted entry after the write: %v", err)
+					}
+					if after.Mode().Type() != planted.Mode().Type() {
+						t.Errorf("%s changed from %s to %s, so the write replaced what was already there",
+							tc.planted, planted.Mode().Type(), after.Mode().Type())
+					}
+				}
+				got, err := os.ReadFile(outsideFile)
+				if err != nil {
+					t.Fatalf("read outside file: %v", err)
+				}
+				if string(got) != "untouched\n" {
+					t.Errorf("the write followed the symlink and wrote %q outside the bundle", got)
+				}
+				entries, err := os.ReadDir(outside)
+				if err != nil {
+					t.Fatalf("read outside directory: %v", err)
+				}
+				if len(entries) != 1 {
+					t.Errorf("the write left %d entries outside the bundle, want only the planted target", len(entries))
+				}
+			})
+		}
+	}
+}
+
+// plantArtifactSymlink puts a real process directory in the bundle with one
+// artifact name already taken by a symlink out of it.
+func plantArtifactSymlink(target, name string) func(*testing.T, *Bundle) {
+	return func(t *testing.T, b *Bundle) {
+		t.Helper()
+		dir := filepath.Join(b.Dir(), "process")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatalf("plant directory: %v", err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatalf("plant symlink: %v", err)
+		}
+	}
+}
+
+func TestProcessArtifactsUseAnExistingProcessDirectory(t *testing.T) {
+	// Arrange: a real directory is the one thing that may already be there.
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(b.Dir(), "process"), 0o700); err != nil {
+		t.Fatalf("pre-create process directory: %v", err)
+	}
+
+	// Act & Assert
+	if err := b.WriteProcessStderr("capture\n"); err != nil {
+		t.Errorf("WriteProcessStderr into an existing process directory: %v", err)
+	}
+	if err := b.WriteProcessResult([]byte(`{"type":"result"}`)); err != nil {
+		t.Errorf("WriteProcessResult into an existing process directory: %v", err)
 	}
 }
 

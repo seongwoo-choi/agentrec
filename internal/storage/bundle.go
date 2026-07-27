@@ -26,6 +26,15 @@ const (
 	eventsFile   = "provider-events.sanitized.jsonl"
 )
 
+// Process artifacts describe the provider process itself and are written once,
+// after it has ended. They live in their own directory so that what the run
+// recorded stays separate from how the run was executed.
+const (
+	processDirName = "process"
+	stderrFile     = "stderr.sanitized.log"
+	resultFile     = "result.json"
+)
+
 // A run may hold prompts, credentials in argv and whole file contents, so the
 // bundle is readable only by the user who recorded it. The modes are applied
 // explicitly rather than left to the process umask, which can only ever remove
@@ -130,26 +139,16 @@ func (b *Bundle) WritePrompt(prompt string) error {
 	if err := b.writable(); err != nil {
 		return err
 	}
-	wrapped, err := json.Marshal(map[string]string{"prompt": prompt})
+	safe, err := b.redactFreeText("prompt", prompt)
 	if err != nil {
-		return fmt.Errorf("storage: encode prompt: %w", err)
-	}
-	safe, err := b.red.RedactJSON(wrapped)
-	if err != nil {
-		return fmt.Errorf("storage: redact prompt: %w", err)
-	}
-	var unwrapped struct {
-		Prompt string `json:"prompt"`
-	}
-	if err := json.Unmarshal(safe, &unwrapped); err != nil {
-		return fmt.Errorf("storage: decode redacted prompt: %w", err)
+		return err
 	}
 
 	f, err := createFile(b.path(promptFile))
 	if err != nil {
 		return err
 	}
-	if _, err := f.WriteString(unwrapped.Prompt + "\n"); err != nil {
+	if _, err := f.WriteString(safe + "\n"); err != nil {
 		f.Close()
 		return fmt.Errorf("storage: write %s: %w", promptFile, err)
 	}
@@ -157,6 +156,120 @@ func (b *Bundle) WritePrompt(prompt string) error {
 		return fmt.Errorf("storage: close %s: %w", promptFile, err)
 	}
 	return nil
+}
+
+// redactFreeText puts free text through the run's redactor. The redactor only
+// reads JSON, so the text is handed over as the one field of a throwaway object
+// under a name that means nothing to the pattern rules: that puts it through
+// the same rules, and the same marker assignments, as every other string in the
+// run. The text goes over in a single call, whole: a private key or a
+// credential written across several lines is one secret, and redacting a line
+// at a time would judge each fragment alone and publish the rest.
+func (b *Bundle) redactFreeText(field, text string) (string, error) {
+	wrapped, err := json.Marshal(map[string]string{field: text})
+	if err != nil {
+		return "", fmt.Errorf("storage: encode %s: %w", field, err)
+	}
+	safe, err := b.red.RedactJSON(wrapped)
+	if err != nil {
+		return "", fmt.Errorf("storage: redact %s: %w", field, err)
+	}
+	var unwrapped map[string]string
+	if err := json.Unmarshal(safe, &unwrapped); err != nil {
+		return "", fmt.Errorf("storage: decode redacted %s: %w", field, err)
+	}
+	return unwrapped[field], nil
+}
+
+// WriteProcessStderr stores everything the provider process wrote to stderr,
+// sanitized as one capture. Stderr is free text carrying whatever the process
+// printed, so the ordinary output is preserved exactly and only the secret runs
+// in it are replaced. It may be called once per run.
+func (b *Bundle) WriteProcessStderr(text string) error {
+	if err := b.writable(); err != nil {
+		return err
+	}
+	safe, err := b.redactFreeText("stderr", text)
+	if err != nil {
+		return err
+	}
+	dir, err := b.processDir()
+	if err != nil {
+		return b.fail(err)
+	}
+	f, err := createFile(filepath.Join(dir, stderrFile))
+	if err != nil {
+		return b.fail(err)
+	}
+	if _, err := f.WriteString(safe); err != nil {
+		f.Close()
+		return b.fail(fmt.Errorf("storage: write %s: %w", stderrFile, err))
+	}
+	if err := syncClose(f); err != nil {
+		return b.fail(fmt.Errorf("storage: finish %s: %w", stderrFile, err))
+	}
+	return nil
+}
+
+// WriteProcessResult stores the provider's final result document, sanitized.
+// It fails closed the way a provider event does: a result that is not exactly
+// one JSON object is one this package cannot read, so it is never persisted in
+// any form rather than guessed at. It may be called once per run.
+func (b *Bundle) WriteProcessResult(rawJSON []byte) error {
+	if err := b.writable(); err != nil {
+		return err
+	}
+	safe, err := b.red.RedactJSON(rawJSON)
+	if err != nil {
+		return fmt.Errorf("storage: redact process result: %w", err)
+	}
+	dir, err := b.processDir()
+	if err != nil {
+		return b.fail(err)
+	}
+	path := filepath.Join(dir, resultFile)
+	// The install below renames over whatever is at path, so a result already
+	// there is checked for first: it is evidence from this run, and a second
+	// call is the recorder's view of the run having diverged from the disk.
+	// Lstat, so a symlink is refused rather than replaced silently.
+	if _, err := os.Lstat(path); err == nil {
+		return b.fail(fmt.Errorf("storage: %s already exists", resultFile))
+	}
+	if err := install(path, append(safe, '\n')); err != nil {
+		return b.fail(err)
+	}
+	return nil
+}
+
+// processDir returns the directory holding the process artifacts, creating it
+// on the first one. An entry that is already there is accepted only if it is a
+// real directory: a symlink standing in its place would put the run's evidence
+// wherever it points, so it is refused rather than followed. A directory this
+// call created and could not then write into is left where it is; removing a
+// directory tree is not something a failed write should ever perform.
+func (b *Bundle) processDir() (string, error) {
+	dir := b.path(processDirName)
+	switch err := os.Mkdir(dir, dirMode); {
+	case err == nil:
+		// Set again after creation, because the umask masks the mode passed to
+		// Mkdir and is not the recorder's to trust.
+		if err := os.Chmod(dir, dirMode); err != nil {
+			return "", fmt.Errorf("storage: set mode of %s: %w", processDirName, err)
+		}
+		return dir, nil
+	case !errors.Is(err, os.ErrExist):
+		return "", fmt.Errorf("storage: create %s directory: %w", processDirName, err)
+	}
+	// Lstat, not Stat, so a symlink is seen as a symlink rather than as
+	// whatever it points at.
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return "", fmt.Errorf("storage: inspect %s: %w", processDirName, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("storage: %s exists and is not a directory", processDirName)
+	}
+	return dir, nil
 }
 
 // WriteAction appends one normalized action to the action stream. The action
@@ -248,11 +361,19 @@ func (b *Bundle) writable() error {
 	return b.writeErr
 }
 
+// fail records why an artifact could not be written and returns the failure
+// this bundle is now stuck on, which is the first one it saw.
+func (b *Bundle) fail(err error) error {
+	if b.writeErr == nil {
+		b.writeErr = err
+	}
+	return b.writeErr
+}
+
 // appendLine writes one sanitized JSON line to an already-open stream.
 func (b *Bundle) appendLine(f *os.File, name string, line []byte) error {
 	if _, err := f.Write(append(line, '\n')); err != nil {
-		b.writeErr = fmt.Errorf("storage: append to %s: %w", name, err)
-		return b.writeErr
+		return b.fail(fmt.Errorf("storage: append to %s: %w", name, err))
 	}
 	return nil
 }
@@ -289,27 +410,33 @@ func (b *Bundle) writeManifest() error {
 		return fmt.Errorf("storage: redact manifest: %w", err)
 	}
 
-	tmp := b.path(manifestFile + ".tmp")
+	return install(b.path(manifestFile), append(safe, '\n'))
+}
+
+// install writes data to path atomically, through a temporary file that is
+// created exclusively and synced before the rename, so what a crash leaves
+// behind is either the previous file or the whole new one, never a partial.
+func install(path string, data []byte) error {
+	name := filepath.Base(path)
+	tmp := path + ".tmp"
 	f, err := createFile(tmp)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp)
-	if _, err := f.Write(append(safe, '\n')); err != nil {
+	if _, err := f.Write(data); err != nil {
 		f.Close()
-		return fmt.Errorf("storage: write manifest: %w", err)
+		return fmt.Errorf("storage: write %s: %w", name, err)
 	}
-	// Synced before the rename, so the manifest a crash leaves behind is the
-	// one this rename promised rather than an empty file.
 	if err := f.Sync(); err != nil {
 		f.Close()
-		return fmt.Errorf("storage: sync manifest: %w", err)
+		return fmt.Errorf("storage: sync %s: %w", name, err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("storage: close manifest: %w", err)
+		return fmt.Errorf("storage: close %s: %w", name, err)
 	}
-	if err := os.Rename(tmp, b.path(manifestFile)); err != nil {
-		return fmt.Errorf("storage: install manifest: %w", err)
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("storage: install %s: %w", name, err)
 	}
 	return nil
 }
