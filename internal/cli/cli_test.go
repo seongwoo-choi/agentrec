@@ -3,10 +3,12 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/lock"
 	"github.com/seongwoo-choi/agentrec/internal/runner"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
@@ -879,6 +882,12 @@ const (
 // rather than passing on a stream the provider would never have produced.
 const helperContractExit = 3
 
+// startedEnv names a file the helper creates when it is launched to record a
+// run, which is how a test can tell that a run agentrec should have refused was
+// never started. Reporting a version is preparation and not a run, so it leaves
+// no mark.
+const startedEnv = "AGENTREC_TEST_PROVIDER_STARTED"
+
 // failPrompt asks the helper to end nonzero after a complete stream, which is
 // what a provider does when the work it recorded did not succeed.
 const failPrompt = "fail"
@@ -926,6 +935,7 @@ func claudeHelper(args []string) int {
 		fmt.Println(claudeHelperVersion)
 		return 0
 	}
+	markStarted()
 	if err := checkInvocation(args, [][]string{
 		{"--output-format", "stream-json"},
 		{"--verbose"},
@@ -944,6 +954,7 @@ func codexHelper(args []string) int {
 		fmt.Println(codexHelperVersion)
 		return 0
 	}
+	markStarted()
 	if len(args) == 0 || args[0] != "exec" {
 		fmt.Fprintln(os.Stderr, "codex helper: exec must be the first argument")
 		return helperContractExit
@@ -954,6 +965,18 @@ func codexHelper(args []string) int {
 	}
 	fmt.Print(codexStream)
 	return providerExit(args)
+}
+
+// markStarted records that the helper was launched to record a run, for the
+// tests that require agentrec to have refused before ever reaching a provider.
+func markStarted() {
+	path := os.Getenv(startedEnv)
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, []byte("started\n"), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "helper:", err)
+	}
 }
 
 // providerExit lets one test drive a provider that ends nonzero after having
@@ -993,7 +1016,9 @@ func containsSequence(args, want []string) bool {
 }
 
 // stubProviders puts the test binary on an otherwise empty PATH under each
-// given provider name.
+// given provider name. Git is put there too: agentrec asks the repository where
+// it is and whether it is clean before it records anything, so a PATH holding
+// only providers would be a PATH no run could start from.
 func stubProviders(t *testing.T, names ...string) {
 	t.Helper()
 	exe, err := os.Executable()
@@ -1006,7 +1031,76 @@ func stubProviders(t *testing.T, names ...string) {
 			t.Fatalf("stub %s: %v", name, err)
 		}
 	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("locate git: %v", err)
+	}
+	if err := os.Symlink(git, filepath.Join(dir, "git")); err != nil {
+		t.Fatalf("stub git: %v", err)
+	}
 	t.Setenv("PATH", dir)
+}
+
+// cleanRepo makes a fresh repository holding one commit the working directory
+// for the rest of the test, and returns it. agentrec records runs against a
+// clean repository, which is not something these tests may require of the
+// repository they are themselves being run in. The working directory is
+// process-wide, so it is restored afterwards and no test in this package runs
+// in parallel.
+func cleanRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "agentrec test"},
+		{"add", "README.md"},
+		{"commit", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"LC_ALL=C",
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_CONFIG_SYSTEM=/dev/null",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("locate working directory: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("enter %s: %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatalf("return to %s: %v", previous, err)
+		}
+	})
+
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", dir, err)
+	}
+	return real
+}
+
+// providerStarted names a file the stubbed provider creates when it is launched
+// to record a run, and reports whether it exists.
+func providerStarted(t *testing.T) func() bool {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "started")
+	t.Setenv(startedEnv, path)
+	return func() bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
 }
 
 // traceRunID reads the run ID off the header trace prints before the report,
@@ -1034,12 +1128,17 @@ func wantNoRawJSON(t *testing.T, stdout string) {
 
 func TestTraceRecordsAClaudeRunAndRendersItsTimeline(t *testing.T) {
 	root := home(t)
+	cleanRepo(t)
+	started := providerStarted(t)
 	stubProviders(t, "claude")
 
 	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "read the README")
 
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !started() {
+		t.Fatalf("the provider was never launched")
 	}
 	runID := traceRunID(t, stdout)
 	for _, want := range []string{"READ", "README.md", "Provider     claude", "Version      2.1.220", "Exit Reason  completed"} {
@@ -1071,6 +1170,7 @@ func TestTraceRecordsAClaudeRunAndRendersItsTimeline(t *testing.T) {
 
 func TestTraceRecordsACodexRunAndRendersItsTimeline(t *testing.T) {
 	home(t)
+	cleanRepo(t)
 	stubProviders(t, "codex")
 
 	code, stdout, stderr := run(t, "trace", "codex", "--", "exec", "run echo hi")
@@ -1099,6 +1199,7 @@ func TestTraceRecordsACodexRunAndRendersItsTimeline(t *testing.T) {
 // directly as well as by the helper that received it.
 func TestTraceLaunchesTheProviderWithStructuredOutputAndNoInjectedPermissions(t *testing.T) {
 	root := home(t)
+	cleanRepo(t)
 	stubProviders(t, "claude")
 
 	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "read the README")
@@ -1135,6 +1236,7 @@ func TestTraceLaunchesTheProviderWithStructuredOutputAndNoInjectedPermissions(t 
 func TestTraceNeverRecordsOrPrintsASecretFromTheInvocation(t *testing.T) {
 	const secret = "sk-agentrecTESTSECRET0123456789"
 	root := home(t)
+	cleanRepo(t)
 	stubProviders(t, "claude")
 
 	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "export API_TOKEN="+secret+" then read the README")
@@ -1165,6 +1267,7 @@ func TestTraceNeverRecordsOrPrintsASecretFromTheInvocation(t *testing.T) {
 
 func TestTraceReportsTheProviderExitCode(t *testing.T) {
 	home(t)
+	cleanRepo(t)
 	stubProviders(t, "claude")
 
 	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", failPrompt)
@@ -1204,6 +1307,72 @@ func TestTraceRejectsInvocationsItCannotRecord(t *testing.T) {
 				t.Errorf("runs root holds %d entries, want no bundle", len(entries))
 			}
 		})
+	}
+}
+
+// A repository that already differs from its last commit cannot be told apart
+// afterwards from one the recorded agent changed, so the run is refused before
+// anything is recorded and before the provider is launched.
+func TestTraceRefusesToRecordADirtyRepository(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	started := providerStarted(t)
+	stubProviders(t, "claude")
+	if err := os.WriteFile(filepath.Join(repo, "scratch.txt"), []byte("scratch\n"), 0o600); err != nil {
+		t.Fatalf("dirty the repository: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "read the README")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr %q)", code, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "commit") && !strings.Contains(stderr, "stash") {
+		t.Errorf("stderr = %q, want it to say what to do about it", stderr)
+	}
+	wantNothingRecorded(t, root, started)
+}
+
+// Two runs recording the same repository at once would each observe the other's
+// changes, so the second is refused rather than queued behind the first.
+func TestTraceRefusesToRecordWhileAnotherRunHoldsTheRepository(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	started := providerStarted(t)
+	stubProviders(t, "claude")
+
+	held, err := lock.Acquire(context.Background(), filepath.Join(filepath.Dir(root), "locks"), repo)
+	if err != nil {
+		t.Fatalf("hold the repository lock: %v", err)
+	}
+	defer held.Release()
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "read the README")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr %q)", code, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "already") {
+		t.Errorf("stderr = %q, want it to say the repository is already being recorded", stderr)
+	}
+	wantNothingRecorded(t, root, started)
+}
+
+// wantNothingRecorded fails when a refused run left anything behind: a bundle
+// on disk, or a provider that was launched at all.
+func wantNothingRecorded(t *testing.T, root string, started func() bool) {
+	t.Helper()
+	if entries, err := os.ReadDir(root); err == nil && len(entries) > 0 {
+		t.Errorf("runs root holds %d entries, want no bundle", len(entries))
+	}
+	if started() {
+		t.Errorf("the provider was launched for a run agentrec refused")
 	}
 }
 

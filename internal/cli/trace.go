@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/seongwoo-choi/agentrec/internal/lock"
 	"github.com/seongwoo-choi/agentrec/internal/provider"
 	"github.com/seongwoo-choi/agentrec/internal/provider/claude"
 	"github.com/seongwoo-choi/agentrec/internal/provider/codex"
@@ -31,6 +33,14 @@ const traceUsage = "usage: agentrec trace <claude|codex> -- <provider args...>\n
 // — and nothing else. The recorded run itself is bounded by the operator, not
 // by a clock here.
 const versionTimeout = 10 * time.Second
+
+// gitTimeout bounds the questions asked of the repository before the run — where
+// it is, and whether it is clean. They answer in milliseconds; a repository that
+// does not answer is one this process must not wait on forever.
+const gitTimeout = 30 * time.Second
+
+// locksDirName holds the per-repository locks beside the recorded runs.
+const locksDirName = "locks"
 
 // Exit codes. A provider's own exit code is passed through when it is one a
 // shell would read back as the provider's; 126 and above are the shell's own
@@ -97,6 +107,28 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	}
 	runID, err := newRunID()
 	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+
+	// The repository is taken before it is judged, and both happen before any
+	// evidence is written: a run recorded against a repository another run is
+	// already changing, or against one that was not clean to begin with, cannot
+	// say afterwards which changes were the agent's. The lock is held until this
+	// function returns, which is after the run has been finalized and read back.
+	gitCtx, cancelGit := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancelGit()
+	repo, err := lock.Acquire(gitCtx, filepath.Join(filepath.Dir(root), locksDirName), cwd)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+	defer func() {
+		if err := repo.Release(); err != nil {
+			fmt.Fprintln(stderr, err)
+		}
+	}()
+	if err := lock.CheckClean(gitCtx, repo.Root()); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailure
 	}
