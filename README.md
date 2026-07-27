@@ -4,7 +4,7 @@ Agentrec records Claude Code and Codex tool calls, commands, results, final repo
 
 ## Status
 
-Initial project scaffold. See `docs/plans/2026-07-27-agentrec-flight-recorder.md` for the implementation plan.
+Provider parsing is underway. The normalized action model, synthetic Claude/Codex fixtures, and Claude `stream-json` parser are implemented; the remaining implementation follows `docs/plans/2026-07-27-agentrec-flight-recorder.md`.
 
 ## Development
 
