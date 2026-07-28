@@ -198,9 +198,9 @@ git diff --check
 
 ## Implementation status (2026-07-29)
 
-Tasks 1–6 are implemented and covered by repository tests. Task 7 has completed
-the real-provider dogfood and documentation/review gates; final push and GitHub
-CI verification remain.
+Tasks 1–7 are complete. The implementation, real-provider dogfood,
+documentation, independent reviews, normal `main` push and GitHub CI gate all
+completed without a tag or release.
 
 Done:
 
@@ -241,10 +241,14 @@ Decisions taken while implementing, which the plan above did not settle:
 - **The checkout directory is narrowed to `0700` after Git creates it**, since
   Git creates it against the operator's umask.
 
-Outstanding:
+Release gate:
 
-- Task 7 step 10: commit the dogfood documentation, push normal `main`, and
-  verify GitHub CI. No tag or release is part of this pass.
+- Commits `b903113` and `ac48366` were pushed normally to `main`.
+- GitHub CI run
+  [30382584369](https://github.com/seongwoo-choi/agentrec/actions/runs/30382584369)
+  passed formatting, tests, race detector, vet, release-script boundaries and
+  build.
+- No tag or release was created.
 
 ## Completion evidence
 
