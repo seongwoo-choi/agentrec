@@ -28,7 +28,23 @@ import (
 // including flags agentrec itself understands.
 const traceDelimiter = "--"
 
-const traceUsage = "usage: agentrec trace <claude|codex> -- <provider args...>\n"
+const traceUsage = "usage: agentrec trace <claude|codex> [--verify] -- <provider args...>\n"
+
+// verifyFlag asks for the repository's own checks to be run against the work
+// once the provider has stopped. It is the only option agentrec takes for
+// itself, and it is spelled exactly: anything else before the delimiter is an
+// invocation agentrec does not understand rather than one it guesses at.
+const verifyFlag = "--verify"
+
+// verifyConfigFile is where the checks are read from, at the root of the
+// repository being recorded. It is not configurable: a verification an operator
+// has to be told the location of is one they cannot check was the one that ran.
+const verifyConfigFile = ".agentrec.yaml"
+
+// verifyPinTimeout bounds reading and fixing that configuration, which is one
+// file and a handful of Git questions. The checks themselves are bounded by the
+// configuration, each by its own timeout.
+const verifyPinTimeout = 10 * time.Second
 
 // versionTimeout bounds preparation alone — running the provider's `--version`
 // — and nothing else. The recorded run itself is bounded by the operator, not
@@ -76,11 +92,24 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	// The provider and the delimiter are both required, and so is at least one
 	// argument for the provider: agentrec can only record a non-interactive run,
 	// which is never an empty argument list.
-	if len(args) < 3 || args[1] != traceDelimiter {
+	delimiter := slices.Index(args, traceDelimiter)
+	if delimiter < 1 || delimiter == len(args)-1 {
 		fmt.Fprint(stderr, traceUsage)
 		return exitUsage
 	}
-	name, providerArgs := args[0], args[2:]
+	name, providerArgs := args[0], args[delimiter+1:]
+	// Everything between the provider and the delimiter is agentrec's own, and
+	// there is one thing it may be. An option it does not know, or one given
+	// twice, is refused rather than ignored: an operator who asked for something
+	// must not be told a run was recorded the way they asked for.
+	verify := false
+	for _, opt := range args[1:delimiter] {
+		if opt != verifyFlag || verify {
+			fmt.Fprint(stderr, traceUsage)
+			return exitUsage
+		}
+		verify = true
+	}
 
 	var (
 		cmd    provider.Command
@@ -200,6 +229,35 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 		}
 	}()
 
+	// The checks are fixed before the provider starts, for the same reason the
+	// baseline is: what a run is verified against has to be what an operator
+	// reviewed, and a configuration read afterwards is one the run could have
+	// written. A verification that could not be pinned is a run whose result
+	// could never be trusted, so it is not started.
+	var verifier *evidence.PinnedVerification
+	verifierClosed := false
+	if verify {
+		pinCtx, cancelPin := context.WithTimeout(context.Background(), verifyPinTimeout)
+		verifier, err = evidence.PinVerification(pinCtx, repo.Root(), bundle.Dir(), filepath.Join(repo.Root(), verifyConfigFile), evidence.VerificationOptions{
+			Sanitize: bundle.SanitizeText,
+		})
+		cancelPin()
+		if err != nil {
+			return unrecordable(bundle, stderr, runID, err)
+		}
+		// Deferred for the paths that return before the checks are run. Close
+		// reports the same outcome every time, so the one below stands down once
+		// the run has closed the verification itself.
+		defer func() {
+			if verifierClosed {
+				return
+			}
+			if err := verifier.Close(); err != nil {
+				fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
+			}
+		}()
+	}
+
 	// The prompt is written before the provider starts: a run whose own request
 	// could not be recorded is not one to launch, because whatever it then did
 	// would be evidence with nothing to explain it.
@@ -233,6 +291,28 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	cancelFinalize()
 	evidenceMeasured = true
 
+	// The checks run against the repository the run left, and after it has been
+	// measured, so nothing a check writes can be read as the agent's work. They
+	// run whatever the provider did: a failed or interrupted run still left work
+	// behind, and whether it holds up is the question the checks answer.
+	var (
+		verification      evidence.VerificationResult
+		verifyErr         error
+		verifyCloseErr    error
+		verifyInterrupted bool
+	)
+	if verifier != nil {
+		// Its own handler, installed for the checks alone: an operator's Ctrl-C
+		// during a verification is a verification they want stopped, and the
+		// cancellation is what takes the check's process group down with it.
+		verifyCtx, stopVerify := signal.NotifyContext(context.Background(), os.Interrupt)
+		verification, verifyErr = verifier.Run(verifyCtx)
+		verifyInterrupted = verifyCtx.Err() != nil
+		stopVerify()
+		verifyCloseErr = verifier.Close()
+		verifierClosed = true
+	}
+
 	// The report is read back from the finalized bundle rather than rendered
 	// from what this process still holds, so what the operator sees is what was
 	// persisted. It is attempted for every ending, including a bad one: partial
@@ -244,10 +324,23 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	if renderErr != nil {
 		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, renderErr)
 	}
+	for _, err := range []error{verifyErr, verifyCloseErr} {
+		if err != nil {
+			fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
+		}
+	}
+	if verifyInterrupted {
+		return exitInterrupted
+	}
 	// A run whose repository evidence is missing is not a run to report as the
 	// provider's own ending: what the operator has been shown is incomplete, and
-	// the exit code says so.
-	if evidenceErr != nil || renderErr != nil {
+	// the exit code says so. A verification that did not pass is the recorder's
+	// own finding about the work, and it fails the command whatever the provider
+	// reported — while a verification that passed leaves that reporting alone.
+	if evidenceErr != nil || renderErr != nil || verifyErr != nil || verifyCloseErr != nil {
+		return exitFailure
+	}
+	if verifier != nil && verification.Status != evidence.VerificationPassed {
 		return exitFailure
 	}
 	return traceExit(res, runErr, stderr, runID)

@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -975,8 +978,365 @@ func TestMain(m *testing.M) {
 		os.Exit(claudeHelper(os.Args[1:]))
 	case "codex":
 		os.Exit(codexHelper(os.Args[1:]))
+	case verifyHelperName:
+		os.Exit(verifyHelper(os.Args[1:]))
 	}
 	os.Exit(m.Run())
+}
+
+// --- verification helper mode ------------------------------------------------
+//
+// A pinned check is an argv agentrec launches directly, with no shell anywhere,
+// so the test binary stands in for one the same way it stands in for a provider.
+// Everything the check does is decided by the argv a test wrote into the
+// configuration, which is the only thing that reaches it.
+
+// verifyHelperName is the name the test binary is symlinked under when it is a
+// verification check rather than a provider.
+const verifyHelperName = "verify-helper"
+
+// verifyHelperMark is what a check writes where a test told it to, so a test
+// can tell a check that ran from one that was never allowed to.
+const verifyHelperMark = "ran\n"
+
+// verifyHelperContent is what a check writes into the repository when a test
+// drives one that changes the work it is judging.
+const verifyHelperContent = "written by the check\n"
+
+func verifyHelper(args []string) int {
+	if len(args) != 1 && len(args) != 2 {
+		fmt.Fprintf(os.Stderr, "verify helper: %q is not a mode and its argument\n", args)
+		return helperContractExit
+	}
+	switch args[0] {
+	case "pass":
+		return 0
+	case "fail":
+		code, err := strconv.Atoi(args[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "verify helper:", err)
+			return helperContractExit
+		}
+		return code
+	case "marker":
+		return verifyHelperWrite(args[1], verifyHelperMark)
+	case "write":
+		return verifyHelperWrite(args[1], verifyHelperContent)
+	}
+	fmt.Fprintf(os.Stderr, "verify helper: %q is not a mode\n", args[0])
+	return helperContractExit
+}
+
+func verifyHelperWrite(path, content string) int {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "verify helper:", err)
+		return helperContractExit
+	}
+	return 0
+}
+
+// commitVerifyConfig gives the repository the configuration a verified run is
+// pinned to. It is committed rather than left in the worktree: agentrec records
+// only a clean repository, so a configuration that is not already part of the
+// baseline is one no run could be started with.
+func commitVerifyConfig(t *testing.T, repo string, argv ...string) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("version: 1\nverify:\n  - name: \"check\"\n    timeout: \"30s\"\n    command:\n")
+	for _, arg := range argv {
+		fmt.Fprintf(&b, "      - %s\n", strconv.Quote(arg))
+	}
+	writeVerifyConfig(t, repo, b.String())
+	gitIn(t, repo, "add", verifyConfigFile)
+	gitIn(t, repo, "commit", "-m", "pin verification")
+}
+
+func writeVerifyConfig(t *testing.T, repo, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, verifyConfigFile), []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", verifyConfigFile, err)
+	}
+}
+
+// verifyResultDoc is the verification status document as an operator's tooling
+// would read it back off disk.
+type verifyResultDoc struct {
+	Status       string `json:"status"`
+	Reason       string `json:"reason"`
+	Attribution  string `json:"attribution"`
+	Config       string `json:"config"`
+	ConfigSHA256 string `json:"configSha256"`
+	Checks       []struct {
+		Name     string `json:"name"`
+		Status   string `json:"status"`
+		ExitCode *int   `json:"exitCode"`
+	} `json:"checks"`
+	Warnings []struct {
+		Code  string   `json:"code"`
+		Paths []string `json:"paths"`
+	} `json:"warnings"`
+}
+
+func readVerifyResult(t *testing.T, dir string) verifyResultDoc {
+	t.Helper()
+	var doc verifyResultDoc
+	readJSONFile(t, filepath.Join(dir, "verification", "results.json"), &doc)
+	return doc
+}
+
+func fileSHA256(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// exists reports whether a path is there at all, which is how a test asks
+// whether a check that should have been refused nevertheless ran.
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+// A verified run executes the checks the repository already held, after the
+// provider has stopped, and files their verdict under the run.
+func TestTraceVerifiesTheRunAgainstThePinnedConfiguration(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	started := providerStarted(t)
+	stubProviders(t, "claude", verifyHelperName)
+	marker := filepath.Join(t.TempDir(), "checked")
+	commitVerifyConfig(t, repo, verifyHelperName, "marker", marker)
+
+	code, stdout, stderr := run(t, "trace", "claude", "--verify", "--", "-p", "read the README")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !started() {
+		t.Fatalf("the provider was never launched")
+	}
+	if !exists(marker) {
+		t.Errorf("the pinned check never ran")
+	}
+	dir := filepath.Join(root, traceRunID(t, stdout))
+
+	// The flag is agentrec's own: what the operator asked the provider to do is
+	// everything after the delimiter and nothing else.
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if slices.Contains(manifest.Argv, verifyFlag) {
+		t.Errorf("argv = %q, want %q kept off the provider's invocation", manifest.Argv, verifyFlag)
+	}
+
+	res := readVerifyResult(t, dir)
+	if res.Status != "passed" || res.Reason != "" || res.Attribution == "" {
+		t.Errorf("results.json = %+v, want a passed verification that says what it means", res)
+	}
+	if res.Config != verifyConfigFile {
+		t.Errorf("results.json config = %q, want %q", res.Config, verifyConfigFile)
+	}
+	if want := fileSHA256(t, filepath.Join(repo, verifyConfigFile)); res.ConfigSHA256 != want {
+		t.Errorf("results.json configSha256 = %q, want %q", res.ConfigSHA256, want)
+	}
+	if len(res.Checks) != 1 {
+		t.Fatalf("results.json checks = %+v, want the one pinned check", res.Checks)
+	}
+	check := res.Checks[0]
+	if check.Name != "check" || check.Status != "passed" || check.ExitCode == nil || *check.ExitCode != 0 {
+		t.Errorf("results.json check = %+v, want the pinned check reported as passed", check)
+	}
+}
+
+// A verification the run did not survive is the recorder's own finding, and it
+// ends the command as a failure whatever the provider itself reported.
+func TestTraceReportsAFailedVerification(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	stubProviders(t, "claude", verifyHelperName)
+	commitVerifyConfig(t, repo, verifyHelperName, "fail", "3")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--verify", "--", "-p", "read the README")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr %q)", code, stderr)
+	}
+	res := readVerifyResult(t, filepath.Join(root, traceRunID(t, stdout)))
+	if res.Status != "failed" {
+		t.Errorf("results.json status = %q, want %q", res.Status, "failed")
+	}
+	if len(res.Checks) != 1 {
+		t.Fatalf("results.json checks = %+v, want the one pinned check", res.Checks)
+	}
+	// The check's own ending is preserved rather than reduced to the command's.
+	check := res.Checks[0]
+	if check.Status != "failed" || check.ExitCode == nil || *check.ExitCode != 3 {
+		t.Errorf("results.json check = %+v, want the check's own exit code recorded", check)
+	}
+}
+
+// A configuration the run rewrote is not the one an operator reviewed, so
+// nothing from it is executed and the run says why.
+func TestTraceRefusesAVerificationTheRunRewrote(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	stubProviders(t, "claude", verifyHelperName)
+	marker := filepath.Join(t.TempDir(), "checked")
+	commitVerifyConfig(t, repo, verifyHelperName, "marker", marker)
+	t.Setenv(trackedEnv, verifyConfigFile)
+
+	code, stdout, stderr := run(t, "trace", "claude", "--verify", "--", "-p", "rewrite the verification")
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr %q)", code, stderr)
+	}
+	if exists(marker) {
+		t.Errorf("a check ran against a configuration the run rewrote")
+	}
+	res := readVerifyResult(t, filepath.Join(root, traceRunID(t, stdout)))
+	if res.Status != "tainted" || res.Reason != "config_changed" {
+		t.Errorf("results.json status = %q, reason = %q, want tainted(config_changed)", res.Status, res.Reason)
+	}
+}
+
+// A check that changes the repository is reported for what it did and never
+// undone — and what the run itself changed was measured before the checks ran,
+// so the check's own writing cannot be read as the agent's work.
+func TestTraceReportsAVerificationThatChangedTheRepository(t *testing.T) {
+	const written = "verified.txt"
+	root := home(t)
+	repo := cleanRepo(t)
+	stubProviders(t, "claude", verifyHelperName)
+	commitVerifyConfig(t, repo, verifyHelperName, "write", written)
+
+	code, stdout, stderr := run(t, "trace", "claude", "--verify", "--", "-p", "read the README")
+
+	// The checks passed, and what they did to the repository is a warning about
+	// the conditions rather than the provider's ending rewritten.
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	dir := filepath.Join(root, traceRunID(t, stdout))
+	res := readVerifyResult(t, dir)
+	if res.Status != "passed" {
+		t.Errorf("results.json status = %q, want %q", res.Status, "passed")
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0].Code != "verification_mutated_repository" || !slices.Contains(res.Warnings[0].Paths, written) {
+		t.Errorf("results.json warnings = %+v, want the changed path reported", res.Warnings)
+	}
+	if got := readFileString(t, filepath.Join(repo, written)); got != verifyHelperContent {
+		t.Errorf("%s = %q, want the check's own writing left alone", written, got)
+	}
+
+	// The repository evidence was finalized before the checks ran, so it holds
+	// what the provider left and nothing the verification added.
+	var untracked struct {
+		Count int `json:"count"`
+	}
+	readJSONFile(t, filepath.Join(dir, "git", "untracked.json"), &untracked)
+	if untracked.Count != 0 {
+		t.Errorf("untracked.json count = %d, want the run's own changes only", untracked.Count)
+	}
+	if patch := readFileString(t, filepath.Join(dir, "git", "tracked.patch")); strings.Contains(patch, written) {
+		t.Errorf("tracked.patch =\n%s\nwant nothing the verification wrote", patch)
+	}
+}
+
+// Without the flag there is no verification at all: an absent document is a run
+// whose checks were never asked for, and it must not be confused with one whose
+// checks were asked for and never reached.
+func TestTraceWithoutVerifyRecordsNoVerification(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	stubProviders(t, "claude", verifyHelperName)
+	commitVerifyConfig(t, repo, verifyHelperName, "pass")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "read the README")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if dir := filepath.Join(root, traceRunID(t, stdout), "verification"); exists(dir) {
+		t.Errorf("%s exists, want no verification for a run that asked for none", dir)
+	}
+}
+
+// A verification that cannot be pinned is a run that cannot say afterwards what
+// it was checked against, so the provider is never launched.
+func TestTraceRefusesToVerifyWithoutAPinnableConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		write func(t *testing.T, repo string)
+	}{
+		{"missing", func(*testing.T, string) {}},
+		{"unknown version", func(t *testing.T, repo string) {
+			commitVerifyConfig(t, repo, verifyHelperName, "pass")
+			writeVerifyConfig(t, repo, "version: 2\nverify: []\n")
+			gitIn(t, repo, "commit", "-am", "change the schema")
+		}},
+		{"unreadable", func(t *testing.T, repo string) {
+			commitVerifyConfig(t, repo, verifyHelperName, "pass")
+			writeVerifyConfig(t, repo, "version: 1\nverify:\n  - name: check\n")
+			gitIn(t, repo, "commit", "-am", "drop the command")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := home(t)
+			repo := cleanRepo(t)
+			started := providerStarted(t)
+			stubProviders(t, "claude", verifyHelperName)
+			tc.write(t, repo)
+
+			code, stdout, stderr := run(t, "trace", "claude", "--verify", "--", "-p", "read the README")
+
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1 (stderr %q)", code, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+			if stderr == "" {
+				t.Errorf("stderr is empty, want an explanation")
+			}
+			if started() {
+				t.Errorf("the provider was launched for a run agentrec could not verify")
+			}
+
+			// The bundle is left describing a run that stopped rather than one
+			// still going, holds no verification it never ran, and the baseline
+			// ref the capture pinned is back out of the repository.
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("runs root holds %v (%v), want the one refused run", entries, err)
+			}
+			dir := filepath.Join(root, entries[0].Name())
+			manifest, err := readManifest(dir)
+			if err != nil {
+				t.Fatalf("read manifest: %v", err)
+			}
+			if manifest.ExitReason != runner.ReasonStorageError || manifest.EndedAt == nil {
+				t.Errorf("manifest exit reason = %q, ended = %v, want a run recorded as stopped", manifest.ExitReason, manifest.EndedAt)
+			}
+			if verification := filepath.Join(dir, "verification"); exists(verification) {
+				t.Errorf("%s exists, want no verification for checks that never ran", verification)
+			}
+			var git struct {
+				Status string `json:"status"`
+			}
+			readJSONFile(t, filepath.Join(dir, "git", "result.json"), &git)
+			if git.Status != "pending" {
+				t.Errorf("git/result.json status = %q, want the collection left pending", git.Status)
+			}
+			if refs := gitIn(t, repo, "for-each-ref", "--format=%(refname)", refNamespace); refs != "" {
+				t.Errorf("%s holds %q, want the temporary ref removed", refNamespace, refs)
+			}
+		})
+	}
 }
 
 func claudeHelper(args []string) int {
@@ -1511,6 +1871,12 @@ func TestTraceRejectsInvocationsItCannotRecord(t *testing.T) {
 		{"trace", "claude", "-p", "hello"},
 		{"trace", "claude", "--"},
 		{"trace", "gemini", "--", "-p", "hello"},
+		{"trace", "claude", "--verify"},
+		{"trace", "claude", "--verify", "--"},
+		{"trace", "claude", "--verify", "--verify", "--", "-p", "hello"},
+		{"trace", "claude", "--unknown", "--", "-p", "hello"},
+		{"trace", "claude", "--verify=1", "--", "-p", "hello"},
+		{"trace", "--verify", "claude", "--", "-p", "hello"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			root := home(t)

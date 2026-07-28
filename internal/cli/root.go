@@ -9,7 +9,7 @@ import (
 const usage = `agentrec records coding-agent execution as a replayable action timeline.
 
 Usage:
-  agentrec trace <provider> -- <args...>
+  agentrec trace <provider> [--verify] -- <args...>
   agentrec list
   agentrec show <run-id>
 `

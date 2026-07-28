@@ -1,0 +1,9 @@
+# Copy to .agentrec.yaml and commit it: a run is verified only against checks
+# the repository already held, and `agentrec trace <provider> --verify` pins this
+# file before the provider starts. Each command is launched directly, with no
+# shell, so an argument is an argument and nothing else.
+version: 1
+verify:
+  - name: test
+    command: ["go", "test", "./..."]
+    timeout: 5m
