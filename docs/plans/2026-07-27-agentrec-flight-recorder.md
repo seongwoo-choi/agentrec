@@ -992,8 +992,11 @@ Required before public release:
 - `SECURITY.md` explaining bundle sensitivity;
 - `docs/assurance-model.md` distinguishing provider-reported and observed evidence;
 - `docs/limitations.md` explicitly denying syscall completeness in native mode;
-- MIT license with third-party notices;
-- checksummed release binaries;
+- MIT license with third-party notices — **done**: `LICENSE` and
+  `THIRD_PARTY_NOTICES.md`, both shipped inside every release archive;
+- checksummed release binaries — **done**: `scripts/build-release.sh` builds the
+  four `darwin`/`linux` × `amd64`/`arm64` archives plus `SHA256SUMS`, and
+  `.github/workflows/release.yml` publishes them on a `v*.*.*` tag;
 - README flow from installation to first trace in under ten minutes;
 - no company-specific source, path, prompt or credential in repository history.
 

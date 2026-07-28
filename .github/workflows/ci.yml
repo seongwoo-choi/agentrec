@@ -40,5 +40,8 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Test release script boundaries
+        run: sh scripts/build-release_test.sh
+
       - name: Build
         run: go build ./...

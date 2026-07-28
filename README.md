@@ -45,9 +45,28 @@ stream still fits.
 | Claude Code | `claude` | `>=2.1.0, <3.0.0` | Requires `-p`/`--print`. agentrec injects `--output-format stream-json --verbose --include-hook-events`. |
 | Codex | `codex` | `>=0.144.0, <1.0.0` | `exec` must be the first argument. agentrec injects `--json`. |
 
+Each tagged release carries four archives — `darwin_amd64`, `darwin_arm64`,
+`linux_amd64`, `linux_arm64` — plus a `SHA256SUMS` file covering all four. An
+archive unpacks to a single directory holding `agentrec`, `LICENSE`,
+`THIRD_PARTY_NOTICES.md` and `third_party/licenses/Apache-2.0.txt`.
+
 ```bash
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@latest
+# From a release archive — download SHA256SUMS plus the archive for your platform.
+archive=agentrec_0.1.0_darwin_arm64.tar.gz
+awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
+tar -xzf "$archive"
+./agentrec_0.1.0_darwin_arm64/agentrec version
+
+# On Linux, use `sha256sum -c -` instead of `shasum -a 256 -c -`.
+# Or from source
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.1.0
 ```
+
+`agentrec version` (equivalently `agentrec --version`) prints three lines: the
+version, the commit it was built from, and the UTC build time. A release binary
+carries the tag, the full commit SHA and an RFC 3339 timestamp; a build made any
+other way reports `dev`, `unknown` and `unknown`, so an unstamped binary is never
+mistaken for a released one.
 
 **Commit the verification config.** A run is verified only against checks the
 repository already held. Copy `.agentrec.example.yaml` to `.agentrec.yaml` and
@@ -82,6 +101,9 @@ agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
+
+# Report the build this binary came from
+agentrec version
 ```
 
 `agentrec list` prints runs newest first, with a `PROJECT` column taken from the
@@ -221,7 +243,15 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
+
+# Build the release archives locally; publishes nothing.
+# The output directory must not already exist.
+scripts/build-release.sh v0.1.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
+
+`.github/workflows/release.yml` runs the same script on a `v*.*.*` tag, checks
+every archive's inventory and the version output of the binary it built, and
+publishes only then. It refuses to run against a release that already exists.
 
 ## License
 

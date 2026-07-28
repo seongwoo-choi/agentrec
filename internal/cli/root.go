@@ -12,6 +12,7 @@ Usage:
   agentrec trace <provider> [--verify] -- <args...>
   agentrec list [--cwd <path>]
   agentrec show <run-id>
+  agentrec version
 `
 
 // Run executes the CLI with args (os.Args[1:]) and returns the process exit code.
@@ -28,8 +29,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runList(args[1:], stdout, stderr)
 	case "show":
 		return runShow(args[1:], stdout, stderr)
+	case "version", "--version":
+		return runVersion(args[1:], stdout, stderr)
 	}
 
-	fmt.Fprintf(stderr, "unknown command: %s\nrun 'agentrec --help' to see the available commands\n", args[0])
+	fmt.Fprintf(stderr, "unknown command: %q\nrun 'agentrec --help' to see the available commands\n", args[0])
 	return 2
 }

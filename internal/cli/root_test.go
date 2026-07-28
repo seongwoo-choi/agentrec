@@ -39,10 +39,27 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 	if exitCode != 2 {
 		t.Fatalf("exit code = %d, want 2", exitCode)
 	}
-	if !strings.Contains(stderr.String(), "unknown command: unknown") {
+	if !strings.Contains(stderr.String(), `unknown command: "unknown"`) {
 		t.Errorf("stderr = %q, want it to name the unknown command", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "--help") {
 		t.Errorf("stderr = %q, want it to point at --help", stderr.String())
+	}
+}
+
+func TestRunQuotesUnknownCommand(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"\x1b[31munknown"}, &stdout, &stderr)
+
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	if strings.ContainsRune(stderr.String(), '\x1b') {
+		t.Fatalf("stderr contains a terminal escape: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `"\x1b[31munknown"`) {
+		t.Errorf("stderr = %q, want a quoted command", stderr.String())
 	}
 }

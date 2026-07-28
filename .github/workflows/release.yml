@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+# A release is not safely interruptible: a run that has begun publishing must be
+# allowed to finish rather than be cancelled halfway.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Test
+        run: go test ./... -count=1 -timeout=420s
+
+      - name: Test with the race detector
+        run: go test -race ./... -count=1 -timeout=600s
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test release script boundaries
+        run: sh scripts/build-release_test.sh
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_id="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
+            jq -r --arg tag "$TAG" '.[] | select(.tag_name == $tag) | .id')"
+          if [ -n "$release_id" ]; then
+            echo "release $TAG already exists; delete it deliberately before re-running" >&2
+            exit 1
+          fi
+
+      - name: Require release notes for the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: test -f "docs/releases/${TAG}.md"
+
+      - name: Build the release archives
+        id: build
+        env:
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          scripts/build-release.sh \
+            "$TAG" \
+            "$COMMIT" \
+            "$built" \
+            dist
+          echo "built=$built" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-check the archives
+        env:
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          BUILT: ${{ steps.build.outputs.built }}
+        run: |
+          set -euo pipefail
+          semver=${TAG#v}
+          cd dist
+          sha256sum -c SHA256SUMS
+          for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+            base="agentrec_${semver}_${platform}"
+            archive="${base}.tar.gz"
+            tar -tzf "$archive" | sort > "${base}.inventory"
+            printf '%s/\n%s/LICENSE\n%s/THIRD_PARTY_NOTICES.md\n%s/agentrec\n%s/third_party/\n%s/third_party/licenses/\n%s/third_party/licenses/Apache-2.0.txt\n' \
+              "$base" "$base" "$base" "$base" "$base" "$base" "$base" | sort > "${base}.expected"
+            diff -u "${base}.expected" "${base}.inventory"
+
+            python3 - "$archive" "$base" <<'PY'
+          import sys
+          import tarfile
+
+          archive, base = sys.argv[1:]
+          expected = {
+              base: ("dir", 0o755),
+              f"{base}/agentrec": ("file", 0o755),
+              f"{base}/LICENSE": ("file", 0o644),
+              f"{base}/THIRD_PARTY_NOTICES.md": ("file", 0o644),
+              f"{base}/third_party": ("dir", 0o755),
+              f"{base}/third_party/licenses": ("dir", 0o755),
+              f"{base}/third_party/licenses/Apache-2.0.txt": ("file", 0o644),
+          }
+          with tarfile.open(archive, "r:gz") as bundle:
+              members = bundle.getmembers()
+          if len(members) != len(expected):
+              raise SystemExit(f"{archive}: duplicate or unexpected members")
+          for member in members:
+              name = member.name.rstrip("/")
+              if name not in expected:
+                  raise SystemExit(f"{archive}: unexpected member {member.name}")
+              kind, mode = expected[name]
+              if (kind == "file" and not member.isfile()) or (kind == "dir" and not member.isdir()):
+                  raise SystemExit(f"{archive}: wrong type for {member.name}")
+              if member.mode & 0o777 != mode:
+                  raise SystemExit(f"{archive}: wrong mode for {member.name}")
+          PY
+
+            mkdir "${base}.extract"
+            tar -xzf "$archive" -C "${base}.extract"
+            root="${base}.extract/${base}"
+            cmp ../LICENSE "$root/LICENSE"
+            cmp ../THIRD_PARTY_NOTICES.md "$root/THIRD_PARTY_NOTICES.md"
+            cmp ../third_party/licenses/Apache-2.0.txt \
+              "$root/third_party/licenses/Apache-2.0.txt"
+
+            description="$(file -b "$root/agentrec")"
+            case "$platform:$description" in
+              darwin_amd64:*"Mach-O 64-bit x86_64 executable"* | \
+              darwin_arm64:*"Mach-O 64-bit arm64 executable"* | \
+              linux_amd64:*"ELF 64-bit LSB executable, x86-64"* | \
+              linux_arm64:*"ELF 64-bit LSB executable, ARM aarch64"*) ;;
+              *) echo "$archive: unexpected binary: $description" >&2; exit 1 ;;
+            esac
+            for value in "$TAG" "$COMMIT" "$BUILT"; do
+              LC_ALL=C grep -aFq -- "$value" "$root/agentrec"
+            done
+            rm -f "${base}.inventory" "${base}.expected"
+          done
+
+          # The runner executes its native archive, so output formatting is also
+          # read back from a real binary rather than inferred from embedded data.
+          printf 'agentrec %s\ncommit %s\nbuilt %s\n' "$TAG" "$COMMIT" "$BUILT" > expected-version
+          "./agentrec_${semver}_linux_amd64.extract/agentrec_${semver}_linux_amd64/agentrec" version > actual-version
+          diff -u expected-version actual-version
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Require an annotated tag and peel it through GitHub immediately
+          # before publication. This prevents a tag moved during the build from
+          # receiving artifacts stamped from the original event commit.
+          assert_tag_commit() {
+            tag_object="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
+              --jq 'select(.object.type == "tag") | .object.sha')"
+            if [ -z "$tag_object" ]; then
+              echo "tag $TAG is missing or is not annotated" >&2
+              exit 1
+            fi
+            tagged_commit="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" \
+              --jq 'select(.object.type == "commit") | .object.sha')"
+            if [ "$tagged_commit" != "$COMMIT" ]; then
+              echo "tag $TAG no longer names the release commit" >&2
+              exit 1
+            fi
+          }
+          assert_tag_commit
+
+          # Upload every asset while the release is a draft. A failed upload
+          # therefore cannot expose a partial release; the preflight guard makes
+          # any retry require deliberate cleanup of the draft first.
+          gh release create "$TAG" \
+            --verify-tag \
+            --draft \
+            --title "$TAG" \
+            --notes-file "docs/releases/${TAG}.md" \
+            dist/*.tar.gz \
+            dist/SHA256SUMS
+          assert_tag_commit
+          gh release edit "$TAG" --draft=false
