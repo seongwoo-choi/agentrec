@@ -216,6 +216,21 @@ func TestParseKnownIgnoredEventsProduceNoWarnings(t *testing.T) {
 	}
 }
 
+// TestParseToolProgressIsKnownMetadata covers Claude's top-level progress
+// event, which describes tool activity but is not an action itself.
+func TestParseToolProgressIsKnownMetadata(t *testing.T) {
+	res, err := Parse(strings.NewReader(`{"type":"tool_progress"}` + "\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.WarningCount != 0 {
+		t.Errorf("WarningCount = %d, want 0", res.WarningCount)
+	}
+	if len(res.Actions) != 0 {
+		t.Errorf("actions = %+v, want none", res.Actions)
+	}
+}
+
 func TestParseHandlesLineLargerThanDefaultScannerBuffer(t *testing.T) {
 	big := strings.Repeat("x", 1<<20) // 1 MiB of file content in one tool_result
 	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_big_01","name":"Read","input":{"file_path":"/tmp/big"}}]},"timestamp":"2026-01-01T00:00:01.000Z"}

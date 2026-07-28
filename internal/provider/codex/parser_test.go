@@ -186,6 +186,181 @@ func TestParseProviderErrorsAsActionsWithoutParserWarnings(t *testing.T) {
 	}
 }
 
+// TestParseCollabToolCallWaitIsKnownMetadata covers collaboration bookkeeping
+// emitted around wait, which does not describe an action taken in the run.
+func TestParseCollabToolCallWaitIsKnownMetadata(t *testing.T) {
+	stream := `{"type":"item.started","item":{"id":"item_wait_01","type":"collab_tool_call","tool":"wait","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_wait_01","type":"collab_tool_call","tool":"wait","status":"completed"}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.WarningCount != 0 {
+		t.Errorf("WarningCount = %d, want 0", res.WarningCount)
+	}
+	if len(res.Actions) != 0 {
+		t.Errorf("actions = %+v, want none", res.Actions)
+	}
+}
+
+func TestParseMCPToolCallYieldsOneCompletedMCPAction(t *testing.T) {
+	stream := `{"type":"item.started","item":{"id":"item_mcp_01","type":"mcp_tool_call","server":"codegraph","tool":"codegraph_explore","arguments":{"query":"parser"},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_mcp_01","type":"mcp_tool_call","server":"codegraph","tool":"codegraph_explore","arguments":{"query":"parser"},"result":{"content":"ok"},"error":null,"status":"completed"}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.WarningCount != 0 || len(res.Actions) != 1 {
+		t.Fatalf("warnings = %d, actions = %d, want 0 and 1", res.WarningCount, len(res.Actions))
+	}
+	got := res.Actions[0]
+	if got.ID != "item_mcp_01" || got.Type != action.TypeMCPCall || got.Status != statusCompleted {
+		t.Errorf("action = %+v", got)
+	}
+	if got.Assurance != action.AssuranceProviderReported || !got.FinishedAt.IsZero() {
+		t.Errorf("assurance = %q, finished = %v", got.Assurance, got.FinishedAt)
+	}
+	var input struct {
+		Server    string          `json:"server"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(got.Input, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.Server != "codegraph" || input.Tool != "codegraph_explore" || string(input.Arguments) != `{"query":"parser"}` {
+		t.Errorf("input = %+v", input)
+	}
+	var result struct {
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(got.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Result) != `{"content":"ok"}` || string(result.Error) != "null" {
+		t.Errorf("result = %s, error = %s", result.Result, result.Error)
+	}
+}
+
+func TestParseTodoListLifecycleIsKnownMetadata(t *testing.T) {
+	stream := `{"type":"item.started","item":{"id":"item_todo_01","type":"todo_list","items":[]}}
+{"type":"item.updated","item":{"id":"item_todo_01","type":"todo_list","items":[]}}
+{"type":"item.completed","item":{"id":"item_todo_01","type":"todo_list","items":[]}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.WarningCount != 0 || len(res.Actions) != 0 {
+		t.Errorf("warnings = %d, actions = %+v, want 0 and none", res.WarningCount, res.Actions)
+	}
+}
+
+// TestParseFileChangeYieldsOneCompletedFileEditAction covers the real Codex
+// file_change lifecycle. Its structured paths are provider-reported evidence,
+// not timestamps that the source did not provide.
+func TestParseFileChangeYieldsOneCompletedFileEditAction(t *testing.T) {
+	stream := `{"type":"item.started","item":{"id":"item_change_01","type":"file_change","status":"in_progress","changes":[{"path":"internal/provider/codex/parser.go","kind":"update"}]}}
+{"type":"item.completed","item":{"id":"item_change_01","type":"file_change","status":"completed","changes":[{"path":"internal/provider/codex/parser.go","kind":"update"}]}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.WarningCount != 0 {
+		t.Errorf("WarningCount = %d, want 0", res.WarningCount)
+	}
+	if len(res.Actions) != 1 {
+		t.Fatalf("action count = %d, want 1", len(res.Actions))
+	}
+
+	got := res.Actions[0]
+	if got.ID != "item_change_01" {
+		t.Errorf("ID = %q, want %q", got.ID, "item_change_01")
+	}
+	if got.Type != action.TypeFileEdit {
+		t.Errorf("Type = %q, want %q", got.Type, action.TypeFileEdit)
+	}
+	if got.Provider != providerName {
+		t.Errorf("Provider = %q, want %q", got.Provider, providerName)
+	}
+	if got.Assurance != action.AssuranceProviderReported {
+		t.Errorf("Assurance = %q, want %q", got.Assurance, action.AssuranceProviderReported)
+	}
+	if got.Status != statusCompleted {
+		t.Errorf("Status = %q, want %q", got.Status, statusCompleted)
+	}
+	if !got.StartedAt.IsZero() {
+		t.Errorf("StartedAt = %v, want zero when the source omits timestamps", got.StartedAt)
+	}
+	if !got.FinishedAt.IsZero() {
+		t.Errorf("FinishedAt = %v, want zero when the source omits timestamps", got.FinishedAt)
+	}
+	if len(got.Result) != 0 {
+		t.Errorf("Result = %s, want omitted", got.Result)
+	}
+
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal(got.Input, &input); err != nil {
+		t.Fatalf("unmarshal Input: %v", err)
+	}
+	if len(input) != 2 {
+		t.Errorf("Input field count = %d, want 2 (path and changes)", len(input))
+	}
+	var path string
+	if err := json.Unmarshal(input["path"], &path); err != nil {
+		t.Fatalf("unmarshal Input.path: %v", err)
+	}
+	if path != "internal/provider/codex/parser.go" {
+		t.Errorf("Input.path = %q, want %q", path, "internal/provider/codex/parser.go")
+	}
+	var changes []map[string]json.RawMessage
+	if err := json.Unmarshal(input["changes"], &changes); err != nil {
+		t.Fatalf("unmarshal Input.changes: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("Input.changes count = %d, want 1", len(changes))
+	}
+	if len(changes[0]) != 2 {
+		t.Errorf("Input.changes[0] field count = %d, want 2 (path and kind)", len(changes[0]))
+	}
+	var structuredChanges []struct {
+		Path string `json:"path"`
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(input["changes"], &structuredChanges); err != nil {
+		t.Fatalf("unmarshal Input.changes values: %v", err)
+	}
+	change := structuredChanges[0]
+	if change.Path != "internal/provider/codex/parser.go" {
+		t.Errorf("Input.changes[0].path = %q, want %q", change.Path, "internal/provider/codex/parser.go")
+	}
+	if change.Kind != "update" {
+		t.Errorf("Input.changes[0].kind = %q, want %q", change.Kind, "update")
+	}
+}
+
+func TestParseFailedFileChangeKeepsProviderStatus(t *testing.T) {
+	stream := `{"type":"item.completed","item":{"id":"item_change_failed_01","type":"file_change","status":"failed","changes":[{"path":"internal/provider/codex/parser.go","kind":"update"}]}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.WarningCount != 0 {
+		t.Errorf("WarningCount = %d, want 0", res.WarningCount)
+	}
+	if len(res.Actions) != 1 {
+		t.Fatalf("action count = %d, want 1", len(res.Actions))
+	}
+	if got := res.Actions[0].Status; got != statusFailed {
+		t.Errorf("Status = %q, want %q", got, statusFailed)
+	}
+}
+
 // TestParseUnknownItemTypeWarnsWithoutError covers forward compatibility: an
 // item kind this parser does not model is counted and skipped, not fatal.
 func TestParseUnknownItemTypeWarnsWithoutError(t *testing.T) {

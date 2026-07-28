@@ -58,6 +58,7 @@ type event struct {
 type item struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
+	Tool string `json:"tool"`
 	// Status is the provider's own view of the item's outcome.
 	Status string `json:"status"`
 	// Command execution fields. ExitCode is a pointer because 0 is the success
@@ -65,9 +66,37 @@ type item struct {
 	Command          string `json:"command"`
 	AggregatedOutput string `json:"aggregated_output"`
 	ExitCode         *int   `json:"exit_code"`
-	// Agent message field.
-	Text    string `json:"text"`
-	Message string `json:"message"`
+	// Agent message and structured provider operation fields.
+	Text      string          `json:"text"`
+	Message   string          `json:"message"`
+	Changes   []fileChange    `json:"changes"`
+	Server    string          `json:"server"`
+	Arguments json.RawMessage `json:"arguments"`
+	Result    json.RawMessage `json:"result"`
+	Error     json.RawMessage `json:"error"`
+}
+
+// fileChange is the bounded subset of a Codex file_change entry that is kept
+// with the action. The enclosing JSONL line is capped by maxLineBuffer.
+type fileChange struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+type fileChangeInput struct {
+	Path    string       `json:"path,omitempty"`
+	Changes []fileChange `json:"changes"`
+}
+
+type mcpCallInput struct {
+	Server    string          `json:"server"`
+	Tool      string          `json:"tool"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type mcpCallResult struct {
+	Result json.RawMessage `json:"result"`
+	Error  json.RawMessage `json:"error"`
 }
 
 // commandInput is the normalized input body for a command execution.
@@ -110,6 +139,38 @@ func Parse(r io.Reader) (ParseResult, error) {
 			continue
 		}
 		switch {
+		case (ev.Type == "item.started" || ev.Type == "item.completed") && ev.Item.Type == "collab_tool_call" && ev.Item.Tool == "wait":
+			// Known collaboration bookkeeping that carries no action of its own.
+		case (ev.Type == "item.started" || ev.Type == "item.updated" || ev.Type == "item.completed") && ev.Item.Type == "todo_list":
+			// Provider planning state is stream metadata, not an executed action.
+		case ev.Type == "item.started" && ev.Item.Type == "mcp_tool_call":
+			// The completed item carries both the call input and provider result.
+		case ev.Type == "item.completed" && ev.Item.Type == "mcp_tool_call":
+			if !canClaimID(index, ev.Item.ID) {
+				res.WarningCount++
+				continue
+			}
+			input, err := json.Marshal(mcpCallInput{
+				Server: ev.Item.Server, Tool: ev.Item.Tool, Arguments: ev.Item.Arguments,
+			})
+			if err != nil {
+				continue
+			}
+			result, err := json.Marshal(mcpCallResult{Result: ev.Item.Result, Error: ev.Item.Error})
+			if err != nil {
+				continue
+			}
+			index[ev.Item.ID] = len(res.Actions)
+			res.Actions = append(res.Actions, action.Action{
+				ID:         ev.Item.ID,
+				Type:       action.TypeMCPCall,
+				Provider:   providerName,
+				Assurance:  action.AssuranceProviderReported,
+				FinishedAt: parseTime(ev.Timestamp),
+				Status:     commandStatus(ev.Item),
+				Input:      input,
+				Result:     result,
+			})
 		case ev.Type == "item.started" && ev.Item.Type == "command_execution":
 			if !canClaimID(index, ev.Item.ID) {
 				res.WarningCount++
@@ -183,6 +244,31 @@ func Parse(r io.Reader) (ParseResult, error) {
 				FinishedAt: parseTime(ev.Timestamp),
 				Status:     statusFailed,
 				Input:      input,
+			})
+		case ev.Type == "item.started" && ev.Item.Type == "file_change":
+			// The completed item carries the one normalized file-edit action.
+		case ev.Type == "item.completed" && ev.Item.Type == "file_change":
+			if !canClaimID(index, ev.Item.ID) {
+				res.WarningCount++
+				continue
+			}
+			input := fileChangeInput{Changes: ev.Item.Changes}
+			if len(input.Changes) == 1 {
+				input.Path = input.Changes[0].Path
+			}
+			payload, err := json.Marshal(input)
+			if err != nil {
+				continue
+			}
+			index[ev.Item.ID] = len(res.Actions)
+			res.Actions = append(res.Actions, action.Action{
+				ID:         ev.Item.ID,
+				Type:       action.TypeFileEdit,
+				Provider:   providerName,
+				Assurance:  action.AssuranceProviderReported,
+				FinishedAt: parseTime(ev.Timestamp),
+				Status:     commandStatus(ev.Item),
+				Input:      payload,
 			})
 		case metadataEvents[ev.Type]:
 			// Known stream bookkeeping that carries no action of its own.

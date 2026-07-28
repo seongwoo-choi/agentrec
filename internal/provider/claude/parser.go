@@ -167,7 +167,7 @@ func Parse(r io.Reader) (ParseResult, error) {
 			if ev.Subtype == hookResponseSubtype && ev.HookEvent == postToolUseHook {
 				applyHookDuration(res.Actions, index, durations, ev.Output)
 			}
-		case "result", "rate_limit_event":
+		case "result", "rate_limit_event", "tool_progress":
 			// Known event types that carry no action of their own.
 		default:
 			res.WarningCount++
