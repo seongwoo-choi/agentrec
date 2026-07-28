@@ -1512,6 +1512,19 @@ const helperContractExit = 3
 // no mark.
 const startedEnv = "AGENTREC_TEST_PROVIDER_STARTED"
 
+// agentrecName is the name the test binary is symlinked under when it is the
+// recorder itself rather than a provider, for the one test that has to signal
+// agentrec as the operating system would rather than call it in process.
+const agentrecName = "agentrec"
+
+// lingerEnv names a file the helper writes its pid into before waiting to be
+// signalled, which is how a test drives a run that is still going when the
+// recorder is asked to stop. The wait is a backstop rather than a delay any
+// passing test sits through: the provider is signalled long before it elapses.
+const lingerEnv = "AGENTREC_TEST_PROVIDER_LINGER"
+
+const lingerLimit = 2 * time.Minute
+
 // failPrompt asks the helper to end nonzero after a complete stream, which is
 // what a provider does when the work it recorded did not succeed.
 const failPrompt = "fail"
@@ -1595,6 +1608,8 @@ const codexStream = `{"type":"item.started","timestamp":"2026-07-27T10:00:01Z","
 
 func TestMain(m *testing.M) {
 	switch filepath.Base(os.Args[0]) {
+	case agentrecName:
+		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	case "claude":
 		os.Exit(claudeHelper(os.Args[1:]))
 	case "codex":
@@ -1980,7 +1995,29 @@ func claudeHelper(args []string) int {
 		return helperContractExit
 	}
 	fmt.Print(claudeStream)
+	linger()
 	return providerExit(args)
+}
+
+// linger records the pid of the group agentrec put this provider in and then
+// waits to be signalled, so a test can stop the recorder while the run it is
+// recording is still going. The pid is renamed into place, so a test that finds
+// the file finds a whole pid in it.
+func linger() {
+	path := os.Getenv(lingerEnv)
+	if path == "" {
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "helper:", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		fmt.Fprintln(os.Stderr, "helper:", err)
+		return
+	}
+	time.Sleep(lingerLimit)
 }
 
 func codexHelper(args []string) int {
@@ -2054,10 +2091,11 @@ func containsSequence(args, want []string) bool {
 }
 
 // stubProviders puts the test binary on an otherwise empty PATH under each
-// given provider name. Git is put there too: agentrec asks the repository where
-// it is and whether it is clean before it records anything, so a PATH holding
-// only providers would be a PATH no run could start from.
-func stubProviders(t *testing.T, names ...string) {
+// given provider name and returns the directory it built. Git is put there too:
+// agentrec asks the repository where it is and whether it is clean before it
+// records anything, so a PATH holding only providers would be a PATH no run
+// could start from.
+func stubProviders(t *testing.T, names ...string) string {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
@@ -2077,6 +2115,7 @@ func stubProviders(t *testing.T, names ...string) {
 		t.Fatalf("stub git: %v", err)
 	}
 	t.Setenv("PATH", dir)
+	return dir
 }
 
 // cleanRepo makes a fresh repository holding one commit the working directory

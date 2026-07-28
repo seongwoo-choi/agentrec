@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/evidence"
@@ -187,11 +188,15 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	// Installed before the bundle exists, and buffered, so an interrupt arriving
 	// from here on is held rather than ending this process where it stands: a
 	// Ctrl-C between creating the bundle and running the provider would otherwise
-	// leave a run directory that never says how it ended. The run itself has no
+	// leave a run directory that never says how it ended. SIGTERM is held for the
+	// same reason and treated the same way: an operator types Ctrl-C, but a parent
+	// runner, a scheduler or a container asks a process to stop with SIGTERM, and
+	// a recorder that dies on the spot there leaves the same unfinished bundle
+	// with the provider's process group still running. The run itself has no
 	// timeout: how long an agent may work is the operator's decision, taken with
 	// that same Ctrl-C.
 	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(interrupt)
 
 	// The manifest records the invocation exactly as it will be launched,
@@ -314,8 +319,9 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	if verifier != nil {
 		// Its own handler, installed for the checks alone: an operator's Ctrl-C
 		// during a verification is a verification they want stopped, and the
-		// cancellation is what takes the check's process group down with it.
-		verifyCtx, stopVerify := signal.NotifyContext(context.Background(), os.Interrupt)
+		// cancellation is what takes the check's process group down with it. A
+		// SIGTERM says the same thing, from a parent rather than from a terminal.
+		verifyCtx, stopVerify := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		verification, verifyErr = verifier.Run(verifyCtx)
 		verifyInterrupted = verifyCtx.Err() != nil
 		stopVerify()
