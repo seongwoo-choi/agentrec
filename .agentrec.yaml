@@ -1,0 +1,8 @@
+version: 1
+verify:
+  - name: go-test
+    command: ["go", "test", "./...", "-count=1", "-timeout=420s"]
+    timeout: 8m
+  - name: go-vet
+    command: ["go", "vet", "./..."]
+    timeout: 5m
