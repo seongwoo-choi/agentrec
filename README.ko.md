@@ -327,10 +327,12 @@ Ctrl-C는 프로세스를 그 자리에서 끝낸다.
 제공자 비정상 종료, 설정 `TAINTED`, 중단, 그리고 그 실행들이 확립하지 **않는**
 것까지 다룬다.
 
-`agentrec shadow run`은 그 증거에 **포함되지 않는다**. 위에 적은 그 동작 — 격리,
-정리, 시그널 처리, 종료 코드, 비교 출력 — 은 대역 제공자를 사용하는 저장소
-테스트가 뒷받침한다. 실제 Claude Code와 Codex CLI를 상대로는 아직 기록되지
-않았다.
+`agentrec shadow run`의 실제 제공자 성공 경로는
+[docs/dogfood/2026-07-29-shadow-evidence.md](docs/dogfood/2026-07-29-shadow-evidence.md)가
+뒷받침한다. macOS에서 같은 커밋으로 Claude Code와 Codex를 한 번 실행했고, 두
+고정 검사가 모두 통과했으며, 두 worktree는 제거되고 두 번들은 보존됐다. 그 실행은
+실제 제공자의 실패·중단 경로나 Linux 런타임을 확립하지 않는다. 해당 lifecycle
+경로는 통제된 대역을 사용하는 저장소 테스트가 다룬다.
 
 ## 개발
 

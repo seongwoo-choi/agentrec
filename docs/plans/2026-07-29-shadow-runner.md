@@ -198,8 +198,9 @@ git diff --check
 
 ## Implementation status (2026-07-29)
 
-Tasks 1–6 are implemented and covered by repository tests; Task 7 is documented
-but not yet dogfooded.
+Tasks 1–6 are implemented and covered by repository tests. Task 7 has completed
+the real-provider dogfood and documentation/review gates; final push and GitHub
+CI verification remain.
 
 Done:
 
@@ -207,16 +208,22 @@ Done:
   Shadow argument/task/repository preflight.
 - Task 4: both legs are recorded serially in flag order, in detached worktrees
   created from one pinned baseline, through the existing Claude and Codex
-  adapters with the task bytes on argv and no injected flags; both bundles are
-  readable with `agentrec show` after the checkouts are gone.
+  adapters with the task bytes on argv behind an option delimiter and no
+  permission-widening flags; both bundles are readable with `agentrec show`
+  after the checkouts are gone.
 - Task 5: deferred reverse-order cleanup, cleanup failure exits 1 and is printed,
   a pending signal is checked before each leg, and out-of-process SIGINT and
   SIGTERM tests cover both leg positions plus the second-signal escape hatch.
 - Task 6: `renderComparison` builds every field by reading the persisted bundles
   and renders them in fixed runner and field order, with no evaluation
   vocabulary.
-- Task 7 steps 1–2 and 7: README and plan synchronization, and the local
-  verification gate.
+- Task 7 steps 1–9: README and plan synchronization, local verification,
+  independent reviews, and a real Claude/Codex run recorded in
+  `docs/dogfood/2026-07-29-shadow-evidence.md`. Both legs used baseline
+  `b9031133fdb8b5624e3ede41c0551a867d80289b` and config SHA-256
+  `e20695bb3ebee3381b54da6fc46b6b1efa1adc9b87a5eb99b45505b5dbdfae3f`,
+  passed `go-test` and `go-vet`, removed both worktrees, and retained both
+  bundles.
 
 Decisions taken while implementing, which the plan above did not settle:
 
@@ -234,12 +241,10 @@ Decisions taken while implementing, which the plan above did not settle:
 - **The checkout directory is narrowed to `0700` after Git creates it**, since
   Git creates it against the operator's umask.
 
-Outstanding, deliberately not done in this pass:
+Outstanding:
 
-- Task 7 steps 3–6: the real Claude/Codex dogfood run and
-  `docs/dogfood/2026-07-29-shadow-evidence.md`. Every claim about Shadow is
-  currently backed by tests with stand-in providers only.
-- Task 7 steps 8–10: independent reviews, and commit/push/CI.
+- Task 7 step 10: commit the dogfood documentation, push normal `main`, and
+  verify GitHub CI. No tag or release is part of this pass.
 
 ## Completion evidence
 

@@ -332,10 +332,12 @@ fixed 20-attempt checkpoint plus follow-on real mutations, covering verification
 `FAIL`, provider nonzero, config `TAINTED`, interruption, and what those runs do
 **not** establish.
 
-`agentrec shadow run` is **not** covered by that evidence. Its behavior above —
-isolation, cleanup, signal handling, exit codes and comparison output — is
-backed by repository tests using stand-in providers; it has not yet been
-recorded against the real Claude Code and Codex CLIs.
+The successful real-provider path for `agentrec shadow run` is covered by
+[docs/dogfood/2026-07-29-shadow-evidence.md](docs/dogfood/2026-07-29-shadow-evidence.md):
+one macOS run against Claude Code and Codex from the same commit, with both
+pinned verifications passing, both worktrees removed and both bundles retained.
+Real-provider failure, interruption and Linux runtime paths are not established
+by that run; controlled repository tests cover those lifecycle paths.
 
 ## Development
 

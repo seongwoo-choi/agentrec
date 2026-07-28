@@ -298,9 +298,11 @@ Ctrl-C 和 SIGTERM 都会被接住而不是就地服从，并且贯穿整个记�
 一个固定的 20 次尝试检查点，加上其后的真实变更，覆盖了验证 `FAIL`、提供方非零退出、
 配置 `TAINTED`、中断，以及那些运行**没有**确立的东西。
 
-`agentrec shadow run` **不在**那份证据的覆盖范围内。上面描述的它的行为 —— 隔离、
-清理、信号处理、退出码和比较输出 —— 由使用替身提供方的仓库测试支撑；它还没有针对真实
-的 Claude Code 和 Codex CLI 记录过。
+`agentrec shadow run` 使用真实提供方的成功路径由
+[docs/dogfood/2026-07-29-shadow-evidence.md](docs/dogfood/2026-07-29-shadow-evidence.md)
+支撑：在 macOS 上从同一个提交分别运行了一次 Claude Code 和 Codex，两组固定验证都通过，
+两个 worktree 都被删除，两个证据包都得到保留。这次运行没有确立真实提供方的失败、中断
+路径或 Linux 运行时行为；这些生命周期路径由使用受控替身的仓库测试覆盖。
 
 ## 开发
 
