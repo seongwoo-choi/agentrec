@@ -223,7 +223,7 @@ func TestShadowRecordsBothRunnersFromOneBaseline(t *testing.T) {
 // never launch the second provider. It does not destructively restore provider
 // changes.
 func TestShadowStopsWhenAProviderMutatesTheSourceRepository(t *testing.T) {
-	for _, mutation := range []string{"file", "ref", "head"} {
+	for _, mutation := range []string{"file", "ref", "head", "config"} {
 		t.Run(mutation, func(t *testing.T) {
 			root := home(t)
 			repo := cleanRepo(t)
@@ -258,6 +258,10 @@ func TestShadowStopsWhenAProviderMutatesTheSourceRepository(t *testing.T) {
 			case "head":
 				if raw, err := os.ReadFile(filepath.Join(repo, ".git", "HEAD")); err != nil || !strings.Contains(string(raw), "provider-alternate-source") {
 					t.Errorf("source HEAD = %q, %v; want provider branch switch left for manual recovery", raw, err)
+				}
+			case "config":
+				if got := gitIn(t, repo, "config", "--local", "--get", "agentrec.provider-mutated"); got != "true" {
+					t.Errorf("source config value = %q, want provider change left for manual recovery", got)
 				}
 			}
 			if _, err := os.Stat(filepath.Join(os.Getenv(probeEnv), "claude.json")); err != nil {
@@ -535,9 +539,14 @@ func TestShadowRecordsBothLegsWhenARunFails(t *testing.T) {
 }
 
 // lfsPointer is what Git stores in place of a large file tracked by Git LFS.
-// A linked worktree of a repository holding these gets the pointers rather than
-// the files, which is a workspace neither agent was asked to work in.
+// Hydration depends on local Git configuration and object availability, which
+// is not a reproducible workspace contract for two Shadow legs.
 const lfsPointer = "version https://git-lfs.github.com/spec/v1\n" +
+	"oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n" +
+	"size 12\n"
+
+const extendedLFSPointer = "version https://git-lfs.github.com/spec/v1\n" +
+	"ext-0-agentrec sha256:64e4f5f6c445b85f410b1b8f75f81f170f93c2f8a5cb51cd45cc0d8f7812d95f\n" +
 	"oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n" +
 	"size 12\n"
 
@@ -606,6 +615,16 @@ func TestShadowRefusesARepositoryItCannotCompareIn(t *testing.T) {
 				writeFile(t, filepath.Join(repo, "asset.bin"), lfsPointer)
 				gitIn(t, repo, "add", "asset.bin")
 				gitIn(t, repo, "commit", "-m", "store a pointer")
+			},
+		},
+		{
+			name:   "committed extended Git LFS pointer",
+			config: true,
+			want:   "LFS",
+			prepare: func(t *testing.T, repo string) {
+				writeFile(t, filepath.Join(repo, "asset.bin"), extendedLFSPointer)
+				gitIn(t, repo, "add", "asset.bin")
+				gitIn(t, repo, "commit", "-m", "store an extended pointer")
 			},
 		},
 	} {

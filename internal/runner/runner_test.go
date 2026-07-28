@@ -924,6 +924,33 @@ func TestRunNeverLaunchesAProviderItAlreadyHoldsAnInterruptFor(t *testing.T) {
 	}
 }
 
+func TestRunHonorsAnInterruptedStartGate(t *testing.T) {
+	b := newBundle(t)
+	marker := filepath.Join(t.TempDir(), "launched")
+	gateCalled := false
+
+	res, err := Run(context.Background(), Request{
+		Command: helperCommand("mark", marker),
+		Bundle:  b,
+		Parser:  jsonlParser("", 0),
+		Timeout: 30 * time.Second,
+		StartGate: func(start func() error) error {
+			gateCalled = true
+			return ErrInterrupted
+		},
+	})
+
+	if !gateCalled {
+		t.Fatal("StartGate was not called")
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("provider launch marker = %v, want the provider never launched", statErr)
+	}
+	if !errors.Is(err, ErrInterrupted) || res.ExitReason != ReasonInterrupted {
+		t.Errorf("Run = (%+v, %v), want interrupted before launch", res, err)
+	}
+}
+
 // A nil bundle is the one ending that cannot be recorded, because there is
 // nowhere to record it: it stays a plain validation failure.
 func TestRunRejectsANilBundleWithoutRecordingAnything(t *testing.T) {

@@ -70,6 +70,10 @@ type ParseResult struct {
 // the stream as it arrives, not the finished run.
 type Parser func(io.Reader) (ParseResult, error)
 
+// StartGate serializes the final process launch with an external lifecycle.
+// Returning ErrInterrupted means the process was deliberately not started.
+type StartGate func(start func() error) error
+
 // Request is one supervised run.
 type Request struct {
 	Command provider.Command
@@ -84,6 +88,7 @@ type Request struct {
 	// Interrupt carries the operator's interrupt, usually from signal.Notify. A
 	// nil channel simply never fires.
 	Interrupt <-chan os.Signal
+	StartGate StartGate
 }
 
 // Result is how the run went. ExitCode is nil when there was none: a process
@@ -156,7 +161,16 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.Duration = res.EndedAt.Sub(res.StartedAt)
 		return finish(req.Bundle, res, ErrInterrupted)
 	}
-	if err := cmd.Start(); err != nil {
+	start := cmd.Start
+	if req.StartGate != nil {
+		start = func() error { return req.StartGate(cmd.Start) }
+	}
+	if err := start(); errors.Is(err, ErrInterrupted) {
+		res.ExitReason = ReasonInterrupted
+		res.EndedAt = time.Now()
+		res.Duration = res.EndedAt.Sub(res.StartedAt)
+		return finish(req.Bundle, res, ErrInterrupted)
+	} else if err != nil {
 		return unstarted(req.Bundle, res, fmt.Errorf("runner: start %s: %w", req.Command.Executable, err))
 	}
 

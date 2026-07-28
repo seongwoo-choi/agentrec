@@ -229,9 +229,10 @@ What the command does and does not give you:
 - **A linked worktree is not a security boundary.** It shares the repository's
   common Git directory and refs, and a provider can explicitly reach the source
   checkout. The lock coordinates agentrec processes only. After removing each
-  owned worktree, agentrec compares the source `HEAD`, status, index, refs and
-  worktree list with its preflight snapshot. Observed drift stops the next leg
-  and exits `1`; agentrec reports it and does not destructively restore it.
+  owned worktree, agentrec compares the source `HEAD`, status, index, refs,
+  worktree list and common repository config with its preflight snapshot.
+  Observed drift stops the next leg and exits `1`; agentrec reports it and does
+  not destructively restore it.
 
 Exit codes: `2` for a usage or preflight refusal — a runner named twice or
 missing, an unreadable task file, a dirty checkout, an uncommitted

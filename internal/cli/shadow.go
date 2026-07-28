@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -106,13 +107,10 @@ func runShadow(args []string, stdout, stderr io.Writer) int {
 	// arriving from here on is held rather than ending this process where it
 	// stands: a comparison abandoned mid-leg would leave a checkout of the
 	// operator's repository behind and a bundle that never says how it ended.
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, handledSignals...)
-	defer signal.Stop(interrupt)
-	stopHolding := stopHoldingAfterTheFirstSignal()
-	defer stopHolding()
+	signals := holdCommandSignals()
+	interrupt := signals.Interrupt()
 
-	legs, failed, interrupted := shadowLegs(pre, inv, workspaces, interrupt, stderr)
+	legs, failed, interrupted := shadowLegs(pre, inv, workspaces, interrupt, signals.Start, stderr)
 
 	// Rendered once the checkouts are gone, and read back off disk: what the two
 	// runs are compared on is what was persisted about them, not what this
@@ -135,9 +133,7 @@ func runShadow(args []string, stdout, stderr io.Writer) int {
 	// signal. Cleanup, comparison rendering and lock release are still part of
 	// this aggregate command, so latch a signal that arrived after the legs had
 	// already returned before deciding the exit.
-	if !interrupted && pending(interrupt) {
-		interrupted = true
-	}
+	interrupted = signals.Stop() || interrupted
 
 	switch {
 	case interrupted:
@@ -148,32 +144,99 @@ func runShadow(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// stopHoldingAfterTheFirstSignal hands the two signals back to the operating
-// system as soon as one of them arrives, and returns the function that ends the
-// watch.
-//
-// The signal is watched on a channel of this command's own, so the first one is
-// observed here whichever part of the recording took it: the supervisor ending
-// the provider's process group, or the recorder finishing the evidence
-// afterwards. Holding a signal is a promise to write the stopped run down and
-// take the checkouts back out, and a comparison has both of those left to do
-// for two legs — but it is not a claim on the operator's terminal. An operator
-// who asks a second time has decided that wait is over.
-func stopHoldingAfterTheFirstSignal() func() {
-	stopped := make(chan os.Signal, 1)
-	signal.Notify(stopped, handledSignals...)
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-stopped:
-			// Reset rather than Stop, because the second ask has to end this
-			// process whichever channel is listening for it.
-			signal.Reset(handledSignals...)
-		case <-done:
+// commandSignalForwarded is a no-op in production. Out-of-process tests replace
+// it before Run starts so they can synchronize on forwarding without sleeps.
+var commandSignalForwarded = func() {}
+
+type commandLaunch struct {
+	start  func() error
+	result chan error
+}
+
+type commandSignals struct {
+	incoming  chan os.Signal
+	interrupt chan os.Signal
+	launch    chan commandLaunch
+	stop      chan chan bool
+}
+
+// holdCommandSignals installs one operating-system subscription. Its owner
+// serializes launch and shutdown with the durable first-signal latch.
+func holdCommandSignals() *commandSignals {
+	s := &commandSignals{
+		incoming:  make(chan os.Signal, 1),
+		interrupt: make(chan os.Signal, 1),
+		launch:    make(chan commandLaunch),
+		stop:      make(chan chan bool),
+	}
+	signal.Notify(s.incoming, handledSignals...)
+	go s.run()
+	return s
+}
+
+func (s *commandSignals) Interrupt() <-chan os.Signal { return s.interrupt }
+
+func (s *commandSignals) Start(start func() error) error {
+	result := make(chan error, 1)
+	s.launch <- commandLaunch{start: start, result: result}
+	return <-result
+}
+
+func (s *commandSignals) Stop() bool {
+	result := make(chan bool, 1)
+	s.stop <- result
+	return <-result
+}
+
+func (s *commandSignals) run() {
+	interrupted := false
+	latch := func(sig os.Signal) {
+		if interrupted {
+			return
 		}
-		signal.Stop(stopped)
-	}()
-	return func() { close(done) }
+		interrupted = true
+		signal.Reset(handledSignals...)
+		s.interrupt <- sig
+		commandSignalForwarded()
+	}
+	for {
+		if !interrupted {
+			select {
+			case sig := <-s.incoming:
+				latch(sig)
+				continue
+			default:
+			}
+		}
+		select {
+		case sig := <-s.incoming:
+			latch(sig)
+		case req := <-s.launch:
+			if !interrupted {
+				select {
+				case sig := <-s.incoming:
+					latch(sig)
+				default:
+				}
+			}
+			if interrupted {
+				req.result <- runner.ErrInterrupted
+			} else {
+				req.result <- req.start()
+			}
+		case result := <-s.stop:
+			signal.Stop(s.incoming)
+			if !interrupted {
+				select {
+				case sig := <-s.incoming:
+					latch(sig)
+				default:
+				}
+			}
+			result <- interrupted
+			return
+		}
+	}
 }
 
 // shadowDirMode keeps a comparison's checkouts readable only by the operator who
@@ -221,7 +284,7 @@ type leg struct {
 // another so that neither verification nor any external state either run
 // touches is shared with a run happening at the same time. Every checkout it
 // prepares is removed before it returns, whatever happened in it.
-func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrupt <-chan os.Signal, stderr io.Writer) (legs []leg, failed, interrupted bool) {
+func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrupt <-chan os.Signal, startGate runner.StartGate, stderr io.Writer) (legs []leg, failed, interrupted bool) {
 	var trees []*worktree.Worktree
 	defer func() {
 		if err := removeWorkspaces(trees, workspaces); err != nil {
@@ -292,6 +355,7 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 			// to compare.
 			Verify:    true,
 			Interrupt: interrupt,
+			StartGate: startGate,
 		}, stderr)
 
 		// A run that never reached its provider left a finalized bundle saying so
@@ -410,6 +474,7 @@ type repositoryState struct {
 	index     string
 	refs      string
 	worktrees string
+	config    string
 }
 
 // shadowPreflight settles all of it, or refuses. Nothing here writes into the
@@ -539,7 +604,38 @@ func readRepositoryState(ctx context.Context, root string) (repositoryState, err
 		}
 		*reading.dst = value
 	}
+	config, err := gitConfigDigest(ctx, root)
+	if err != nil {
+		return repositoryState{}, fmt.Errorf("cli: snapshot source repository config: %w", err)
+	}
+	state.config = config
 	return state, nil
+}
+
+const maxGitConfigBytes = 1 << 20
+
+func gitConfigDigest(ctx context.Context, root string) (string, error) {
+	common, err := shadowGit(ctx, root, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(root, common)
+	}
+	path := filepath.Join(filepath.Clean(common), "config")
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open %s: %w", strconv.Quote(path), err)
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, maxGitConfigBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", strconv.Quote(path), err)
+	}
+	if len(raw) > maxGitConfigBytes {
+		return "", fmt.Errorf("%s is larger than %d bytes", strconv.Quote(path), maxGitConfigBytes)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
 }
 
 func changedRepositoryFields(before, after repositoryState) []string {
@@ -553,6 +649,7 @@ func changedRepositoryFields(before, after repositoryState) []string {
 		{"index", before.index, after.index},
 		{"refs", before.refs, after.refs},
 		{"worktrees", before.worktrees, after.worktrees},
+		{"config", before.config, after.config},
 	} {
 		if field.before != field.after {
 			changed = append(changed, field.name)
@@ -671,20 +768,58 @@ func commitsLFSPointer(ctx context.Context, dir string) (bool, error) {
 
 func isLFSPointer(text string) bool {
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
-	if len(lines) != 3 || lines[0] != lfsPointerPrefix || !strings.HasPrefix(lines[1], "oid sha256:") || !strings.HasPrefix(lines[2], "size ") {
+	if len(lines) < 3 || lines[0] != lfsPointerPrefix {
 		return false
 	}
-	oid := strings.TrimPrefix(lines[1], "oid sha256:")
-	if len(oid) != 64 {
+
+	i := 1
+	for i < len(lines)-2 && strings.HasPrefix(lines[i], "ext-") {
+		if !isLFSExtension(lines[i]) {
+			return false
+		}
+		i++
+	}
+	if len(lines)-i != 2 || !strings.HasPrefix(lines[i], "oid sha256:") || !strings.HasPrefix(lines[i+1], "size ") {
 		return false
 	}
-	for _, r := range oid {
+	if !isLowerHex(strings.TrimPrefix(lines[i], "oid sha256:"), 64) {
+		return false
+	}
+	_, err := strconv.ParseUint(strings.TrimPrefix(lines[i+1], "size "), 10, 64)
+	return err == nil
+}
+
+func isLFSExtension(line string) bool {
+	key, value, ok := strings.Cut(line, " ")
+	if !ok || value == "" || strings.TrimSpace(value) != value {
+		return false
+	}
+	priorityAndName := strings.TrimPrefix(key, "ext-")
+	priority, name, ok := strings.Cut(priorityAndName, "-")
+	if !ok || name == "" {
+		return false
+	}
+	if _, err := strconv.ParseUint(priority, 10, 64); err != nil {
+		return false
+	}
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func isLowerHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, r := range value {
 		if !strings.ContainsRune("0123456789abcdef", r) {
 			return false
 		}
 	}
-	_, err := strconv.ParseUint(strings.TrimPrefix(lines[2], "size "), 10, 64)
-	return err == nil
+	return true
 }
 
 // parseShadow reads the invocation exactly. Every argument is required to be

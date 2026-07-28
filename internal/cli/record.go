@@ -47,6 +47,7 @@ type recordRequest struct {
 	// Interrupt carries the operator's interrupt, for the length of the run and
 	// of the recorder's own work after it. A nil channel never fires.
 	Interrupt <-chan os.Signal
+	StartGate runner.StartGate
 
 	// Timeline receives the run ID and the rendered timeline once the report has
 	// been filed under the run. A nil writer files the report and prints
@@ -182,6 +183,7 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 		Bundle:    bundle,
 		Parser:    req.Parser,
 		Interrupt: req.Interrupt,
+		StartGate: req.StartGate,
 	})
 
 	// Taken over now that the supervisor has stopped listening. Everything below

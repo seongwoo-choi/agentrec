@@ -106,7 +106,7 @@ The comparison is informational only. This slice prints it to stdout; each leg's
 1. Write table-driven RED tests for missing/duplicate/unknown/extra runners and command shape errors.
 2. Add dispatch and exact argument parser for `shadow run`.
 3. Write RED tests for missing/directory/symlink/oversized/non-UTF-8 task files; implement one-time bounded regular-file read.
-4. Write RED tests for dirty repository, uncommitted `.agentrec.yaml`, nested `AGENTREC_HOME`, committed `.gitmodules`, and committed LFS pointer files; assert no shadow directory/provider start.
+4. Write RED tests for dirty repository, uncommitted `.agentrec.yaml`, nested `AGENTREC_HOME`, committed `.gitmodules`, and standard or extended committed LFS pointer files; assert no shadow directory/provider start.
 5. Implement source lock, clean check, baseline resolution, committed-config check, data-root confinement, and explicit unsupported-repository checks.
 6. Run focused and full CLI tests.
 
@@ -211,10 +211,15 @@ Done:
   adapters with the task bytes on argv behind an option delimiter and no
   permission-widening flags; both bundles are readable with `agentrec show`
   after the checkouts are gone.
-- Task 5: per-leg owned cleanup, cleanup failure exits 1 and is printed, a
-  pending signal is checked before each leg and after repository release, and
-  out-of-process SIGINT and SIGTERM tests cover both leg positions, repository
-  release, plus the second-signal escape hatch.
+- Task 5: per-leg owned cleanup, cleanup failure exits 1 and is printed, one
+  operating-system signal subscription durably latches the first signal and
+  restores default disposition before forwarding it, serializes the final
+  provider start through that latch, and out-of-process tests cover setup/version
+  discovery without provider launch, both leg positions, repository release,
+  plus the second-signal escape hatch without fixed sleeps.
+- Source drift checks include the common repository config digest in addition
+  to `HEAD`, status, index, refs and worktree registrations; observed config
+  mutation stops the second provider without destructive restoration.
 - Task 6: `renderComparison` builds every field by reading the persisted bundles
   and renders them in fixed runner and field order, with no evaluation
   vocabulary.

@@ -89,6 +89,8 @@ func TestTraceHoldsASignalUntilTheRepositoryHasBeenMeasured(t *testing.T) {
 	cleanRepo(t)
 	dir := stubProviders(t, "claude", agentrecName)
 	measuring, resume := pauseRepositoryMeasurement(t, dir)
+	forwarded := filepath.Join(t.TempDir(), "signal.forwarded")
+	t.Setenv(signalForwardEnv, forwarded)
 
 	var stdout, stderr bytes.Buffer
 	rec := exec.Command(filepath.Join(dir, agentrecName), "trace", "claude", "--", "-p", "read the README")
@@ -110,10 +112,9 @@ func TestTraceHoldsASignalUntilTheRepositoryHasBeenMeasured(t *testing.T) {
 	if err := rec.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("terminate the recorder: %v", err)
 	}
-	// The signal is delivered by the operating system rather than by this
-	// process, so the measurement is released a moment later: releasing it in
-	// the same instant would leave which of the two happened first to chance.
-	time.Sleep(200 * time.Millisecond)
+	if !waitForFile(forwarded, 5*time.Second) {
+		t.Fatalf("recorder never forwarded the signal (stderr %q)", stderr.String())
+	}
 	if err := os.WriteFile(resume, []byte("go\n"), 0o600); err != nil {
 		t.Fatalf("release the measurement: %v", err)
 	}
@@ -168,11 +169,7 @@ func TestTraceStopsHoldingSignalsDuringTheProviderAfterTheFirstOne(t *testing.T)
 	if err := rec.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("terminate the recorder again: %v", err)
 	}
-	time.Sleep(200 * time.Millisecond)
-	if err := os.WriteFile(resume, []byte("go\n"), 0o600); err != nil {
-		t.Fatalf("release the measurement: %v", err)
-	}
-	rec.Wait()
+	waitForRecorderExit(t, rec, resume, &stderr)
 
 	status, ok := rec.ProcessState.Sys().(syscall.WaitStatus)
 	if !ok {
@@ -189,6 +186,8 @@ func TestTraceStopsHoldingSignalsAfterTheFirstOne(t *testing.T) {
 	cleanRepo(t)
 	dir := stubProviders(t, "claude", agentrecName)
 	measuring, resume := pauseRepositoryMeasurement(t, dir)
+	forwarded := filepath.Join(t.TempDir(), "signal.forwarded")
+	t.Setenv(signalForwardEnv, forwarded)
 
 	var stdout, stderr bytes.Buffer
 	rec := exec.Command(filepath.Join(dir, agentrecName), "trace", "claude", "--", "-p", "read the README")
@@ -205,21 +204,16 @@ func TestTraceStopsHoldingSignalsAfterTheFirstOne(t *testing.T) {
 	if !waitForFile(measuring, 60*time.Second) {
 		t.Fatalf("the repository was never measured (stderr %q)", stderr.String())
 	}
-	for range 2 {
-		if err := rec.Process.Signal(syscall.SIGTERM); err != nil {
-			t.Fatalf("terminate the recorder: %v", err)
-		}
-		// The two signals are separated so that the second one is the second
-		// ask rather than a repetition the recorder never had a chance to
-		// distinguish: the first has to have been taken before it arrives.
-		time.Sleep(500 * time.Millisecond)
+	if err := rec.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("terminate the recorder: %v", err)
 	}
-	// Released so that a recorder which wrongly held the second signal finishes
-	// and reports an ending, rather than this test reading a timeout as a pass.
-	if err := os.WriteFile(resume, []byte("go\n"), 0o600); err != nil {
-		t.Fatalf("release the measurement: %v", err)
+	if !waitForFile(forwarded, 5*time.Second) {
+		t.Fatalf("recorder never forwarded the first signal (stderr %q)", stderr.String())
 	}
-	rec.Wait()
+	if err := rec.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("terminate the recorder again: %v", err)
+	}
+	waitForRecorderExit(t, rec, resume, &stderr)
 
 	status, ok := rec.ProcessState.Sys().(syscall.WaitStatus)
 	if !ok {

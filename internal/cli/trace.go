@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -193,11 +192,8 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	// with the provider's process group still running. The run itself has no
 	// timeout: how long an agent may work is the operator's decision, taken with
 	// that same Ctrl-C.
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, handledSignals...)
-	defer signal.Stop(interrupt)
-	stopHolding := stopHoldingAfterTheFirstSignal()
-	defer stopHolding()
+	signals := holdCommandSignals()
+	interrupt := signals.Interrupt()
 
 	out := record(recordRequest{
 		Provider:  name,
@@ -210,8 +206,10 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 		RunID:     runID,
 		Verify:    verify,
 		Interrupt: interrupt,
+		StartGate: signals.Start,
 		Timeline:  stdout,
 	}, stderr)
+	out.Interrupted = signals.Stop() || out.Interrupted
 
 	// A run that never reached the supervisor has left a finalized bundle saying
 	// so, and the recorder has already said why.

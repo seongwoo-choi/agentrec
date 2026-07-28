@@ -1681,6 +1681,7 @@ func TestMain(m *testing.M) {
 	switch filepath.Base(os.Args[0]) {
 	case agentrecName:
 		installReleasePause()
+		installSignalForwardMarker()
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	case "claude":
 		os.Exit(claudeHelper(os.Args[1:]))
@@ -1697,7 +1698,36 @@ func TestMain(m *testing.M) {
 const (
 	releasePauseEnv  = "AGENTREC_TEST_RELEASE_PAUSE"
 	releaseResumeEnv = "AGENTREC_TEST_RELEASE_RESUME"
+	signalForwardEnv = "AGENTREC_TEST_SIGNAL_FORWARDED"
+	versionPauseEnv  = "AGENTREC_TEST_VERSION_PAUSE"
+	versionResumeEnv = "AGENTREC_TEST_VERSION_RESUME"
 )
+
+func pauseVersionProbe() error {
+	ready := os.Getenv(versionPauseEnv)
+	if ready == "" {
+		return nil
+	}
+	if err := os.WriteFile(ready, []byte("probing\n"), 0o600); err != nil {
+		return err
+	}
+	if !waitForFile(os.Getenv(versionResumeEnv), lingerLimit) {
+		return errors.New("test version probe was never resumed")
+	}
+	return nil
+}
+
+func installSignalForwardMarker() {
+	path := os.Getenv(signalForwardEnv)
+	if path == "" {
+		return
+	}
+	commandSignalForwarded = func() {
+		if err := os.WriteFile(path, []byte("forwarded\n"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, "signal marker:", err)
+		}
+	}
+}
 
 func installReleasePause() {
 	ready := os.Getenv(releasePauseEnv)
@@ -2143,6 +2173,10 @@ func TestTraceRefusesToVerifyWithoutAPinnableConfiguration(t *testing.T) {
 
 func claudeHelper(args []string) int {
 	if slices.Equal(args, []string{"--version"}) {
+		if err := pauseVersionProbe(); err != nil {
+			fmt.Fprintln(os.Stderr, "claude helper:", err)
+			return helperContractExit
+		}
 		fmt.Println(claudeHelperVersion)
 		return 0
 	}
@@ -2196,6 +2230,10 @@ func linger() {
 
 func codexHelper(args []string) int {
 	if slices.Equal(args, []string{"--version"}) {
+		if err := pauseVersionProbe(); err != nil {
+			fmt.Fprintln(os.Stderr, "codex helper:", err)
+			return helperContractExit
+		}
 		fmt.Println(codexHelperVersion)
 		return 0
 	}
@@ -2262,6 +2300,12 @@ func mutateSourceCheckout(provider string) error {
 		cmd := exec.Command("git", "-C", parts[2], "checkout", "provider-alternate-source")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("mutate source HEAD: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		return nil
+	case "config":
+		cmd := exec.Command("git", "-C", parts[2], "config", "--local", "agentrec.provider-mutated", "true")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("mutate source config: %s: %w", strings.TrimSpace(string(out)), err)
 		}
 		return nil
 	default:

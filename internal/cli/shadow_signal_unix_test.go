@@ -16,6 +16,73 @@ import (
 	"github.com/seongwoo-choi/agentrec/internal/runner"
 )
 
+func TestCommandSignalBridgeLatchesTheFirstSignalBeforeLaunch(t *testing.T) {
+	signals := holdCommandSignals()
+	interrupt := signals.Interrupt()
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatalf("signal this process: %v", err)
+	}
+	select {
+	case sig := <-interrupt:
+		if sig != os.Interrupt {
+			t.Fatalf("forwarded signal = %v, want %v", sig, os.Interrupt)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first signal was not forwarded")
+	}
+	started := false
+	if err := signals.Start(func() error {
+		started = true
+		return nil
+	}); !errors.Is(err, runner.ErrInterrupted) {
+		t.Fatalf("gated start error = %v, want ErrInterrupted", err)
+	}
+	if started {
+		t.Fatal("gated process start ran after the signal was latched")
+	}
+	if !signals.Stop() {
+		t.Fatal("Stop did not report the latched signal")
+	}
+}
+
+func TestCommandSignalBridgeSettlesAQueuedSignalBeforeLaunchAndStop(t *testing.T) {
+	signals := holdCommandSignals()
+	signals.incoming <- syscall.SIGINT
+	started := false
+
+	if err := signals.Start(func() error {
+		started = true
+		return nil
+	}); !errors.Is(err, runner.ErrInterrupted) {
+		t.Fatalf("gated start error = %v, want ErrInterrupted", err)
+	}
+	if started {
+		t.Fatal("gated process start ran while a signal was queued")
+	}
+	if !signals.Stop() {
+		t.Fatal("Stop did not report the queued signal")
+	}
+}
+
+func waitForRecorderExit(t *testing.T, rec *exec.Cmd, resume string, stderr *bytes.Buffer) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		rec.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(5 * time.Second):
+		os.WriteFile(resume, []byte("go\n"), 0o600)
+		rec.Process.Kill()
+		<-done
+		t.Fatalf("recorder did not exit after the second signal (stderr %q)", stderr.String())
+	}
+}
+
 // A comparison runs two agents in checkouts of agentrec's own making, taken out
 // of the operator's repository. An interrupt in the middle of one is the moment
 // where that matters most: a recorder killed where it stands leaves a copy of
@@ -132,6 +199,56 @@ func TestShadowCleansUpWhenItIsInterrupted(t *testing.T) {
 	}
 }
 
+func TestShadowDoesNotLaunchAProviderInterruptedDuringSetup(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	dir := stubProviders(t, "claude", "codex", verifyHelperName, agentrecName)
+	commitVerifyConfig(t, repo, verifyHelperName, "pass")
+	started := providerStarted(t)
+	ready := filepath.Join(t.TempDir(), "version.ready")
+	resume := filepath.Join(t.TempDir(), "version.resume")
+	forwarded := filepath.Join(t.TempDir(), "signal.forwarded")
+	t.Setenv(versionPauseEnv, ready)
+	t.Setenv(versionResumeEnv, resume)
+	t.Setenv(signalForwardEnv, forwarded)
+	task := writeTask(t, "change the README\n")
+	before := snapshotSource(t, repo)
+
+	var stdout, stderr bytes.Buffer
+	rec := exec.Command(filepath.Join(dir, agentrecName), "shadow", "run", task, "--runner", "claude", "--runner", "codex")
+	rec.Stdout, rec.Stderr = &stdout, &stderr
+	if err := rec.Start(); err != nil {
+		t.Fatalf("start recorder: %v", err)
+	}
+	t.Cleanup(func() {
+		os.WriteFile(resume, []byte("go\n"), 0o600)
+		rec.Process.Kill()
+		rec.Wait()
+	})
+	if !waitForFile(ready, 60*time.Second) {
+		t.Fatalf("recorder never reached version discovery (stderr %q)", stderr.String())
+	}
+	if err := rec.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("signal recorder: %v", err)
+	}
+	if !waitForFile(forwarded, 5*time.Second) {
+		t.Fatalf("recorder never forwarded the interrupt (stderr %q)", stderr.String())
+	}
+	if err := os.WriteFile(resume, []byte("go\n"), 0o600); err != nil {
+		t.Fatalf("resume version discovery: %v", err)
+	}
+	err := rec.Wait()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != exitInterrupted {
+		t.Fatalf("recorder error = %v, exit = %d, want %d (stderr %q)", err, rec.ProcessState.ExitCode(), exitInterrupted, stderr.String())
+	}
+	if started() {
+		t.Fatal("provider was launched after setup interruption")
+	}
+	wantNoWorkspace(t, root)
+	wantSourceUnchanged(t, repo, before)
+}
+
 // Holding a signal is a promise to finish writing down the run that was stopped
 // and to take the checkouts back out — it is not a claim on the operator's
 // terminal. A comparison has more left to do after an interrupt than a single
@@ -178,13 +295,7 @@ func TestShadowStopsHoldingSignalsAfterTheFirstOne(t *testing.T) {
 	if err := rec.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signal the recorder again: %v", err)
 	}
-	// Released so that a recorder which wrongly held the second signal finishes
-	// and reports an ending, rather than this test reading a timeout as a pass.
-	time.Sleep(200 * time.Millisecond)
-	if err := os.WriteFile(resume, []byte("go\n"), 0o600); err != nil {
-		t.Fatalf("release the measurement: %v", err)
-	}
-	rec.Wait()
+	waitForRecorderExit(t, rec, resume, &stderr)
 
 	status, ok := rec.ProcessState.Sys().(syscall.WaitStatus)
 	if !ok {
@@ -206,8 +317,10 @@ func TestShadowReportsAnInterruptDuringRepositoryRelease(t *testing.T) {
 	commitVerifyConfig(t, repo, verifyHelperName, "pass")
 	ready := filepath.Join(t.TempDir(), "release.ready")
 	resume := filepath.Join(t.TempDir(), "release.resume")
+	forwarded := filepath.Join(t.TempDir(), "signal.forwarded")
 	t.Setenv(releasePauseEnv, ready)
 	t.Setenv(releaseResumeEnv, resume)
+	t.Setenv(signalForwardEnv, forwarded)
 	task := writeTask(t, "change the README\n")
 
 	var stdout, stderr bytes.Buffer
@@ -226,6 +339,9 @@ func TestShadowReportsAnInterruptDuringRepositoryRelease(t *testing.T) {
 	}
 	if err := rec.Process.Signal(syscall.SIGINT); err != nil {
 		t.Fatalf("signal recorder: %v", err)
+	}
+	if !waitForFile(forwarded, 5*time.Second) {
+		t.Fatalf("recorder never forwarded the interrupt (stderr %q)", stderr.String())
 	}
 	if err := os.WriteFile(resume, []byte("go\n"), 0o600); err != nil {
 		t.Fatalf("resume repository release: %v", err)
