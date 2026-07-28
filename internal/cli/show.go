@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/evidence"
 	"github.com/seongwoo-choi/agentrec/internal/report"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
@@ -22,10 +24,13 @@ import (
 // raw provider material, and a report is built only from normalized actions and
 // the run's own bookkeeping.
 const (
-	manifestFile = "manifest.json"
-	actionsFile  = "actions.jsonl"
-	processDir   = "process"
-	resultFile   = "result.json"
+	manifestFile  = "manifest.json"
+	actionsFile   = "actions.jsonl"
+	processDir    = "process"
+	resultFile    = "result.json"
+	gitDir        = "git"
+	verifyDir     = "verification"
+	verifyResults = "results.json"
 )
 
 // Reading bounds. A bundle is written by this tool but read back from the
@@ -37,6 +42,15 @@ const (
 	maxActionBytes       = 4 << 20
 	maxActionStreamBytes = 64 << 20
 	maxActions           = 100000
+	// maxEvidenceItems bounds the lists inside one evidence document. A run that
+	// pinned more checks than this, or a warning naming more paths, is past
+	// anything a reviewable verification produced.
+	maxEvidenceItems = 1000
+	// Counts and durations are arithmetic inputs below, not merely strings to
+	// display. Refuse values no recorder run can produce before they overflow.
+	maxRepositoryCount      = 1_000_000_000
+	maxVerificationDuration = 2 * time.Hour
+	maxVerificationExitCode = 255
 )
 
 // latestRun names the newest run instead of one particular run.
@@ -132,9 +146,245 @@ func readRun(root, runID string) (report.Report, error) {
 	if err != nil {
 		return report.Report{}, err
 	}
-	// Repository and verification evidence are recorded by later phases; until
-	// then those sections have nothing to report and say so.
-	return report.Report{Actions: actions, Supervisor: supervisorFields(manifest, result)}, nil
+	git, err := readGitResult(dir)
+	if err != nil {
+		return report.Report{}, err
+	}
+	verification, err := readVerification(dir)
+	if err != nil {
+		return report.Report{}, err
+	}
+	return report.Report{
+		Actions:      actions,
+		Supervisor:   supervisorFields(manifest, result),
+		Repository:   repositoryFields(git),
+		Verification: verificationFields(verification),
+	}, nil
+}
+
+// gitResult mirrors git/result.json: what the repository capture measured, and
+// what it says that measurement does and does not mean.
+type gitResult struct {
+	Status      string `json:"status"`
+	Reason      string `json:"reason"`
+	Attribution string `json:"attribution"`
+	Baseline    string `json:"baseline"`
+
+	TrackedFiles  int `json:"trackedFiles"`
+	Added         int `json:"added"`
+	Deleted       int `json:"deleted"`
+	BinaryTracked int `json:"binaryTracked"`
+
+	UntrackedFiles  int `json:"untrackedFiles"`
+	StoredTextFiles int `json:"storedTextFiles"`
+}
+
+// gitAvailable is the one recorded status whose counts are a finished
+// measurement. Every other status describes a collection that did not produce
+// them, so its zeros are absence rather than evidence of a run that changed
+// nothing.
+const gitAvailable = "available"
+
+// readGitResult reads what the run left in the repository. A run recorded
+// before this evidence existed has no document, which is different from a
+// document that cannot be read: the first has nothing to report and says so,
+// and the second is refused.
+func readGitResult(dir string) (*gitResult, error) {
+	raw, err := readDocument(dir, filepath.Join(gitDir, resultFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var res gitResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("cli: read %s: %w", filepath.Join(gitDir, resultFile), err)
+	}
+	if res.Status == "" {
+		return nil, fmt.Errorf("cli: %s does not say whether the collection ran", filepath.Join(gitDir, resultFile))
+	}
+	if res.Attribution != evidence.Attribution {
+		return nil, fmt.Errorf("cli: %s claims %q, want the recorded attribution", filepath.Join(gitDir, resultFile), res.Attribution)
+	}
+	for _, count := range []struct {
+		name string
+		n    int
+	}{
+		{"trackedFiles", res.TrackedFiles},
+		{"added", res.Added},
+		{"deleted", res.Deleted},
+		{"binaryTracked", res.BinaryTracked},
+		{"untrackedFiles", res.UntrackedFiles},
+		{"storedTextFiles", res.StoredTextFiles},
+	} {
+		if count.n < 0 || count.n > maxRepositoryCount {
+			return nil, fmt.Errorf("cli: %s counts %d %s outside the recorded range", filepath.Join(gitDir, resultFile), count.n, count.name)
+		}
+	}
+	return &res, nil
+}
+
+// readVerification reads how the pinned checks ended. As with the repository,
+// an absent document is a run that asked for no verification, and an unreadable
+// one is refused rather than summarized.
+func readVerification(dir string) (*evidence.VerificationResult, error) {
+	name := filepath.Join(verifyDir, verifyResults)
+	raw, err := readDocument(dir, name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var res evidence.VerificationResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("cli: read %s: %w", name, err)
+	}
+	switch {
+	case res.Status == "":
+		return nil, fmt.Errorf("cli: %s does not say how the verification ended", name)
+	case res.Attribution != evidence.VerificationAttribution:
+		return nil, fmt.Errorf("cli: %s claims %q, want the recorded attribution", name, res.Attribution)
+	case len(res.Checks) > maxEvidenceItems:
+		return nil, fmt.Errorf("cli: %s holds more than %d checks", name, maxEvidenceItems)
+	case len(res.Warnings) > maxEvidenceItems:
+		return nil, fmt.Errorf("cli: %s holds more than %d warnings", name, maxEvidenceItems)
+	}
+	for _, check := range res.Checks {
+		if check.DurationMS < 0 || check.DurationMS > maxVerificationDuration.Milliseconds() {
+			return nil, fmt.Errorf("cli: %s reports check %q as having taken %dms", name, check.Name, check.DurationMS)
+		}
+		if check.ExitCode != nil && (*check.ExitCode < 0 || *check.ExitCode > maxVerificationExitCode) {
+			return nil, fmt.Errorf("cli: %s reports check %q with exit code %d outside the recorded range", name, check.Name, *check.ExitCode)
+		}
+	}
+	for _, warning := range res.Warnings {
+		if len(warning.Paths) > maxEvidenceItems {
+			return nil, fmt.Errorf("cli: %s holds a warning naming more than %d paths", name, maxEvidenceItems)
+		}
+	}
+	return &res, nil
+}
+
+// repositoryFields summarizes what the run left in the repository, in a fixed
+// order. The counts are shown only for a collection that finished with them:
+// what an unfinished or failed one holds is zeros it never measured, and a
+// zero read as a measurement is a run reported to have changed nothing.
+func repositoryFields(res *gitResult) []report.Field {
+	if res == nil {
+		return nil
+	}
+	fields := []report.Field{{Name: "Status", Value: strings.ToUpper(res.Status)}}
+	if res.Reason != "" {
+		fields = append(fields, report.Field{Name: "Reason", Value: res.Reason})
+	}
+	if res.Status == gitAvailable {
+		fields = append(fields,
+			report.Field{Name: "Files", Value: fmt.Sprintf("%d (%d tracked, %d untracked)", res.TrackedFiles+res.UntrackedFiles, res.TrackedFiles, res.UntrackedFiles)},
+			report.Field{Name: "Diff", Value: fmt.Sprintf("+%d/-%d, %d binary", res.Added, res.Deleted, res.BinaryTracked)},
+			report.Field{Name: "Stored Text", Value: strconv.Itoa(res.StoredTextFiles)},
+		)
+	}
+	if res.Baseline != "" {
+		fields = append(fields, report.Field{Name: "Baseline", Value: res.Baseline})
+	}
+	// Said on every result: what a difference means is not something a reader
+	// should have to supply themselves.
+	return append(fields, report.Field{Name: "Attribution", Value: res.Attribution})
+}
+
+// verificationVerdicts spell the two endings an operator acts on. Every other
+// status is shown as the word it was recorded under, uppercase, because a
+// verification this command does not recognize is not one that passed.
+var verificationVerdicts = map[string]string{
+	evidence.VerificationPassed: "PASS",
+	"failed":                    "FAIL",
+}
+
+// checkTimedOut is the status of a check that was still running when its own
+// timeout ran out, which is the one ending whose bound is worth repeating.
+const checkTimedOut = "timeout"
+
+func verdict(status string) string {
+	if known, ok := verificationVerdicts[status]; ok {
+		return known
+	}
+	return strings.ToUpper(status)
+}
+
+// verificationFields summarizes how the checks ended, in the order they were
+// pinned. Each check and each warning is one field: they answer different
+// questions — whether the work holds up, and what the checks did while asking —
+// and folding either into the other would lose one of them.
+func verificationFields(res *evidence.VerificationResult) []report.Field {
+	if res == nil {
+		return nil
+	}
+	fields := []report.Field{{Name: "Status", Value: verdict(res.Status)}}
+	if res.Reason != "" {
+		fields = append(fields, report.Field{Name: "Reason", Value: res.Reason})
+	}
+	fields = append(fields,
+		report.Field{Name: "Config", Value: res.Config},
+		report.Field{Name: "Config SHA-256", Value: res.ConfigSHA256},
+	)
+	for _, check := range res.Checks {
+		fields = append(fields, report.Field{Name: "Check", Value: checkSummary(check)})
+	}
+	for _, warning := range res.Warnings {
+		fields = append(fields, report.Field{Name: "Warning", Value: warningSummary(warning)})
+	}
+	return append(fields, report.Field{Name: "Attribution", Value: res.Attribution})
+}
+
+// checkSummary reduces one check to its verdict, the command that produced it
+// and how it ended. A check with no status of its own is one that was pinned
+// and never reached, which is reported as pending rather than as an absence.
+func checkSummary(check evidence.VerificationCheck) string {
+	status := "PENDING"
+	if check.Status != "" {
+		status = verdict(check.Status)
+	}
+
+	parts := []string{status + " " + check.Name, quoteArgv(check.Command)}
+	if check.DurationMS > 0 {
+		parts = append(parts, (time.Duration(check.DurationMS) * time.Millisecond).String())
+	}
+	if check.ExitCode != nil {
+		parts = append(parts, "exit "+strconv.Itoa(*check.ExitCode))
+	}
+	if check.Signal != "" {
+		parts = append(parts, "signal "+check.Signal)
+	}
+	if check.Status == checkTimedOut && check.Timeout != "" {
+		parts = append(parts, "timeout "+check.Timeout)
+	}
+	return strings.Join(parts, "  ")
+}
+
+// quoteArgv shows a command as the list of arguments it was launched as, each
+// quoted, so that a reader can tell one argument holding a space from two
+// arguments — and so that no argument reads as a shell line that was never one.
+func quoteArgv(argv []string) string {
+	quoted := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		quoted = append(quoted, strconv.Quote(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+// warningSummary names what was observed and the paths it was observed about,
+// sorted, so that two runs that saw the same thing read the same. The recorded
+// slice is copied rather than sorted in place: it is evidence this command was
+// handed, not its own.
+func warningSummary(warning evidence.VerificationWarning) string {
+	if len(warning.Paths) == 0 {
+		return warning.Code
+	}
+	paths := slices.Clone(warning.Paths)
+	slices.Sort(paths)
+	return warning.Code + "  " + strings.Join(paths, ", ")
 }
 
 // runDir locates a run directory. Lstat, so a symlink standing where a run

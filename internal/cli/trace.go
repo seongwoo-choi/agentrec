@@ -85,6 +85,16 @@ const (
 // nanosecond, so run IDs sort in the order their runs happened.
 const runIDTimeLayout = "20060102T150405.000000000Z"
 
+// The rendered report, filed under the run beside the evidence it was rendered
+// from. It may quote a private repository, so it is readable only by the user
+// who recorded it, and it is bounded: a report past this size is a bundle that
+// grew pathologically rather than a run worth reading.
+const (
+	reportFile                 = "report.md"
+	reportMode     os.FileMode = 0o600
+	maxReportBytes             = 2 * maxActionStreamBytes
+)
+
 // runTrace records one provider run: it prepares the invocation, opens a
 // bundle for it, supervises the process, and then renders the run back from the
 // bundle it just wrote.
@@ -386,17 +396,109 @@ func traceExit(res runner.Result, runErr error, stderr io.Writer, runID string) 
 	return exitFailure
 }
 
-// renderRun prints the recorded run, announcing the run ID first so the
-// operator can ask for it again later.
+// renderRun writes the recorded run into the bundle and then prints it,
+// announcing the run ID first so the operator can ask for it again later. The
+// bundle is read once and rendered twice from what it said, so the Markdown
+// filed under the run and the timeline on the terminal describe the same
+// reading of the same evidence.
+//
+// The report is written first, and a run whose report could not be written is
+// reported as a failure rather than shown: the terminal keeps what it was given
+// only until the next command, while the bundle is what is left of a run once
+// the repository it was recorded against has moved on.
 func renderRun(stdout io.Writer, root, runID string) error {
 	rep, err := readRun(root, runID)
 	if err != nil {
+		return err
+	}
+	dir, err := runDir(root, runID)
+	if err != nil {
+		return err
+	}
+	if err := installReport(dir, rep); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(stdout, "Run ID: %s\n\n", runID); err != nil {
 		return err
 	}
 	return report.RenderTerminal(stdout, rep)
+}
+
+// installReport writes the rendered report into the run directory. The run is
+// opened as a root that cannot be escaped, the content is written to a
+// temporary file of this command's own and synced, and the report is installed
+// by linking that file into place: a link never replaces what is already there,
+// so a report — or a symlink pointing anywhere at all — standing at that name
+// is refused rather than overwritten or written through.
+func installReport(dir string, rep report.Report) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("cli: write %s: %w", reportFile, err)
+	}
+	defer root.Close()
+
+	tmp := reportFile + ".tmp"
+	// O_EXCL, so a symlink or a leftover file at this name is refused rather
+	// than written through.
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, reportMode)
+	if err != nil {
+		return fmt.Errorf("cli: create %s: %w", tmp, err)
+	}
+	defer root.Remove(tmp)
+	// Set again after opening, because the umask masks the mode passed to open.
+	if err := f.Chmod(reportMode); err != nil {
+		f.Close()
+		return fmt.Errorf("cli: restrict %s: %w", reportFile, err)
+	}
+	limited := &limitWriter{w: f, limit: maxReportBytes}
+	if err := report.RenderMarkdown(limited, rep); err != nil {
+		f.Close()
+		return fmt.Errorf("cli: render %s: %w", reportFile, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("cli: sync %s: %w", reportFile, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("cli: close %s: %w", reportFile, err)
+	}
+	if err := root.Link(tmp, reportFile); err != nil {
+		return fmt.Errorf("cli: install %s: %w", reportFile, err)
+	}
+	if err := root.Remove(tmp); err != nil {
+		return fmt.Errorf("cli: remove the temporary %s: %w", reportFile, err)
+	}
+	// The directory entry is persisted too, so that a report that was synced is
+	// also found again.
+	d, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("cli: open the run directory: %w", err)
+	}
+	err = d.Sync()
+	if cerr := d.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("cli: sync the run directory: %w", err)
+	}
+	return nil
+}
+
+// limitWriter bounds the persisted report while streaming it directly to the
+// synced temporary file. It never buffers report content in memory.
+type limitWriter struct {
+	w     io.Writer
+	limit int64
+	wrote int64
+}
+
+func (w *limitWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.limit-w.wrote {
+		return 0, fmt.Errorf("cli: the rendered report is larger than %d bytes", w.limit)
+	}
+	n, err := w.w.Write(p)
+	w.wrote += int64(n)
+	return n, err
 }
 
 // newRunID names a run: the instant it started, so runs sort in the order they

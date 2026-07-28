@@ -61,31 +61,62 @@ const ellipsis = "..."
 
 // RenderTerminal writes the report as an aligned plain-text timeline.
 func RenderTerminal(w io.Writer, report Report) error {
-	lines := []string{titleTimeline, "", titleProvider}
+	out := &lineWriter{w: w}
+	out.line(titleTimeline)
+	out.line("")
+	out.line(titleProvider)
 
 	if len(report.Actions) == 0 {
-		lines = append(lines, "  "+none)
+		out.line("  " + none)
 	}
 	for i := range report.Actions {
-		if i > 0 {
-			lines = append(lines, "")
+		if out.err != nil {
+			break
 		}
-		lines = append(lines, terminalAction(viewOf(report.Actions[i]))...)
+		if i > 0 {
+			out.line("")
+		}
+		for _, line := range terminalAction(viewOf(report.Actions[i])) {
+			out.line(line)
+		}
 	}
 
 	for _, section := range sections(report) {
-		lines = append(lines, "", section.title)
+		if out.err != nil {
+			break
+		}
+		out.line("")
+		out.line(section.title)
 		if len(section.fields) == 0 {
-			lines = append(lines, "  "+none)
+			out.line("  " + none)
 			continue
 		}
 		for _, f := range section.fields {
-			lines = append(lines, terminalField(f))
+			out.line(terminalField(f))
 		}
 	}
+	return out.err
+}
 
-	_, err := io.WriteString(w, strings.Join(lines, "\n")+"\n")
-	return err
+// lineWriter writes a report a line at a time, so a rendering is never held in
+// memory at the size of the run it describes. The first write error is kept and
+// every write after it is skipped, and the renderers stop at it rather than
+// rendering the rest of a report nothing is receiving.
+type lineWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (l *lineWriter) line(s string) {
+	l.write(s)
+	l.write("\n")
+}
+
+func (l *lineWriter) write(s string) {
+	if l.err != nil {
+		return
+	}
+	_, l.err = io.WriteString(l.w, s)
 }
 
 // terminalAction renders one action as a header line plus its summary fields.

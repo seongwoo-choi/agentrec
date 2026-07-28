@@ -3,6 +3,8 @@ package report
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -50,13 +52,30 @@ func goldenReport() Report {
 			},
 		},
 		Supervisor: []Field{{Name: "Exit Code", Value: "0"}, {Name: "Signal", Value: "none"}},
-		Repository: []Field{{Name: "Files Changed", Value: "2"}},
+		Repository: []Field{
+			{Name: "Status", Value: "AVAILABLE"},
+			{Name: "Files", Value: "3 (2 tracked, 1 untracked)"},
+			{Name: "Diff", Value: "+32/-8, 0 binary"},
+			{Name: "Stored Text", Value: "1"},
+			{Name: "Baseline", Value: goldenBaseline},
+			{Name: "Attribution", Value: "observed during run, not causal proof"},
+		},
 		Verification: []Field{
-			{Name: "Command", Value: "go test ./..."},
-			{Name: "Result", Value: "pass"},
+			{Name: "Status", Value: "PASS"},
+			{Name: "Config", Value: ".agentrec.yaml"},
+			{Name: "Config SHA-256", Value: goldenConfigSum},
+			{Name: "Check", Value: `PASS test  "./gradlew" "test"  8.21s  exit 0`},
+			{Name: "Attribution", Value: "verification_observed"},
 		},
 	}
 }
+
+// Digests as the evidence records them: whole, so a reader can compare one
+// against the repository rather than against a prefix of it.
+const (
+	goldenBaseline  = "1f0c2f2a2b6b4f2d9c8e7a6b5c4d3e2f1a0b9c8d"
+	goldenConfigSum = "3b1d2c4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff001"
+)
 
 const goldenTerminal = `ACTION TIMELINE
 
@@ -84,11 +103,19 @@ SUPERVISOR-OBSERVED RESULT
   Signal       none
 
 REPOSITORY-OBSERVED CHANGES
-  Files Changed 2
+  Status       AVAILABLE
+  Files        3 (2 tracked, 1 untracked)
+  Diff         +32/-8, 0 binary
+  Stored Text  1
+  Baseline     ` + goldenBaseline + `
+  Attribution  observed during run, not causal proof
 
 VERIFICATION-OBSERVED RESULT
-  Command      go test ./...
-  Result       pass
+  Status       PASS
+  Config       .agentrec.yaml
+  Config SHA-256 ` + goldenConfigSum + `
+  Check        PASS test  "./gradlew" "test"  8.21s  exit 0
+  Attribution  verification_observed
 `
 
 func TestRenderTerminalGolden(t *testing.T) {
@@ -139,12 +166,20 @@ const goldenMarkdown = "# Action Timeline\n" + `
 
 ## Repository-Observed Changes
 
-- ` + "`Files Changed`" + `: ` + "`2`" + `
+- ` + "`Status`" + `: ` + "`AVAILABLE`" + `
+- ` + "`Files`" + `: ` + "`3 (2 tracked, 1 untracked)`" + `
+- ` + "`Diff`" + `: ` + "`+32/-8, 0 binary`" + `
+- ` + "`Stored Text`" + `: ` + "`1`" + `
+- ` + "`Baseline`" + `: ` + "`" + goldenBaseline + "`" + `
+- ` + "`Attribution`" + `: ` + "`observed during run, not causal proof`" + `
 
 ## Verification-Observed Result
 
-- ` + "`Command`" + `: ` + "`go test ./...`" + `
-- ` + "`Result`" + `: ` + "`pass`" + `
+- ` + "`Status`" + `: ` + "`PASS`" + `
+- ` + "`Config`" + `: ` + "`.agentrec.yaml`" + `
+- ` + "`Config SHA-256`" + `: ` + "`" + goldenConfigSum + "`" + `
+- ` + "`Check`" + `: ` + "`PASS test  \"./gradlew\" \"test\"  8.21s  exit 0`" + `
+- ` + "`Attribution`" + `: ` + "`verification_observed`" + `
 `
 
 func TestRenderMarkdownGolden(t *testing.T) {
@@ -215,6 +250,43 @@ func TestEmptyReportStatesEverySectionIsEmpty(t *testing.T) {
 	}
 	if got := renderMarkdown(t, Report{}); got != emptyMarkdown {
 		t.Errorf("RenderMarkdown() =\n%s\nwant\n%s", got, emptyMarkdown)
+	}
+}
+
+// What a report says is only as good as which source is being quoted, so the
+// four sources are named apart from one another, in the same order, in both
+// renderings — never merged into one verdict about the run.
+func TestEveryEvidenceSourceIsNamedDistinctlyAndInOrder(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		got    string
+		titles []string
+	}{
+		{"terminal", renderTerminal(t, goldenReport()), []string{titleProvider, titleSupervisor, titleRepository, titleVerification}},
+		{"markdown", renderMarkdown(t, goldenReport()), []string{mdProvider, mdSupervisor, mdRepository, mdVerification}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			seen := map[string]bool{}
+			at := -1
+			for _, title := range tt.titles {
+				if seen[title] {
+					t.Fatalf("title %q names two evidence sources", title)
+				}
+				seen[title] = true
+
+				found := strings.Index(tt.got, "\n"+title+"\n")
+				if found < 0 {
+					t.Fatalf("rendering =\n%s\nwant a %q section", tt.got, title)
+				}
+				if found < at {
+					t.Errorf("title %q is out of order in\n%s", title, tt.got)
+				}
+				if strings.Count(tt.got, "\n"+title+"\n") != 1 {
+					t.Errorf("title %q appears more than once in\n%s", title, tt.got)
+				}
+				at = found
+			}
+		})
 	}
 }
 
@@ -474,6 +546,62 @@ func TestWriterErrorsPropagate(t *testing.T) {
 type failingWriter struct{ err error }
 
 func (f failingWriter) Write([]byte) (int, error) { return 0, f.err }
+
+// A renderer writes as it goes rather than building the whole report first, and
+// it stops where the writer stopped: once the destination has refused a write,
+// the actions after it are not rendered at all.
+func TestRenderersStopAtTheFirstWriterError(t *testing.T) {
+	const accepted = 6
+
+	rep := Report{Actions: make([]action.Action, 5000)}
+	for i := range rep.Actions {
+		rep.Actions[i] = action.Action{
+			Type:  action.TypeFileRead,
+			Input: mustInput(t, "file_path", fmt.Sprintf("file-%d.md", i)),
+		}
+	}
+	last := "file-4999.md"
+
+	tests := []struct {
+		name   string
+		render func(io.Writer, Report) error
+	}{
+		{"terminal", RenderTerminal},
+		{"markdown", RenderMarkdown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &stoppingWriter{accept: accepted, err: errors.New("disk full")}
+
+			if err := tt.render(w, rep); !errors.Is(err, w.err) {
+				t.Fatalf("render() error = %v, want %v", err, w.err)
+			}
+			if w.writes != accepted+1 {
+				t.Errorf("writes = %d, want the renderer to stop at the refused write (%d)", w.writes, accepted+1)
+			}
+			if strings.Contains(w.got.String(), last) {
+				t.Errorf("output =\n%s\nwant the actions after the refused write left unrendered", w.got.String())
+			}
+		})
+	}
+}
+
+// stoppingWriter accepts a fixed number of writes and refuses every one after
+// them, counting how many it was asked for.
+type stoppingWriter struct {
+	accept int
+	err    error
+	writes int
+	got    strings.Builder
+}
+
+func (s *stoppingWriter) Write(p []byte) (int, error) {
+	s.writes++
+	if s.writes > s.accept {
+		return 0, s.err
+	}
+	return s.got.Write(p)
+}
 
 func mustInput(t *testing.T, key, value string) json.RawMessage {
 	t.Helper()

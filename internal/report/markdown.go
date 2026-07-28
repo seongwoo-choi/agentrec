@@ -19,31 +19,43 @@ const (
 // dynamic value is wrapped in a code span wide enough to contain it, so no
 // provider string can open a heading, a list or a fence of its own.
 func RenderMarkdown(w io.Writer, report Report) error {
-	lines := []string{mdTimeline, "", mdProvider, ""}
+	out := &lineWriter{w: w}
+	out.line(mdTimeline)
+	out.line("")
+	out.line(mdProvider)
+	out.line("")
 
 	if len(report.Actions) == 0 {
-		lines = append(lines, none)
+		out.line(none)
 	}
 	for i := range report.Actions {
-		if i > 0 {
-			lines = append(lines, "")
+		if out.err != nil {
+			break
 		}
-		lines = append(lines, markdownAction(i+1, viewOf(report.Actions[i]))...)
+		if i > 0 {
+			out.line("")
+		}
+		for _, line := range markdownAction(i+1, viewOf(report.Actions[i])) {
+			out.line(line)
+		}
 	}
 
 	for _, section := range markdownSections(report) {
-		lines = append(lines, "", section.title, "")
+		if out.err != nil {
+			break
+		}
+		out.line("")
+		out.line(section.title)
+		out.line("")
 		if len(section.fields) == 0 {
-			lines = append(lines, none)
+			out.line(none)
 			continue
 		}
 		for _, f := range section.fields {
-			lines = append(lines, bullet(f.Name, f.Value))
+			out.line(bullet(f.Name, f.Value))
 		}
 	}
-
-	_, err := io.WriteString(w, strings.Join(lines, "\n")+"\n")
-	return err
+	return out.err
 }
 
 // markdownAction renders one action under a positional heading, so the heading

@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/evidence"
 	"github.com/seongwoo-choi/agentrec/internal/lock"
+	"github.com/seongwoo-choi/agentrec/internal/report"
 	"github.com/seongwoo-choi/agentrec/internal/runner"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
@@ -861,6 +863,517 @@ func snapshot(t *testing.T, dir string) map[string]string {
 		t.Fatalf("snapshot %s: %v", dir, err)
 	}
 	return files
+}
+
+// --- repository and verification evidence -----------------------------------
+//
+// The two evidence sources a run collects for itself are read back off disk the
+// same way the rest of the bundle is: bounded, confined, and believed only as
+// far as what they actually recorded.
+
+// Digests as the evidence records them: whole, so a reader can compare one
+// against the repository rather than against a prefix of it.
+const (
+	evidenceBaseline  = "1f0c2f2a2b6b4f2d9c8e7a6b5c4d3e2f1a0b9c8d"
+	evidenceConfigSum = "3b1d2c4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff001"
+)
+
+// writeEvidence files one evidence document under a recorded run, the way the
+// repository capture and the verification file theirs. A []byte body is written
+// as it is, so a test can plant a document that is not the shape it claims.
+func writeEvidence(t *testing.T, root, id, dir, name string, doc any) {
+	t.Helper()
+	at := filepath.Join(root, id, dir)
+	if err := os.MkdirAll(at, 0o700); err != nil {
+		t.Fatalf("create %s: %v", at, err)
+	}
+	raw, ok := doc.([]byte)
+	if !ok {
+		encoded, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatalf("encode %s: %v", name, err)
+		}
+		raw = encoded
+	}
+	if err := os.WriteFile(filepath.Join(at, name), raw, 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+func writeGit(t *testing.T, root, id string, doc any) {
+	t.Helper()
+	writeEvidence(t, root, id, "git", "result.json", doc)
+}
+
+func writeVerification(t *testing.T, root, id string, doc any) {
+	t.Helper()
+	writeEvidence(t, root, id, "verification", "results.json", doc)
+}
+
+// availableGit is a repository capture that ran to completion: the counts a
+// finished measurement holds, under the claim it is recorded with.
+func availableGit() map[string]any {
+	return map[string]any{
+		"status":          "available",
+		"attribution":     evidence.Attribution,
+		"baseline":        evidenceBaseline,
+		"trackedFiles":    2,
+		"added":           32,
+		"deleted":         8,
+		"binaryTracked":   0,
+		"untrackedFiles":  1,
+		"storedTextFiles": 1,
+	}
+}
+
+// passedVerification is a verification whose one pinned check ran and passed.
+func passedVerification() map[string]any {
+	return map[string]any{
+		"status":       "passed",
+		"attribution":  evidence.VerificationAttribution,
+		"config":       verifyConfigFile,
+		"configSha256": evidenceConfigSum,
+		"checks": []map[string]any{{
+			"name":       "test",
+			"command":    []string{"./gradlew", "test"},
+			"timeout":    "30s",
+			"status":     "passed",
+			"exitCode":   0,
+			"durationMs": 8210,
+		}},
+	}
+}
+
+// wantEvidenceSections is what the two collected sources say about a run that
+// changed the repository and was verified: what was measured, what it is
+// claimed to mean, and how each pinned check ended.
+const wantEvidenceSections = `REPOSITORY-OBSERVED CHANGES
+  Status       AVAILABLE
+  Files        3 (2 tracked, 1 untracked)
+  Diff         +32/-8, 0 binary
+  Stored Text  1
+  Baseline     ` + evidenceBaseline + `
+  Attribution  observed during run, not causal proof
+
+VERIFICATION-OBSERVED RESULT
+  Status       PASS
+  Config       .agentrec.yaml
+  Config SHA-256 ` + evidenceConfigSum + `
+  Check        PASS test  "./gradlew" "test"  8.21s  exit 0
+  Attribution  verification_observed
+`
+
+func TestShowRendersRepositoryAndVerificationEvidence(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-b", "claude", late, "completed")
+	writeGit(t, root, "run-b", availableGit())
+	writeVerification(t, root, "run-b", passedVerification())
+
+	code, stdout, stderr := run(t, "show", "run-b")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.HasSuffix(stdout, wantEvidenceSections) {
+		t.Errorf("stdout =\n%s\nwant it to end with\n%s", stdout, wantEvidenceSections)
+	}
+	// The provider's own timeline is untouched by the sections after it.
+	if !strings.Contains(stdout, "10:00:01  READ  README.md") {
+		t.Errorf("stdout =\n%s\nwant the recorded action kept", stdout)
+	}
+}
+
+// A status is shown as it was recorded, not as a reader would like to read it:
+// evidence that was never collected, could not be collected, or ended in a word
+// this command does not know must never render as a run that succeeded.
+func TestShowNeverReadsUnfinishedEvidenceAsSuccess(t *testing.T) {
+	tests := []struct {
+		name         string
+		git          map[string]any
+		verification map[string]any
+		wantSections string
+	}{
+		{
+			name: "pending",
+			git: map[string]any{
+				"status":      "pending",
+				"attribution": evidence.Attribution,
+			},
+			verification: map[string]any{
+				"status":       "pending",
+				"attribution":  evidence.VerificationAttribution,
+				"config":       verifyConfigFile,
+				"configSha256": evidenceConfigSum,
+				"checks": []map[string]any{{
+					"name":    "test",
+					"command": []string{"./gradlew", "test"},
+					"timeout": "30s",
+				}},
+			},
+			wantSections: `REPOSITORY-OBSERVED CHANGES
+  Status       PENDING
+  Attribution  observed during run, not causal proof
+
+VERIFICATION-OBSERVED RESULT
+  Status       PENDING
+  Config       .agentrec.yaml
+  Config SHA-256 ` + evidenceConfigSum + `
+  Check        PENDING test  "./gradlew" "test"
+  Attribution  verification_observed
+`,
+		},
+		{
+			name: "unavailable and failed",
+			git: map[string]any{
+				"status":      "unavailable",
+				"reason":      "baseline_unreachable",
+				"attribution": evidence.Attribution,
+				// Counts a collection that failed cannot stand behind.
+				"trackedFiles": 0,
+				"added":        0,
+			},
+			verification: map[string]any{
+				"status":       "failed",
+				"attribution":  evidence.VerificationAttribution,
+				"config":       verifyConfigFile,
+				"configSha256": evidenceConfigSum,
+				"checks": []map[string]any{{
+					"name":       "test",
+					"command":    []string{"./gradlew", "test"},
+					"timeout":    "30s",
+					"status":     "failed",
+					"exitCode":   3,
+					"durationMs": 1500,
+				}},
+			},
+			wantSections: `REPOSITORY-OBSERVED CHANGES
+  Status       UNAVAILABLE
+  Reason       baseline_unreachable
+  Attribution  observed during run, not causal proof
+
+VERIFICATION-OBSERVED RESULT
+  Status       FAIL
+  Config       .agentrec.yaml
+  Config SHA-256 ` + evidenceConfigSum + `
+  Check        FAIL test  "./gradlew" "test"  1.5s  exit 3
+  Attribution  verification_observed
+`,
+		},
+		{
+			name: "tainted",
+			git:  availableGit(),
+			verification: map[string]any{
+				"status":       "tainted",
+				"reason":       "config_changed",
+				"attribution":  evidence.VerificationAttribution,
+				"config":       verifyConfigFile,
+				"configSha256": evidenceConfigSum,
+				"checks": []map[string]any{{
+					"name":    "test",
+					"command": []string{"./gradlew", "test"},
+					"timeout": "30s",
+				}},
+			},
+			wantSections: `VERIFICATION-OBSERVED RESULT
+  Status       TAINTED
+  Reason       config_changed
+  Config       .agentrec.yaml
+  Config SHA-256 ` + evidenceConfigSum + `
+  Check        PENDING test  "./gradlew" "test"
+  Attribution  verification_observed
+`,
+		},
+		{
+			name: "words this command does not know",
+			git: map[string]any{
+				"status":      "partially_collected",
+				"attribution": evidence.Attribution,
+			},
+			verification: map[string]any{
+				"status":       "inconclusive",
+				"attribution":  evidence.VerificationAttribution,
+				"config":       verifyConfigFile,
+				"configSha256": evidenceConfigSum,
+				"checks": []map[string]any{{
+					"name":       "test",
+					"command":    []string{"./gradlew", "test"},
+					"timeout":    "30s",
+					"status":     "timeout",
+					"signal":     "SIGKILL",
+					"durationMs": 30000,
+				}},
+			},
+			wantSections: `REPOSITORY-OBSERVED CHANGES
+  Status       PARTIALLY_COLLECTED
+  Attribution  observed during run, not causal proof
+
+VERIFICATION-OBSERVED RESULT
+  Status       INCONCLUSIVE
+  Config       .agentrec.yaml
+  Config SHA-256 ` + evidenceConfigSum + `
+  Check        TIMEOUT test  "./gradlew" "test"  30s  signal SIGKILL  timeout 30s
+  Attribution  verification_observed
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := home(t)
+			writeRun(t, root, "run-b", "claude", late, "completed")
+			writeGit(t, root, "run-b", tt.git)
+			writeVerification(t, root, "run-b", tt.verification)
+
+			code, stdout, stderr := run(t, "show", "run-b")
+
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+			}
+			if !strings.Contains(stdout, tt.wantSections) {
+				t.Errorf("stdout =\n%s\nwant it to contain\n%s", stdout, tt.wantSections)
+			}
+			if strings.Contains(stdout, "Status       PASS") {
+				t.Errorf("stdout =\n%s\nwant no passing verdict for checks that did not pass", stdout)
+			}
+		})
+	}
+}
+
+// A warning says something about the conditions the checks reported under, and
+// is never folded into a check's own verdict: a verification whose checks all
+// passed still says what the checks did to the repository.
+func TestShowReportsVerificationWarningsApartFromCheckResults(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-b", "claude", late, "completed")
+	doc := passedVerification()
+	doc["warnings"] = []map[string]any{{
+		"code": "verification_mutated_repository",
+		// Recorded in an order a reader must not have to trust.
+		"paths": []string{"src/b.txt", "build/out.bin", "src/a.txt"},
+	}}
+	writeVerification(t, root, "run-b", doc)
+
+	code, stdout, stderr := run(t, "show", "run-b")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := `  Status       PASS
+  Config       .agentrec.yaml
+  Config SHA-256 ` + evidenceConfigSum + `
+  Check        PASS test  "./gradlew" "test"  8.21s  exit 0
+  Warning      verification_mutated_repository  build/out.bin, src/a.txt, src/b.txt
+  Attribution  verification_observed
+`
+	if !strings.Contains(stdout, want) {
+		t.Errorf("stdout =\n%s\nwant it to contain\n%s", stdout, want)
+	}
+}
+
+// Evidence is read back off a filesystem where anything may have replaced it,
+// so a document that is not the one this run wrote is refused rather than
+// summarized: a report is only worth reading if what it quotes is real.
+func TestShowRefusesEvidenceItCannotTrust(t *testing.T) {
+	tests := []struct {
+		name  string
+		plant func(t *testing.T, root, id string)
+	}{
+		{"malformed git", func(t *testing.T, root, id string) {
+			writeGit(t, root, id, []byte(`{"status":`))
+		}},
+		{"malformed verification", func(t *testing.T, root, id string) {
+			writeVerification(t, root, id, []byte(`not json`))
+		}},
+		{"oversize git", func(t *testing.T, root, id string) {
+			doc := availableGit()
+			doc["reason"] = strings.Repeat("x", maxDocumentBytes+1)
+			writeGit(t, root, id, doc)
+		}},
+		{"oversize verification", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			doc["reason"] = strings.Repeat("x", maxDocumentBytes+1)
+			writeVerification(t, root, id, doc)
+		}},
+		{"git result is a symlink", func(t *testing.T, root, id string) {
+			outside := filepath.Join(t.TempDir(), "result.json")
+			writeEvidence(t, root, id, "git", "placeholder", availableGit())
+			if err := os.WriteFile(outside, mustJSON(t, availableGit()), 0o600); err != nil {
+				t.Fatalf("write %s: %v", outside, err)
+			}
+			if err := os.Symlink(outside, filepath.Join(root, id, "git", "result.json")); err != nil {
+				t.Fatalf("plant symlink: %v", err)
+			}
+		}},
+		{"git directory is a symlink", func(t *testing.T, root, id string) {
+			outside := t.TempDir()
+			if err := os.WriteFile(filepath.Join(outside, "result.json"), mustJSON(t, availableGit()), 0o600); err != nil {
+				t.Fatalf("write result: %v", err)
+			}
+			if err := os.Symlink(outside, filepath.Join(root, id, "git")); err != nil {
+				t.Fatalf("plant symlink: %v", err)
+			}
+		}},
+		{"verification directory is a symlink", func(t *testing.T, root, id string) {
+			outside := t.TempDir()
+			if err := os.WriteFile(filepath.Join(outside, "results.json"), mustJSON(t, passedVerification()), 0o600); err != nil {
+				t.Fatalf("write results: %v", err)
+			}
+			if err := os.Symlink(outside, filepath.Join(root, id, "verification")); err != nil {
+				t.Fatalf("plant symlink: %v", err)
+			}
+		}},
+		{"git claims another meaning", func(t *testing.T, root, id string) {
+			doc := availableGit()
+			doc["attribution"] = "proof the agent made these changes"
+			writeGit(t, root, id, doc)
+		}},
+		{"verification claims another meaning", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			doc["attribution"] = "the agent verified its own work"
+			writeVerification(t, root, id, doc)
+		}},
+		{"git has no status", func(t *testing.T, root, id string) {
+			doc := availableGit()
+			delete(doc, "status")
+			writeGit(t, root, id, doc)
+		}},
+		{"verification has no status", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			delete(doc, "status")
+			writeVerification(t, root, id, doc)
+		}},
+		{"negative counts", func(t *testing.T, root, id string) {
+			doc := availableGit()
+			doc["added"] = -1
+			writeGit(t, root, id, doc)
+		}},
+		{"negative duration", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			doc["checks"].([]map[string]any)[0]["durationMs"] = -1
+			writeVerification(t, root, id, doc)
+		}},
+		{"repository count outside the recorded range", func(t *testing.T, root, id string) {
+			doc := availableGit()
+			doc["trackedFiles"] = maxRepositoryCount + 1
+			writeGit(t, root, id, doc)
+		}},
+		{"duration outside the recorded range", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			doc["checks"].([]map[string]any)[0]["durationMs"] = maxVerificationDuration.Milliseconds() + 1
+			writeVerification(t, root, id, doc)
+		}},
+		{"negative exit code", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			doc["checks"].([]map[string]any)[0]["exitCode"] = -1
+			writeVerification(t, root, id, doc)
+		}},
+		{"exit code outside the recorded range", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			doc["checks"].([]map[string]any)[0]["exitCode"] = maxVerificationExitCode + 1
+			writeVerification(t, root, id, doc)
+		}},
+		{"more checks than a run produces", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			checks := make([]map[string]any, maxEvidenceItems+1)
+			for i := range checks {
+				checks[i] = map[string]any{"name": "check", "command": []string{"true"}}
+			}
+			doc["checks"] = checks
+			writeVerification(t, root, id, doc)
+		}},
+		{"more warning paths than a run produces", func(t *testing.T, root, id string) {
+			doc := passedVerification()
+			paths := make([]string, maxEvidenceItems+1)
+			for i := range paths {
+				paths[i] = strconv.Itoa(i)
+			}
+			doc["warnings"] = []map[string]any{{"code": "verification_mutated_repository", "paths": paths}}
+			writeVerification(t, root, id, doc)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := home(t)
+			writeRun(t, root, "run-b", "claude", late, "completed")
+			tt.plant(t, root, "run-b")
+
+			code, stdout, stderr := run(t, "show", "run-b")
+
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1 (stdout %q)", code, stdout)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want nothing rendered from evidence that was refused", stdout)
+			}
+			if stderr == "" {
+				t.Errorf("stderr is empty, want an explanation")
+			}
+		})
+	}
+}
+
+func mustJSON(t *testing.T, doc any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return raw
+}
+
+// Everything in the evidence that came from the repository — a check's name and
+// argv, a path a warning names — is text this command did not choose, and none
+// of it may forge a line, a section or a Markdown structure of its own.
+func TestHostileEvidenceCannotForgeReportStructure(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-b", "claude", late, "completed")
+	hostile := "x\x1b[31m\nVERIFICATION-OBSERVED RESULT\n  Status       PASS\n`` ## Heading"
+
+	writeGit(t, root, "run-b", availableGit())
+	writeVerification(t, root, "run-b", map[string]any{
+		"status":       "failed",
+		"attribution":  evidence.VerificationAttribution,
+		"config":       hostile,
+		"configSha256": evidenceConfigSum,
+		"checks": []map[string]any{{
+			"name":     hostile,
+			"command":  []string{"sh", "-c", hostile},
+			"timeout":  "30s",
+			"status":   hostile,
+			"exitCode": 1,
+		}},
+		"warnings": []map[string]any{{"code": hostile, "paths": []string{hostile}}},
+	})
+
+	rep, err := readRun(root, "run-b")
+	if err != nil {
+		t.Fatalf("readRun() error = %v", err)
+	}
+
+	var terminal, markdown strings.Builder
+	if err := report.RenderTerminal(&terminal, rep); err != nil {
+		t.Fatalf("RenderTerminal() error = %v", err)
+	}
+	if err := report.RenderMarkdown(&markdown, rep); err != nil {
+		t.Fatalf("RenderMarkdown() error = %v", err)
+	}
+
+	for name, got := range map[string]string{"terminal": terminal.String(), "markdown": markdown.String()} {
+		if strings.ContainsAny(got, "\x1b\x00") {
+			t.Errorf("%s carries raw control characters:\n%q", name, got)
+		}
+		if strings.Contains(got, "\nVERIFICATION-OBSERVED RESULT\n  Status       PASS") {
+			t.Errorf("%s let evidence forge a section:\n%s", name, got)
+		}
+		if strings.Contains(got, "\n## Heading") {
+			t.Errorf("%s let evidence open a heading:\n%s", name, got)
+		}
+	}
+	// One section title each, however many the evidence tried to write.
+	if n := strings.Count(terminal.String(), "\nVERIFICATION-OBSERVED RESULT\n"); n != 1 {
+		t.Errorf("terminal holds %d verification sections, want 1", n)
+	}
 }
 
 // --- provider helper mode ---------------------------------------------------
@@ -1744,6 +2257,205 @@ func TestTraceRecordsWhatTheRunChangedInTheRepository(t *testing.T) {
 		if !strings.Contains(content, "[REDACTED:") {
 			t.Errorf("%s = %q, want the token replaced by a marker", name, content)
 		}
+	}
+}
+
+// A recorded run is worth having after the repository it was recorded against
+// is gone, so the whole report is written into the bundle while the evidence is
+// still there to render — and it says what the run changed and how the checks
+// that judged it ended.
+func TestTraceWritesTheReportIntoTheBundle(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	stubProviders(t, "claude", verifyHelperName)
+	commitVerifyConfig(t, repo, verifyHelperName, "pass")
+	t.Setenv(trackedEnv, "README.md")
+	t.Setenv(untrackedEnv, "notes.txt")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--verify", "--", "-p", "change the repository")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	runID := traceRunID(t, stdout)
+	dir := filepath.Join(root, runID)
+
+	// The helper rewrote the fixture's one tracked line as two and added one
+	// untracked file, so the counts have exactly one right answer.
+	wantLines := []string{
+		"REPOSITORY-OBSERVED CHANGES",
+		"  Status       AVAILABLE",
+		"  Files        2 (1 tracked, 1 untracked)",
+		"  Diff         +2/-1, 0 binary",
+		"  Stored Text  1",
+		"  Attribution  " + evidence.Attribution,
+		"VERIFICATION-OBSERVED RESULT",
+		"  Status       PASS",
+		"  Attribution  " + evidence.VerificationAttribution,
+	}
+	for _, want := range wantLines {
+		if !strings.Contains(stdout, "\n"+want+"\n") {
+			t.Errorf("stdout =\n%s\nwant line %q", stdout, want)
+		}
+	}
+	if !strings.Contains(stdout, `  Check        PASS check  "`+verifyHelperName+`" "pass"`) {
+		t.Errorf("stdout =\n%s\nwant the pinned check reported as passed", stdout)
+	}
+
+	// The rendered report is installed beside the evidence, readable only by
+	// the operator who recorded it.
+	path := filepath.Join(dir, "report.md")
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("report.md: %v", err)
+	}
+	if info.Mode() != 0o600 {
+		t.Errorf("report.md mode = %v, want -rw-------", info.Mode())
+	}
+	rendered := readFileString(t, path)
+	for _, want := range []string{
+		"## Repository-Observed Changes",
+		"- `Status`: `AVAILABLE`",
+		"- `Files`: `2 (1 tracked, 1 untracked)`",
+		"- `Attribution`: `" + evidence.Attribution + "`",
+		"## Verification-Observed Result",
+		"- `Status`: `PASS`",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("report.md =\n%s\nwant %q", rendered, want)
+		}
+	}
+	// It is a report, not a copy of the bundle: no raw provider event, no
+	// patch, and no untracked file body reaches it.
+	for _, leaked := range []string{"tool_use", "aggregated_output", "diff --git", "@@", helperContent, helperToken} {
+		if strings.Contains(rendered, leaked) {
+			t.Errorf("report.md carries %q:\n%s", leaked, rendered)
+		}
+	}
+
+	// The repository is gone; the run still reads the same.
+	if err := os.RemoveAll(repo); err != nil {
+		t.Fatalf("remove %s: %v", repo, err)
+	}
+	if readFileString(t, path) != rendered {
+		t.Errorf("report.md changed once the repository was removed")
+	}
+	code, shown, stderr := run(t, "show", runID)
+	if code != 0 {
+		t.Fatalf("show exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	for _, want := range wantLines {
+		if !strings.Contains(shown, "\n"+want+"\n") {
+			t.Errorf("show =\n%s\nwant line %q", shown, want)
+		}
+	}
+}
+
+// A run recorded without checks still says what it left in the repository, and
+// says plainly that nothing verified it.
+func TestTraceWithoutVerifyStillReportsTheRepository(t *testing.T) {
+	root := home(t)
+	cleanRepo(t)
+	stubProviders(t, "claude")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "read the README")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := `REPOSITORY-OBSERVED CHANGES
+  Status       AVAILABLE
+  Files        0 (0 tracked, 0 untracked)
+  Diff         +0/-0, 0 binary
+  Stored Text  0
+`
+	if !strings.Contains(stdout, want) {
+		t.Errorf("stdout =\n%s\nwant it to contain\n%s", stdout, want)
+	}
+	if !strings.HasSuffix(stdout, "VERIFICATION-OBSERVED RESULT\n  (none)\n") {
+		t.Errorf("stdout =\n%s\nwant the verification section to state it has nothing", stdout)
+	}
+	if rendered := readFileString(t, filepath.Join(root, traceRunID(t, stdout), reportFile)); !strings.Contains(rendered, "## Verification-Observed Result\n\n(none)\n") {
+		t.Errorf("report.md =\n%s\nwant the verification section to state it has nothing", rendered)
+	}
+}
+
+// A report already standing where this run's would go is not this run's to
+// replace: whatever it is, it is left exactly as it was found, and nothing is
+// written through it.
+func TestInstallReportRefusesToReplaceWhatIsAlreadyThere(t *testing.T) {
+	const planted = "not this run's report\n"
+
+	tests := []struct {
+		name  string
+		plant func(t *testing.T, dir, outside string)
+	}{
+		{"a file", func(t *testing.T, dir, _ string) {
+			if err := os.WriteFile(filepath.Join(dir, reportFile), []byte(planted), 0o600); err != nil {
+				t.Fatalf("plant %s: %v", reportFile, err)
+			}
+		}},
+		{"a symlink out of the run", func(t *testing.T, dir, outside string) {
+			if err := os.Symlink(outside, filepath.Join(dir, reportFile)); err != nil {
+				t.Fatalf("plant symlink: %v", err)
+			}
+		}},
+		{"a leftover temporary", func(t *testing.T, dir, _ string) {
+			if err := os.WriteFile(filepath.Join(dir, reportFile+".tmp"), []byte(planted), 0o600); err != nil {
+				t.Fatalf("plant temporary: %v", err)
+			}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			outside := filepath.Join(t.TempDir(), "outside.md")
+			if err := os.WriteFile(outside, []byte(planted), 0o600); err != nil {
+				t.Fatalf("write %s: %v", outside, err)
+			}
+			tt.plant(t, dir, outside)
+
+			if err := installReport(dir, report.Report{}); err == nil {
+				t.Fatalf("installReport() = nil, want a refusal")
+			}
+			if got := readFileString(t, outside); got != planted {
+				t.Errorf("%s = %q, want it left alone", outside, got)
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, reportFile)); err == nil && string(got) != planted {
+				t.Errorf("%s = %q, want it left alone", reportFile, got)
+			}
+		})
+	}
+}
+
+func TestLimitWriterRefusesTheWriteThatWouldCrossItsBound(t *testing.T) {
+	var dst bytes.Buffer
+	w := &limitWriter{w: &dst, limit: 3}
+
+	if n, err := w.Write([]byte("abc")); err != nil || n != 3 {
+		t.Fatalf("first Write() = (%d, %v), want (3, nil)", n, err)
+	}
+	if n, err := w.Write([]byte("d")); err == nil || n != 0 {
+		t.Fatalf("over-limit Write() = (%d, %v), want (0, error)", n, err)
+	}
+	if got := dst.String(); got != "abc" {
+		t.Fatalf("destination = %q, want no partial over-limit write", got)
+	}
+}
+
+// Reading a run is reading: `show` renders what is there and writes nothing,
+// so a bundle recorded before reports were written stays as it was recorded.
+func TestShowNeverWritesAReport(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-b", "claude", late, "completed")
+	writeGit(t, root, "run-b", availableGit())
+
+	if code, _, stderr := run(t, "show", "run-b"); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if exists(filepath.Join(root, "run-b", reportFile)) {
+		t.Errorf("show wrote %s, want reading to leave the bundle alone", reportFile)
 	}
 }
 
