@@ -1,61 +1,223 @@
+<div align="center">
+
 # agentrec
 
-Agentrec records Claude Code and Codex tool calls, commands, results, final repository changes, and independent verification as a replayable local action timeline.
+**A flight recorder for coding agents — every run leaves a local, attributed evidence bundle you can read after the terminal is gone.**
 
-## Status
+[![CI](https://github.com/seongwoo-choi/agentrec/actions/workflows/ci.yml/badge.svg)](https://github.com/seongwoo-choi/agentrec/actions/workflows/ci.yml)
+[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 
-MVP tasks 1–15 are implemented: the local `trace`, `list`, and `show` slice for Claude Code and Codex, with provider parsing, structural secret redaction, secure run-bundle persistence, explicit command preparation, Unix process-group supervision, deterministic timeline rendering, non-blocking clean-repository locking, repository-observed final delta capture, pinned independent verification, and integrated evidence reporting.
+</div>
 
-## What a report says, and who observed it
+## The problem
 
-A report keeps its evidence sources apart, because they are not worth the same:
+When a coding agent finishes, what you have is scrollback. It scrolls away, it
+mixes what the agent *said* it did with what actually happened, and it says
+nothing about whether the repository still builds.
 
-- **Provider-reported actions** are what the agent said it did. They are normalized and summarized, never taken as proof. MCP calls from either provider, and Codex file changes, are reported this way and stand in the Action Timeline beside commands and file reads. Events that only carry the provider's own progress, its collaboration waits, or its todo-list lifecycle are recognized as stream metadata: they name no action, and they do not count towards the warnings a run reports.
-- **Supervisor-observed result** is how this recorder saw the provider process end.
-- **Repository-observed changes** are the difference between the commit pinned before the run and the worktree after it, measured by agentrec itself. It is recorded as `observed during run, not causal proof`: the changes happened during the run, which is not the same as the agent having made them.
-- **Verification-observed result** is how the repository's own pinned checks ended when this recorder ran them after the provider stopped. It says nothing about how the work was done.
+agentrec records one non-interactive Claude Code or Codex run into a bundle: a
+normalized action timeline, the supervised process result, the repository
+difference across the run window, and the outcome of checks the repository itself
+pinned. Each comes from a different observer, and the bundle keeps them apart.
 
-A status is shown as it was recorded. An existing artifact can explicitly report `PENDING`, `UNAVAILABLE`, or `TAINTED` with its reason; a run from before that evidence existed, or one that did not request verification, shows `(none)`. Neither is presented as a run that changed nothing or a check that passed.
+## Four evidence layers
 
-This is not a syscall-complete audit. Nothing here observes what the agent did while it was doing it: agentrec records what the provider reported, what the repository looked like either side of the run, and what independent checks said afterwards.
+| Layer | Observer | What it means | Attribution recorded |
+|---|---|---|---|
+| **Provider-reported actions** | the agent | What the agent said it did — tool calls, shell commands, file reads and edits, MCP calls, Codex file changes. Normalized and summarized, never taken as proof. | `provider_reported` |
+| **Supervisor-observed result** | agentrec | How the provider process ended: exit code, exit reason, signal, duration, warning count. | `supervisor_observed` |
+| **Repository-observed changes** | agentrec | The difference between the commit pinned before the run and the worktree after it, measured by agentrec itself. | `observed during run, not causal proof` |
+| **Verification-observed result** | agentrec | How the repository's own pinned checks ended when agentrec ran them after the provider stopped. Says nothing about how the work was done. | `verification_observed` |
 
-## Reports on disk
+Events carrying only provider progress, collaboration waits or todo-list
+lifecycle are stream metadata: they name no action, and do not inflate warnings.
 
-`agentrec trace` writes `<run>/report.md` — the same reading of the same bundle as the terminal timeline, in Markdown — before it prints anything. It is created once, mode `0600`, and never replaced: a report already standing there is refused rather than overwritten. It holds only normalized actions and evidence summaries, never raw provider events, the tracked patch, or an untracked file's body.
+## Quick start
 
-`agentrec show` is read-only. It renders a run and writes nothing, so a bundle recorded before reports existed stays as it was recorded.
+**Prerequisites.** Building from source requires Go 1.26 or newer. A supported
+provider CLI must already be on `PATH`; agentrec launches it, never installs it.
+A version outside the range is refused, not recorded on the assumption its event
+stream still fits.
 
-## Usage
+| Provider | Executable | Supported range | Notes |
+|---|---|---|---|
+| Claude Code | `claude` | `>=2.1.0, <3.0.0` | Requires `-p`/`--print`. agentrec injects `--output-format stream-json --verbose --include-hook-events`. |
+| Codex | `codex` | `>=0.144.0, <1.0.0` | `exec` must be the first argument. agentrec injects `--json`. |
 
 ```bash
-agentrec trace claude -- -p "read the README"
-agentrec trace claude --verify -- -p "read the README"
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@latest
+```
+
+**Commit the verification config.** A run is verified only against checks the
+repository already held. Copy `.agentrec.example.yaml` to `.agentrec.yaml` and
+commit it — each command is launched directly, with no shell, so an argument is
+an argument and nothing else:
+
+```yaml
+version: 1
+verify:
+  - name: go-test
+    command: ["go", "test", "./...", "-count=1", "-timeout=420s"]
+    timeout: 8m
+  - name: go-vet
+    command: ["go", "vet", "./..."]
+    timeout: 5m
+```
+
+**Record a run.** The working directory must be a Git checkout with no
+uncommitted changes and no operation in progress, so the run's own changes can be
+told apart. One run at a time per repository: a second is refused, not queued.
+
+```bash
+# Claude Code
+agentrec trace claude -- -p "add a regression test for the parser"
+agentrec trace claude --verify -- -p "add a regression test for the parser"
+
+# Codex
+agentrec trace codex --verify -- exec "add a regression test for the parser"
+
+# Read runs back
 agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec show 20260728T093159.858622000Z-582ee874
+agentrec show latest
 ```
 
-With `--verify`, the checks in the repository's own `.agentrec.yaml` (see `.agentrec.example.yaml`) are pinned before the provider starts and run against the work after it stops. A configuration the run rewrote is refused rather than executed, and a verification that did not pass exits non-zero.
+`agentrec list` prints runs newest first, with a `PROJECT` column taken from the
+last element of the working directory the manifest recorded; a manifest holding
+anything but an absolute path reports `unknown` rather than a guess.
 
-Ctrl-C and SIGTERM are both held rather than obeyed where they land — an operator types the one, a parent runner or a container sends the other, and either way the recorder stops the provider's process group, closes out the manifest, measures the repository, writes the report, and exits 130. A run ended that way says how it ended, and its manifest and Git evidence are recorded as they were observed rather than left standing at `PENDING`.
+`--cwd` matches **one directory exactly**, not a prefix: the path given is made
+absolute and cleaned, and a run is kept only when the manifest's own working
+directory — itself absolute, cleaned the same way — is exactly it. A subdirectory
+is a different path, and so is another way in through a symlink.
 
-`agentrec list` prints the recorded runs, newest first:
+## What a report looks like
+
+`agentrec show` is read-only: it renders a run from its bundle and writes
+nothing. Excerpt from a real recorded run (`582ee874`, trimmed to one action):
 
 ```
-RUN ID  PROVIDER  PROJECT  STARTED  EXIT
-20260728T093159.858622000Z-582ee874  claude  agentrec  2026-07-28T09:31:59Z  completed
-20260728T093025.570600000Z-8abfc728  codex  hermes-sustain  2026-07-28T09:30:25Z  completed
+PROVIDER-REPORTED ACTIONS
+09:34:32  EDIT  /Users/csw/code/agentrec/README.md
+  Source       claude
+  Assurance    provider_reported
+  Result       success
+  Duration     1.128s
+
+SUPERVISOR-OBSERVED RESULT
+  Provider     claude
+  Version      2.1.220
+  Exit Reason  completed
+  Exit Code    0
+  Duration     2m50.625s
+  Warnings     0
+
+REPOSITORY-OBSERVED CHANGES
+  Status       AVAILABLE
+  Files        1 (1 tracked, 0 untracked)
+  Diff         +18/-1, 0 binary
+  Stored Text  0
+  Baseline     43d37240e960ad2f321276045b2bb8d710f5a4db
+  Attribution  observed during run, not causal proof
+
+VERIFICATION-OBSERVED RESULT
+  Status       PASS
+  Config       .agentrec.yaml
+  Config SHA-256 e20695bb3ebee3381b54da6fc46b6b1efa1adc9b87a5eb99b45505b5dbdfae3f
+  Check        PASS go-test  "go" "test" "./..." "-count=1" "-timeout=420s"  42.486s  exit 0
+  Check        PASS go-vet  "go" "vet" "./..."  348ms  exit 0
+  Attribution  verification_observed
 ```
 
-PROJECT names the checkout a run was recorded in, by the last element of the working directory its manifest recorded. Only an absolute path names a directory on the machine the run happened on, so a manifest holding anything else reports `unknown` rather than a guess.
+`agentrec trace` writes the same reading of the same bundle to `<run>/report.md`
+before printing anything, once and never again: a report already standing at that
+name is refused rather than overwritten.
 
-`agentrec list --cwd <path>` narrows the table to the runs recorded in one checkout. The path given is made absolute and cleaned, and a run is kept only when the manifest's own working directory — itself absolute, and cleaned the same way — is exactly it. It is a match on one directory, not a prefix: a subdirectory of that checkout is a different path, and so is another way in through a symlink.
+## Where runs are stored
+
+Under `$AGENTREC_HOME/runs` when that is set, otherwise
+`~/.local/share/agentrec/runs`. Run directories are created `0700` and every file
+in them `0600`, `report.md` included — a bundle may quote a private repository,
+so it is readable only by the user who recorded it. One directory per run holds
+`manifest.json`, `prompt.txt`, the sanitized event stream and stderr,
+`actions.jsonl`, `process/result.json`, `git/` (baseline, result, untracked
+bodies), `verification/results.json` and `report.md`.
+
+## Statuses and exit codes
+
+A status is shown as it was recorded, never inferred:
+
+- **Repository** — `AVAILABLE` (measured), `UNAVAILABLE` (no measurement
+  produced), `PENDING` (written before the run, never answered). Counts are shown
+  only for `AVAILABLE`: a `PENDING` run's zeros mean *not measured*, not
+  *measured as nothing*.
+- **Verification** — `PASS`, `FAIL`, `TIMEOUT`, `ERROR`, `TAINTED`. A run that
+  requested no verification shows `(none)`, which is not a check that passed.
+- **Config taint** — `--verify` pins `.agentrec.yaml` and its SHA-256 before the
+  provider starts. If the run rewrote that file the verification is recorded
+  `TAINTED`, reason `config_changed`, **nothing is executed**, and the pinned
+  checks stay `PENDING`.
+
+Exit codes: `0` provider completed and any verification passed; `1`–`125` the
+provider's own exit code passed through; `1` recording, rendering or verification
+failed; `2` agentrec was called wrongly; `130` interrupted.
+
+Ctrl-C and SIGTERM are both held rather than obeyed where they land: agentrec
+stops the provider's process group, closes out the manifest, measures the
+repository, writes the report, and exits `130` — so an interrupted run says how
+it ended instead of being left standing at `PENDING`.
+
+## Security
+
+- **Structural redaction before persistence.** Provider events and stderr are
+  redacted before they are written. Values under field names whose canonicalized
+  form ends in one of 13 secret suffixes (`TOKEN`, `SECRET`, `PASSWORD`,
+  `APIKEY`, `AUTHORIZATION`, `COOKIE`, …), plus `NAME=VALUE` assignments and
+  token shapes, become `[REDACTED:n]`; the rule version is stamped per manifest.
+- **Untracked file bodies are stored** under `git/untracked/`, hashed over
+  sanitized text — a hash of raw text would hand a short secret back by guessing.
+- **Reports never embed the raw provider event stream, tracked patch, or untracked
+  body.** They do carry normalized provider-derived summaries: an action is
+  reduced to a label, one allowlisted detail field and fixed summary fields with
+  control characters escaped, so no provider string can forge a timeline row or
+  drive the terminal. Bundles are read back defensively, symlinks are refused
+  rather than followed, and sizes, line lengths and item counts are bounded.
+- **A zero redaction count is not a secret-absence claim.** It means no rule
+  matched — a secret in an unnamed field, in prose rather than an assignment, or
+  shorter than the minimum length produces the same zero.
+
+## Non-goals
+
+- **Not syscall-complete.** Nothing observes the agent while it is working.
+  agentrec records what the provider reported, what the repository looked like
+  either side of the run, and what independent checks said afterwards.
+- **A repository delta is not causal attribution.** The changes happened during
+  the run; that is not the same as the agent having made them. Anything else
+  editing the checkout lands in the same delta, and every report says so. A
+  passing verification likewise only says the pinned checks passed on the tree
+  the run left behind.
+- **Interactive sessions are not recorded**, and there is no policy engine, no
+  sandbox and no remote upload — agentrec observes and writes locally.
+
+**Supported scope: macOS and Linux.** Process-group supervision is built for
+`darwin || linux` only (`internal/runner/process_unix.go`), so Windows is unbuilt
+and unverified.
+
+## Evidence
+
+Behavior claims are backed by
+[docs/dogfood/2026-07-28-evidence.md](docs/dogfood/2026-07-28-evidence.md) — a
+fixed 20-attempt checkpoint plus follow-on real mutations, covering verification
+`FAIL`, provider nonzero, config `TAINTED`, interruption, and what those runs do
+**not** establish.
 
 ## Development
 
 ```bash
-go test ./...
-go test -race ./...
+go test ./... -count=1 -timeout=420s
+go test -race ./... -count=1 -timeout=600s
 go vet ./...
-go run ./cmd/agentrec --help
+gofmt -l .
+go build ./...
 ```
