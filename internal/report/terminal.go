@@ -363,5 +363,8 @@ func escapeRune(r rune) string {
 	if r < 0x100 {
 		return fmt.Sprintf(`\x%02x`, r)
 	}
+	if r > 0xffff {
+		return fmt.Sprintf(`\U%08x`, r)
+	}
 	return fmt.Sprintf(`\u%04x`, r)
 }

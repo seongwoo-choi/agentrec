@@ -513,6 +513,28 @@ func TestTerminalEscapesControlSequencesOntoOneLine(t *testing.T) {
 	}
 }
 
+// A supplementary-plane rune has no four-digit form, so \u would print an
+// ambiguous escape no Go unquoter accepts; it needs the eight-digit \U.
+func TestNonPrintableRunesAboveTheBMPUseTheEightDigitEscape(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		r    rune
+		want string
+	}{
+		{"just above the BMP", '\U0001000c', `\U0001000c`},
+		{"above the BMP", '\U000e0001', `\U000e0001`},
+		{"byte", '\u009b', `\x9b`},
+		{"inside the BMP", '\u202e', `\u202e`},
+		{"printable above the BMP", '\U0001f600', "\U0001f600"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := escapeRune(tt.r); got != tt.want {
+				t.Errorf("escapeRune(%U) = %q, want %q", tt.r, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMarkdownEscapesControlSequencesAndFencesBackticks(t *testing.T) {
 	report := Report{
 		Actions: []action.Action{{
