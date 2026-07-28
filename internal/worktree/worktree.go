@@ -70,7 +70,6 @@ func tidyPartialAdd(repoRoot, path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), tidyTimeout)
 	defer cancel()
 	git(ctx, repoRoot, "worktree", "remove", "--force", path)
-	git(ctx, repoRoot, "worktree", "prune")
 
 	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("worktree: %s was created by the failed add and could not be removed", strconv.Quote(path))
@@ -112,11 +111,10 @@ func oneLine(s string) string {
 	return quoted[1 : len(quoted)-1]
 }
 
-// Remove deletes the worktree and the administration entry behind it. The
-// removal is forced: a recorded run leaves work behind in the checkout it ran
-// in, and that work is already in the run's own bundle. Pruning follows, so a
-// removal that could not delete the directory itself still does not leave the
-// source repository claiming a worktree that is no longer there.
+// Remove deletes the worktree and its administration entry. The removal is
+// forced: a recorded run leaves work behind in the checkout it ran in, and that
+// work is already in the run's own bundle. Cleanup targets this exact worktree;
+// repository-global pruning could remove unrelated stale entries.
 //
 // It is safe to call more than once and reports the first outcome every time:
 // cleanup is deferred by every caller and also done on the way out of a
@@ -128,8 +126,5 @@ func (w *Worktree) Remove(ctx context.Context) error {
 	}
 	w.removed = true
 	_, w.err = git(ctx, w.repo, "worktree", "remove", "--force", w.path)
-	if _, err := git(ctx, w.repo, "worktree", "prune"); w.err == nil {
-		w.err = err
-	}
 	return w.err
 }

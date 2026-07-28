@@ -131,6 +131,13 @@ func runShadow(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		failed = true
 	}
+	// The provider supervisor is not the only phase that can receive the first
+	// signal. Cleanup, comparison rendering and lock release are still part of
+	// this aggregate command, so latch a signal that arrived after the legs had
+	// already returned before deciding the exit.
+	if !interrupted && pending(interrupt) {
+		interrupted = true
+	}
 
 	switch {
 	case interrupted:
@@ -293,6 +300,24 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 			return legs, true, false
 		}
 		legs = append(legs, leg{runner: name, runID: runID})
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), gitTimeout)
+		cleanupErr := tree.Remove(cleanupCtx)
+		cancelCleanup()
+		if cleanupErr != nil {
+			fmt.Fprintln(stderr, cleanupErr)
+			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted
+		}
+		stateCtx, cancelState := context.WithTimeout(context.Background(), gitTimeout)
+		state, stateErr := readRepositoryState(stateCtx, pre.repo.Root())
+		cancelState()
+		if stateErr != nil {
+			fmt.Fprintln(stderr, stateErr)
+			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted
+		}
+		if changed := changedRepositoryFields(pre.source, state); len(changed) > 0 {
+			fmt.Fprintf(stderr, "cli: source repository changed during shadow run (%s); refusing to launch another provider; changes were not restored\n", strings.Join(changed, ", "))
+			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted
+		}
 		switch {
 		case out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted:
 			return legs, failed, true
@@ -370,9 +395,21 @@ func shadowCommand(ctx context.Context, name, task string) (provider.Command, ru
 type prepared struct {
 	repo     *lock.Repository
 	baseline string
+	source   repositoryState
 	task     string
 	runsRoot string
 	dataRoot string
+}
+
+// repositoryState is what Shadow can observe about the source repository. A
+// linked worktree is not a sandbox, so this is a drift detector rather than a
+// claim that a provider cannot reach the source checkout or common refs.
+type repositoryState struct {
+	head      string
+	status    string
+	index     string
+	refs      string
+	worktrees string
 }
 
 // shadowPreflight settles all of it, or refuses. Nothing here writes into the
@@ -443,7 +480,7 @@ func shadowCheckRepository(ctx context.Context, pre *prepared) error {
 	pre.baseline = baseline
 
 	// The configuration the checks are pinned to has to be part of what each
-	// worktree is given, which is the committed tree and nothing else: a
+	// worktree is given from the committed tree: a
 	// configuration only in the operator's own checkout would leave both runs
 	// unverifiable and neither of them saying so.
 	entry, err := shadowGit(ctx, root, "ls-tree", "HEAD", "--", verifyConfigFile)
@@ -455,10 +492,10 @@ func shadowCheckRepository(ctx context.Context, pre *prepared) error {
 			verifyConfigFile, strconv.Quote(root))
 	}
 
-	// A linked worktree receives the committed bytes and nothing else. Where
-	// those bytes are not the whole project, the workspace agentrec would
-	// prepare is not the one either agent was asked to work in, so it is refused
-	// rather than silently prepared incomplete.
+	// A linked worktree starts from the committed tree through the operator's Git
+	// checkout configuration. Where committed entries require project material
+	// agentrec does not prepare, the workspace is refused rather than silently
+	// prepared incomplete.
 	modules, err := shadowGit(ctx, root, "ls-tree", "HEAD", "--", gitmodulesFile)
 	if err != nil {
 		return err
@@ -475,7 +512,53 @@ func shadowCheckRepository(ctx context.Context, pre *prepared) error {
 		return fmt.Errorf("cli: repository %s commits Git LFS pointer files: a linked worktree would hold the pointers rather than the files, so this repository is not one agentrec can compare runs in",
 			strconv.Quote(root))
 	}
+	pre.source, err = readRepositoryState(ctx, root)
+	if err != nil {
+		return err
+	}
 	return nil
+}
+
+func readRepositoryState(ctx context.Context, root string) (repositoryState, error) {
+	var state repositoryState
+	readings := []struct {
+		name string
+		dst  *string
+		args []string
+	}{
+		{"HEAD", &state.head, []string{"rev-parse", "HEAD"}},
+		{"status", &state.status, []string{"status", "--porcelain=v2", "--untracked-files=all"}},
+		{"index", &state.index, []string{"ls-files", "--stage", "-z"}},
+		{"refs", &state.refs, []string{"for-each-ref", "--format=%(refname) %(objectname)"}},
+		{"worktrees", &state.worktrees, []string{"worktree", "list", "--porcelain", "-z"}},
+	}
+	for _, reading := range readings {
+		value, err := shadowGit(ctx, root, reading.args...)
+		if err != nil {
+			return repositoryState{}, fmt.Errorf("cli: snapshot source repository %s: %w", reading.name, err)
+		}
+		*reading.dst = value
+	}
+	return state, nil
+}
+
+func changedRepositoryFields(before, after repositoryState) []string {
+	var changed []string
+	for _, field := range []struct {
+		name          string
+		before, after string
+	}{
+		{"HEAD", before.head, after.head},
+		{"status", before.status, after.status},
+		{"index", before.index, after.index},
+		{"refs", before.refs, after.refs},
+		{"worktrees", before.worktrees, after.worktrees},
+	} {
+		if field.before != field.after {
+			changed = append(changed, field.name)
+		}
+	}
+	return changed
 }
 
 // gitmodulesFile is where Git records a repository's submodules. Only the one

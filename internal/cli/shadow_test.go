@@ -28,8 +28,8 @@ func probeWorkspaces(t *testing.T) func(name string) workspaceProbe {
 	}
 }
 
-// sourceSnapshot is everything about the source checkout a shadow run must
-// leave exactly as it found it: where it stands, what is in it, every ref, every
+// sourceSnapshot is the observable source state agentrec's own lifecycle must
+// leave as it found it: where it stands, what is in it, every ref, every
 // worktree, and the bytes and modes of every tracked file.
 type sourceSnapshot struct {
 	head      string
@@ -96,11 +96,10 @@ func shadowBundles(t *testing.T, root string) map[string]string {
 	return byProvider
 }
 
-// Both agents are given the same task from the same commit, in checkouts of
-// agentrec's own that neither the operator's repository nor the other run can
-// reach. What each leg was started from is the question a comparison rests on,
-// so it is asked of the providers themselves while they are running, and of the
-// bundles they left once their checkouts are gone.
+// Both agents are given the same task from the same commit, in separate
+// checkouts owned by agentrec. What each leg was started from is the question a
+// comparison rests on, so it is asked of the providers themselves while they
+// are running, and of the bundles they left once their checkouts are gone.
 func TestShadowRecordsBothRunnersFromOneBaseline(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
@@ -139,9 +138,8 @@ func TestShadowRecordsBothRunnersFromOneBaseline(t *testing.T) {
 		if !got.Config {
 			t.Errorf("%s started without %s in its checkout", name, verifyConfigFile)
 		}
-		// A linked worktree holds the whole committed repository, which may be a
-		// private one: it is readable by the operator who recorded it and by
-		// nobody else on the machine.
+		// A linked worktree can hold private repository content, so its directory
+		// is restricted to the operator who recorded it.
 		if os.FileMode(got.Mode) != shadowDirMode {
 			t.Errorf("%s ran in a checkout with mode %v, want %v", name, os.FileMode(got.Mode), shadowDirMode)
 		}
@@ -217,6 +215,60 @@ func TestShadowRecordsBothRunnersFromOneBaseline(t *testing.T) {
 	}
 	wantNoWorkspace(t, root)
 	wantSourceUnchanged(t, repo, before)
+}
+
+// A linked worktree is not a sandbox: a provider can name the source checkout
+// directly or update a ref through the common Git directory. Shadow must detect
+// either observed drift after taking its own worktree back out, fail closed, and
+// never launch the second provider. It does not destructively restore provider
+// changes.
+func TestShadowStopsWhenAProviderMutatesTheSourceRepository(t *testing.T) {
+	for _, mutation := range []string{"file", "ref", "head"} {
+		t.Run(mutation, func(t *testing.T) {
+			root := home(t)
+			repo := cleanRepo(t)
+			stubProviders(t, "claude", "codex", verifyHelperName)
+			commitVerifyConfig(t, repo, verifyHelperName, "pass")
+			if mutation == "head" {
+				gitIn(t, repo, "branch", "provider-alternate-source")
+			}
+			probeWorkspaces(t)
+			t.Setenv(mutateSourceEnv, "claude:"+mutation+":"+repo)
+
+			code, stdout, stderr := run(t, "shadow", "run", writeTask(t, "change the README\n"), "--runner", "claude", "--runner", "codex")
+
+			if code != exitFailure {
+				t.Fatalf("exit code = %d, want %d (stderr %q)", code, exitFailure, stderr)
+			}
+			if !strings.Contains(stdout, "claude") || !strings.Contains(stdout, "codex") || !strings.Contains(stdout, "(not run)") {
+				t.Errorf("stdout = %q, want the recorded first leg and an explicit not-run second leg", stdout)
+			}
+			if !strings.Contains(stderr, "source repository changed") {
+				t.Errorf("stderr = %q, want source drift reported", stderr)
+			}
+			switch mutation {
+			case "file":
+				if raw, err := os.ReadFile(filepath.Join(repo, "README.md")); err != nil || string(raw) != "mutated outside the shadow worktree\n" {
+					t.Errorf("source file = %q, %v; want provider change left for manual recovery", raw, err)
+				}
+			case "ref":
+				if _, err := os.Stat(filepath.Join(repo, ".git", "refs", "heads", "provider-mutated-source")); err != nil {
+					t.Errorf("provider-created ref: %v; want it left for manual recovery", err)
+				}
+			case "head":
+				if raw, err := os.ReadFile(filepath.Join(repo, ".git", "HEAD")); err != nil || !strings.Contains(string(raw), "provider-alternate-source") {
+					t.Errorf("source HEAD = %q, %v; want provider branch switch left for manual recovery", raw, err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(os.Getenv(probeEnv), "claude.json")); err != nil {
+				t.Errorf("first provider probe: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(os.Getenv(probeEnv), "codex.json")); !os.IsNotExist(err) {
+				t.Errorf("second provider probe error = %v, want it not launched", err)
+			}
+			wantNoWorkspace(t, root)
+		})
+	}
 }
 
 // dataRoot is the private directory the runs root sits under, which is where
@@ -491,8 +543,8 @@ const lfsPointer = "version https://git-lfs.github.com/spec/v1\n" +
 
 // Everything a comparison rests on is settled before either agent is launched:
 // one commit both runs start from, one verification configuration both are
-// judged by, a private workspace outside the repository, and a repository whose
-// committed bytes are all a linked worktree would get. A repository that cannot
+// judged by, a private workspace outside the repository, and a repository Git
+// can check out without unsupported project material. A repository that cannot
 // give all of that is refused where nothing has been prepared yet, rather than
 // halfway through the first run.
 func TestShadowRefusesARepositoryItCannotCompareIn(t *testing.T) {

@@ -34,6 +34,7 @@ const (
 	// gitFailAddEnv asks the stand-in to report `worktree add` as failed once
 	// the real Git has already created the worktree.
 	gitFailAddEnv = "AGENTREC_TEST_WORKTREE_FAIL_ADD"
+	gitLogEnv     = "AGENTREC_TEST_WORKTREE_GIT_LOG"
 )
 
 // standInExit is what the stand-in reports when it could not do its own job,
@@ -52,6 +53,19 @@ func gitStandIn(args []string) int {
 	if real == "" {
 		fmt.Fprintln(os.Stderr, "git stand-in: no git to delegate to")
 		return standInExit
+	}
+	if path := os.Getenv(gitLogEnv); path != "" {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "git stand-in:", err)
+			return standInExit
+		}
+		_, err = fmt.Fprintln(f, strings.Join(args, "\x00"))
+		closeErr := f.Close()
+		if err != nil || closeErr != nil {
+			fmt.Fprintln(os.Stderr, "git stand-in:", errors.Join(err, closeErr))
+			return standInExit
+		}
 	}
 	cmd := exec.Command(real, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -375,6 +389,30 @@ func TestRemoveReportsItsFirstOutcomeEveryTime(t *testing.T) {
 		t.Errorf("second remove = %v, want the first outcome", err)
 	}
 	wantOnlyTheSourceWorktree(t, repo)
+}
+
+// Cleanup owns one exact linked worktree. Repository-global pruning can remove
+// unrelated stale administration entries, so normal cleanup must not invoke it.
+func TestRemoveDoesNotPruneTheRepository(t *testing.T) {
+	standInGit(t)
+	log := filepath.Join(t.TempDir(), "git.log")
+	t.Setenv(gitLogEnv, log)
+	repo := newRepo(t)
+	path := filepath.Join(t.TempDir(), "leg")
+	w, err := worktree.Add(context.Background(), repo, path, git(t, repo, "rev-parse", "HEAD"))
+	if err != nil {
+		t.Fatalf("add worktree: %v", err)
+	}
+	if err := w.Remove(context.Background()); err != nil {
+		t.Fatalf("remove worktree: %v", err)
+	}
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("read Git command log: %v", err)
+	}
+	if strings.Contains(string(raw), "worktree\x00prune") {
+		t.Errorf("Git commands = %q, want no repository-global worktree prune", raw)
+	}
 }
 
 // wantOnlyTheSourceWorktree fails when the repository still knows about a

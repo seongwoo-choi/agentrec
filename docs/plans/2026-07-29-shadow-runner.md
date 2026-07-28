@@ -4,7 +4,7 @@
 
 **Goal:** Add `agentrec shadow run <task-file> --runner claude --runner codex`, recording two isolated runs from one committed baseline and rendering a deterministic evidence-only comparison.
 
-**Architecture:** Acquire one lock on the source repository, pin its clean `HEAD`, committed `.agentrec.yaml`, and task bytes, then run Claude and Codex serially in disposable detached Git worktrees under the private agentrec data root. Reuse the existing bundle, repository evidence, verification, and report path through an extracted recording core; remove worktrees only after each capture has closed. The original checkout and refs must be unchanged after success, failure, or handled signal.
+**Architecture:** Acquire one lock on the source repository, pin its clean `HEAD`, committed `.agentrec.yaml`, task bytes and observable source state, then run Claude and Codex serially in disposable detached Git worktrees under the private agentrec data root. Reuse the existing bundle, repository evidence, verification, and report path through an extracted recording core; remove each worktree after its capture closes. Linked worktrees are not a sandbox: after each removal, detect source checkout/ref drift, stop before another provider, report it and do not restore it automatically.
 
 **Tech Stack:** Go 1.26 standard library, Git CLI, existing provider/evidence/storage/report packages, repository-native Go tests.
 
@@ -27,17 +27,17 @@ Constraints:
 - run both legs with verification enabled and retain both ordinary run bundles;
 - use existing evidence attribution; isolation narrows interference but does not prove causal attribution;
 - never inject permission bypass, sandbox bypass, merge, scoring, winner, rank, or recommendation behavior;
-- execute legs serially so verification and shared external state are not concurrent;
+- execute legs serially so verification and shared external state are not concurrent, while documenting that mutable external state is not reset between legs;
 - first handled SIGINT/SIGTERM cancels the current process group, finalizes evidence when possible, removes worktrees, and exits 130; restore default signal behavior so a second signal remains an escape hatch;
-- provider failure, verification failure, evidence failure, or cleanup failure exits 1; usage/preflight rejection before worktree creation exits 2; both successful verified legs exit 0;
+- provider failure, verification failure, evidence failure, source drift, or cleanup failure exits 1; usage/preflight rejection before worktree creation exits 2; both successful verified legs exit 0; an observed interrupt exits 130 even when cleanup also reports an error;
 - provider exit codes are evidence fields and are not passed through by the aggregate command.
 
 Private workspace policy:
 
 - use `<dataRoot>/shadow/<group-id>/<runner>` with private directory modes;
 - refuse an agentrec data/shadow root nested inside the source checkout;
-- a linked worktree receives only committed repository bytes: untracked `.env` files and local credentials are not copied;
-- provider CLIs use their existing user authentication/cache environment; agentrec adds no credential transport;
+- untracked `.env` files and local credentials are not copied, but tracked checkout bytes remain subject to the operator's configured Git attributes, filters and hooks;
+- provider CLIs use their existing mutable authentication/cache/network environment; agentrec adds no credential transport and does not equalize external initial conditions;
 - reject repositories whose committed tree contains `.gitmodules` or Git LFS pointer files in this vertical slice rather than silently preparing incomplete workspaces;
 - no workspace preparation command is added in this slice; committed project setup and `.agentrec.yaml` checks are the only preparation contract;
 - after abnormal process death, documented recovery is `git worktree prune`; no automatic stale-worktree GC command is added.
@@ -68,7 +68,7 @@ The comparison is informational only. This slice prints it to stdout; each leg's
 
 1. Add a failing out-of-process regression proving a signal after provider exit but during repository finalization still produces finalized repository evidence/report and exits 130.
 2. Run the focused test and confirm RED for the current signal-handler gap.
-3. Keep one signal lifecycle active through capture finalization, verification, and report installation; stop handling after cleanup so a second signal can terminate immediately.
+3. Install one signal lifecycle before work begins. The first handled signal marks the aggregate interrupted and immediately restores default disposition so a second signal can terminate; the buffered first signal remains available through capture finalization, verification, report installation and cleanup.
 4. Extract a context/signal-driven recording function that accepts prepared provider command/parser/prompt, worktree, runs root, run ID, and verification setting, and returns structured outcome plus persisted report.
 5. Keep source-repository lock and CLI argument parsing in `runTrace`; preserve existing trace exit-code passthrough and terminal output byte-for-byte.
 6. Split report installation from terminal printing so Shadow can retain `report.md` without interleaving full timelines.
@@ -87,8 +87,8 @@ The comparison is informational only. This slice prints it to stdout; each leg's
 1. Write a failing real-Git test that creates a temporary repository, adds a detached worktree at a pinned SHA, and proves its HEAD and clean status.
 2. Implement direct argv Git execution with `LC_ALL=C`; do not invoke a shell.
 3. Write failing tests for removal of dirty worktrees, cleanup idempotence after partial creation, and refusal of pre-existing/symlink paths.
-4. Implement forced `git worktree remove` followed by `git worktree prune`, preserving and returning cleanup errors.
-5. Assert source `HEAD`, index/status, tracked-byte/mode digest, full refs, and worktree list are identical after cleanup.
+4. Implement forced `git worktree remove` for the exact owned path, preserving and returning cleanup errors; do not run repository-global prune during normal cleanup.
+5. Assert agentrec's own lifecycle leaves source `HEAD`, index/status, tracked-byte/mode digest, full refs, and worktree list identical after cleanup.
 6. Run package tests and race tests.
 
 ### Task 3: Add Shadow preflight and CLI contract
@@ -139,7 +139,7 @@ The comparison is informational only. This slice prints it to stdout; each leg's
 **Steps:**
 
 1. Add RED subtests for provider nonzero and verification failure; require exit 1, retained bundle(s), removed worktrees, and an evidence-only comparison for all legs that started.
-2. Implement deferred reverse-order cleanup; cleanup failure itself makes exit 1 and is printed explicitly.
+2. Remove each owned worktree immediately after its leg closes; deferred idempotent cleanup remains a safety net. Cleanup failure itself makes exit 1 and is printed explicitly.
 3. Add out-of-process RED tests for SIGINT and SIGTERM during each provider leg; require exit 130, process-group termination, no worktree/admin/ref leak, retained finalized started bundle, and unchanged source snapshot.
 4. Check pending signal before starting each leg so an interrupt during setup never launches the next provider.
 5. Stop custom signal handling after the first signal is observed so a second signal keeps the default escape hatch.
@@ -211,9 +211,10 @@ Done:
   adapters with the task bytes on argv behind an option delimiter and no
   permission-widening flags; both bundles are readable with `agentrec show`
   after the checkouts are gone.
-- Task 5: deferred reverse-order cleanup, cleanup failure exits 1 and is printed,
-  a pending signal is checked before each leg, and out-of-process SIGINT and
-  SIGTERM tests cover both leg positions plus the second-signal escape hatch.
+- Task 5: per-leg owned cleanup, cleanup failure exits 1 and is printed, a
+  pending signal is checked before each leg and after repository release, and
+  out-of-process SIGINT and SIGTERM tests cover both leg positions, repository
+  release, plus the second-signal escape hatch.
 - Task 6: `renderComparison` builds every field by reading the persisted bundles
   and renders them in fixed runner and field order, with no evaluation
   vocabulary.
@@ -240,6 +241,15 @@ Decisions taken while implementing, which the plan above did not settle:
   interrupted comparison says which side is missing.
 - **The checkout directory is narrowed to `0700` after Git creates it**, since
   Git creates it against the operator's umask.
+- **Linked worktrees are not a provider sandbox.** Shadow snapshots source
+  `HEAD`, status, index, refs and worktree list, checks them after each owned
+  worktree is removed, and stops before the next provider on observed drift.
+  It reports drift and exits 1 without destructive restoration. Git filters,
+  hooks, credentials, caches, network services and other external state remain
+  part of the operator/provider environment.
+- **Normal cleanup never runs repository-global `git worktree prune`.** It
+  removes only the exact Shadow-owned path. `prune` remains a manual crash
+  recovery command.
 
 Release gate:
 
@@ -255,7 +265,9 @@ Release gate:
 The task is complete only when all are true:
 
 - both real provider legs began from one recorded commit and verification config SHA;
-- source checkout status, HEAD, tracked bytes/modes, refs, and worktree list match before/after;
+- the clean dogfood source checkout's observed status, HEAD, index, refs and
+  worktree list matched before/after; adversarial tests prove file/ref drift is
+  detected, stops the next leg and is not automatically restored;
 - ordinary bundles and `report.md` survive worktree cleanup;
 - success, provider failure, verification failure, SIGINT, and SIGTERM cleanup tests pass;
 - comparison output is deterministic and contains no automatic score/winner;

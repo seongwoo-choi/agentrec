@@ -195,3 +195,45 @@ func TestShadowStopsHoldingSignalsAfterTheFirstOne(t *testing.T) {
 			rec.ProcessState.ExitCode(), syscall.SIGTERM, stderr.String())
 	}
 }
+
+// Signal handling covers the aggregate command, not only provider execution.
+// A first signal arriving after comparison rendering but while the repository
+// lock is being released must still decide the aggregate exit as interrupted.
+func TestShadowReportsAnInterruptDuringRepositoryRelease(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	dir := stubProviders(t, "claude", "codex", verifyHelperName, agentrecName)
+	commitVerifyConfig(t, repo, verifyHelperName, "pass")
+	ready := filepath.Join(t.TempDir(), "release.ready")
+	resume := filepath.Join(t.TempDir(), "release.resume")
+	t.Setenv(releasePauseEnv, ready)
+	t.Setenv(releaseResumeEnv, resume)
+	task := writeTask(t, "change the README\n")
+
+	var stdout, stderr bytes.Buffer
+	rec := exec.Command(filepath.Join(dir, agentrecName), "shadow", "run", task, "--runner", "claude", "--runner", "codex")
+	rec.Stdout, rec.Stderr = &stdout, &stderr
+	if err := rec.Start(); err != nil {
+		t.Fatalf("start recorder: %v", err)
+	}
+	t.Cleanup(func() {
+		os.WriteFile(resume, []byte("go\n"), 0o600)
+		rec.Process.Kill()
+		rec.Wait()
+	})
+	if !waitForFile(ready, 60*time.Second) {
+		t.Fatalf("recorder never reached repository release (stderr %q)", stderr.String())
+	}
+	if err := rec.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("signal recorder: %v", err)
+	}
+	if err := os.WriteFile(resume, []byte("go\n"), 0o600); err != nil {
+		t.Fatalf("resume repository release: %v", err)
+	}
+	err := rec.Wait()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != exitInterrupted {
+		t.Fatalf("recorder error = %v, exit = %d, want %d (stderr %q)", err, rec.ProcessState.ExitCode(), exitInterrupted, stderr.String())
+	}
+	wantNoWorkspace(t, root)
+}

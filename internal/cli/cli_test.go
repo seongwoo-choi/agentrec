@@ -1680,6 +1680,7 @@ const codexStream = `{"type":"item.started","timestamp":"2026-07-27T10:00:01Z","
 func TestMain(m *testing.M) {
 	switch filepath.Base(os.Args[0]) {
 	case agentrecName:
+		installReleasePause()
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	case "claude":
 		os.Exit(claudeHelper(os.Args[1:]))
@@ -1691,6 +1692,28 @@ func TestMain(m *testing.M) {
 		os.Exit(gitHelper(os.Args[1:]))
 	}
 	os.Exit(m.Run())
+}
+
+const (
+	releasePauseEnv  = "AGENTREC_TEST_RELEASE_PAUSE"
+	releaseResumeEnv = "AGENTREC_TEST_RELEASE_RESUME"
+)
+
+func installReleasePause() {
+	ready := os.Getenv(releasePauseEnv)
+	if ready == "" {
+		return
+	}
+	release := releaseRepository
+	releaseRepository = func(repo *lock.Repository) error {
+		if err := os.WriteFile(ready, []byte("releasing\n"), 0o600); err != nil {
+			return err
+		}
+		if !waitForFile(os.Getenv(releaseResumeEnv), lingerLimit) {
+			return errors.New("test release pause was never resumed")
+		}
+		return release(repo)
+	}
 }
 
 // --- git stand-in mode -------------------------------------------------------
@@ -2132,6 +2155,10 @@ func claudeHelper(args []string) int {
 		fmt.Fprintln(os.Stderr, "claude helper:", err)
 		return helperContractExit
 	}
+	if err := mutateSourceCheckout("claude"); err != nil {
+		fmt.Fprintln(os.Stderr, "claude helper:", err)
+		return helperContractExit
+	}
 	if err := checkInvocation(args, [][]string{
 		{"--output-format", "stream-json"},
 		{"--verbose"},
@@ -2181,6 +2208,10 @@ func codexHelper(args []string) int {
 		fmt.Fprintln(os.Stderr, "codex helper:", err)
 		return helperContractExit
 	}
+	if err := mutateSourceCheckout("codex"); err != nil {
+		fmt.Fprintln(os.Stderr, "codex helper:", err)
+		return helperContractExit
+	}
 	if len(args) == 0 || args[0] != "exec" {
 		fmt.Fprintln(os.Stderr, "codex helper: exec must be the first argument")
 		return helperContractExit
@@ -2209,6 +2240,34 @@ type workspaceProbe struct {
 // probeEnv names the directory the stand-ins describe their workspace into, one
 // document per provider name.
 const probeEnv = "AGENTREC_TEST_PROVIDER_PROBE"
+
+const mutateSourceEnv = "AGENTREC_TEST_PROVIDER_MUTATE_SOURCE"
+
+func mutateSourceCheckout(provider string) error {
+	raw := os.Getenv(mutateSourceEnv)
+	parts := strings.SplitN(raw, ":", 3)
+	if len(parts) != 3 || parts[0] != provider {
+		return nil
+	}
+	switch parts[1] {
+	case "file":
+		return os.WriteFile(filepath.Join(parts[2], "README.md"), []byte("mutated outside the shadow worktree\n"), 0o600)
+	case "ref":
+		cmd := exec.Command("git", "-C", parts[2], "branch", "provider-mutated-source")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("mutate source ref: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		return nil
+	case "head":
+		cmd := exec.Command("git", "-C", parts[2], "checkout", "provider-alternate-source")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("mutate source HEAD: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown source mutation %q", parts[1])
+	}
+}
 
 func probeWorkspace(name string) error {
 	dir := os.Getenv(probeEnv)

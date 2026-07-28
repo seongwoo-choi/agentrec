@@ -112,6 +112,11 @@ This is one successful-path run on macOS. It does not independently establish:
 
 - provider failure, verification failure or signal cleanup under real CLIs;
 - cleanup after a partially created worktree in a real Git failure;
+- containment of a provider: linked worktrees share common Git refs and are not
+  a sandbox; this run only observed that the source snapshot did not drift;
+- byte-hermetic checkouts under custom Git attributes, filters or hooks;
+- equal provider credentials, caches, network state or other external initial
+  conditions between the serialized legs;
 - Linux runtime behavior;
 - causal attribution, patch quality ranking or provider superiority.
 

@@ -210,11 +210,10 @@ What the command does and does not give you:
   fields and nothing derived from them. Which run to prefer is the reader's
   judgement. Provider-reported cost and token fields are not in the recorded
   evidence today, so the comparison does not show them.
-- **Committed bytes only.** A linked worktree receives what `HEAD` holds:
-  untracked `.env` files and local credentials are not copied into it. The
-  provider CLIs use their own existing authentication and cache; agentrec adds
-  no credential transport and runs no workspace-preparation step, so a project
-  whose setup is not committed is a project each leg starts without.
+- **A Git checkout, not a byte-hermetic sandbox.** Untracked `.env` files and
+  local credentials are not copied into a leg. Tracked files are checked out by
+  the operator's Git, so configured attributes, filters and hooks still apply.
+  Agentrec adds no credential transport or workspace-preparation step.
 - **Repositories it cannot prepare are refused, not half-prepared.** A committed
   `.gitmodules` or a committed Git LFS pointer file is rejected before any
   checkout exists.
@@ -224,18 +223,23 @@ What the command does and does not give you:
   over several arguments, is not supported here.
 - **Verification is mandatory, and the legs are serialized.** Both runs are
   verified against the committed `.agentrec.yaml`, and they execute one after
-  another, so the checks and any external state they touch never overlap.
-- **The source checkout is left as it was found.** It must be clean, it is
-  locked for the whole command, and its `HEAD`, status, refs, worktree list and
-  tracked bytes are unchanged afterwards — on success, on failure, and on an
-  interrupt.
+  another. Their checks do not overlap, but mutable authentication, caches,
+  network services and other external state are not reset between legs; input
+  runner order can therefore affect what the second provider observes.
+- **A linked worktree is not a security boundary.** It shares the repository's
+  common Git directory and refs, and a provider can explicitly reach the source
+  checkout. The lock coordinates agentrec processes only. After removing each
+  owned worktree, agentrec compares the source `HEAD`, status, index, refs and
+  worktree list with its preflight snapshot. Observed drift stops the next leg
+  and exits `1`; agentrec reports it and does not destructively restore it.
 
 Exit codes: `2` for a usage or preflight refusal — a runner named twice or
 missing, an unreadable task file, a dirty checkout, an uncommitted
 `.agentrec.yaml`, an `AGENTREC_HOME` inside the repository — all of which happen
 before any checkout or provider exists. Then `0` when both legs completed and
-both verifications passed, `1` when a leg failed, ended incomplete, or a
-checkout could not be removed, and `130` when the run was interrupted. **A
+both verifications passed, `1` when a leg failed, ended incomplete, changed the
+source repository, or its checkout could not be removed, and `130` when the run
+was interrupted. **A
 provider's own exit code is evidence in its bundle and is never passed through**
 by the aggregate command.
 
