@@ -16,12 +16,13 @@ import (
 const runsDirName = "runs"
 
 // listHeader names the columns of the run table.
-const listHeader = "RUN ID  PROVIDER  STARTED  EXIT"
+const listHeader = "RUN ID  PROVIDER  PROJECT  STARTED  EXIT"
 
 // runSummary is one row of the run table.
 type runSummary struct {
 	ID        string
 	Provider  string
+	Project   string
 	StartedAt time.Time
 	Exit      string
 }
@@ -51,6 +52,7 @@ func runList(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, strings.Join([]string{
 				oneLine(r.ID),
 				oneLine(r.Provider),
+				oneLine(r.Project),
 				r.StartedAt.UTC().Format(time.RFC3339),
 				oneLine(r.Exit),
 			}, "  "))
@@ -99,6 +101,7 @@ func listRuns(root string) ([]runSummary, int, error) {
 		runs = append(runs, runSummary{
 			ID:        entry.Name(),
 			Provider:  manifest.Provider,
+			Project:   projectName(manifest.CWD),
 			StartedAt: manifest.StartedAt,
 			Exit:      exitReason(manifest, nil),
 		})
@@ -126,6 +129,24 @@ func runsRoot() (string, error) {
 		return "", fmt.Errorf("cli: locate data directory: %w", err)
 	}
 	return filepath.Join(home, ".local", "share", "agentrec", runsDirName), nil
+}
+
+// projectName names the checkout a run was recorded in by the last element of
+// its working directory, which is what tells runs of different repositories
+// apart in the table. Only an absolute path names a directory on the machine
+// the run happened on: a recorded value that is not one, or that ends in no
+// name of its own, is reported as unknown rather than guessed at, so the column
+// is never a claim the manifest did not make.
+func projectName(cwd string) string {
+	if !filepath.IsAbs(cwd) {
+		return unknownValue
+	}
+	switch base := filepath.Base(cwd); base {
+	case string(filepath.Separator), ".", "..":
+		return unknownValue
+	default:
+		return base
+	}
 }
 
 // oneLine makes a recorded value safe to print in a table row: control

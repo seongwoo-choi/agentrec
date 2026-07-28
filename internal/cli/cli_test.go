@@ -125,10 +125,10 @@ func TestListReportsRunsNewestFirstWithStableTieBreak(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
 	want := strings.Join([]string{
-		"RUN ID  PROVIDER  STARTED  EXIT",
-		"run-c  claude  2026-07-27T10:00:00Z  unknown",
-		"run-b  codex  2026-07-27T10:00:00Z  failed",
-		"run-a  claude  2026-07-27T09:00:00Z  completed",
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  unknown",
+		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed",
+		"run-a  claude  tmp  2026-07-27T09:00:00Z  completed",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -136,6 +136,46 @@ func TestListReportsRunsNewestFirstWithStableTieBreak(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+// writeRunIn records a run whose manifest names cwd as the directory it ran in.
+func writeRunIn(t *testing.T, root, id, cwd string) {
+	t.Helper()
+	if _, err := storage.Create(root, id, storage.Manifest{
+		Provider:  "claude",
+		Argv:      []string{"claude"},
+		CWD:       cwd,
+		StartedAt: early,
+	}); err != nil {
+		t.Fatalf("create run %s: %v", id, err)
+	}
+}
+
+// A run is told apart from a run of another repository by the project it was
+// recorded in, without having to open each one. A working directory the
+// manifest does not record, or one that names no directory, is reported as
+// unknown: a guessed project would be read as a fact about where the run ran.
+func TestListNamesProjectFromRecordedWorkingDirectory(t *testing.T) {
+	root := home(t)
+	writeRunIn(t, root, "run-a", "/home/dev/agentrec")
+	writeRunIn(t, root, "run-b", "")
+	writeRunIn(t, root, "run-c", "relative/dir")
+
+	code, stdout, stderr := run(t, "list")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
+		"run-c  claude  unknown  2026-07-27T09:00:00Z  unknown",
+		"run-b  claude  unknown  2026-07-27T09:00:00Z  unknown",
+		"run-a  claude  agentrec  2026-07-27T09:00:00Z  unknown",
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("stdout =\n%q\nwant\n%q", stdout, want)
 	}
 }
 
