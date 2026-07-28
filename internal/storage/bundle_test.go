@@ -928,3 +928,85 @@ func TestCreateUsesExactPermissionsUnderPermissiveUmask(t *testing.T) {
 		}
 	}
 }
+
+// Repository evidence is measured after the run has been finalized, so
+// sanitizing it is the one thing a finished bundle still does. A secret the
+// prompt and the actions already named is the same secret when the evidence
+// carries it, and it has to read as one secret across the whole bundle.
+func TestSanitizeTextReusesTheRunsMarkerAfterFinalize(t *testing.T) {
+	// Arrange: one synthetic token, recorded first by the routes a run writes
+	// while it is open.
+	const secret = "ghp_syntheticIIIIJJJJKKKKLLLL"
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := b.WritePrompt("push the branch using " + secret); err != nil {
+		t.Fatalf("WritePrompt: %v", err)
+	}
+	if err := b.WriteAction(action.Action{
+		ID:        "a1",
+		Type:      action.TypeToolCall,
+		Assurance: action.AssuranceProviderReported,
+		Input:     json.RawMessage(`{"github_token":"` + secret + `"}`),
+	}); err != nil {
+		t.Fatalf("WriteAction: %v", err)
+	}
+	if err := b.Finalize(Finalization{
+		EndedAt:    time.Date(2026, 7, 27, 10, 1, 0, 0, time.UTC),
+		ExitReason: "completed",
+	}); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	// Act: what a patch collected from the repository afterwards would carry.
+	safe, err := b.SanitizeText("+token = " + secret + "\n+kept = plain\n")
+	if err != nil {
+		t.Fatalf("SanitizeText: %v", err)
+	}
+
+	// Assert
+	if strings.Contains(safe, secret) {
+		t.Errorf("SanitizeText = %q, want the secret replaced", safe)
+	}
+	if !strings.Contains(safe, "+kept = plain") {
+		t.Errorf("SanitizeText = %q, want the surrounding text preserved", safe)
+	}
+	recorded, err := os.ReadFile(filepath.Join(b.Dir(), "prompt.txt"))
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	want := markerPattern.FindAllString(string(recorded), -1)
+	if len(want) != 1 {
+		t.Fatalf("prompt.txt holds %d markers, want 1", len(want))
+	}
+	if got := markerPattern.FindAllString(safe, -1); len(got) != 1 || got[0] != want[0] {
+		t.Errorf("SanitizeText markers = %v, want the prompt's %q", got, want[0])
+	}
+}
+
+// Text that is not valid UTF-8 is refused rather than sanitized. The redactor
+// reads JSON, and a JSON encoder replaces every invalid byte with U+FFFD: a
+// caller handed that back would store a mangled copy of what it collected while
+// believing it had stored what it read.
+func TestSanitizeTextRefusesTextThatIsNotUTF8(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	safe, err := b.SanitizeText("caf\xe9 cr\xe8me\n")
+
+	if err == nil {
+		t.Fatalf("SanitizeText = %q, want it refused", safe)
+	}
+	if safe != "" {
+		t.Errorf("SanitizeText = %q, want nothing alongside the refusal", safe)
+	}
+	if strings.Contains(err.Error(), "�") {
+		t.Errorf("SanitizeText error = %v, want it not to carry a coerced copy", err)
+	}
+	if valid, err := b.SanitizeText("plain text\n"); err != nil || valid != "plain text\n" {
+		t.Errorf("SanitizeText(%q) = %q, %v, want valid text still sanitized", "plain text\n", valid, err)
+	}
+}

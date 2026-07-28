@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
 	"github.com/seongwoo-choi/agentrec/internal/redaction"
@@ -179,6 +180,25 @@ func (b *Bundle) redactFreeText(field, text string) (string, error) {
 		return "", fmt.Errorf("storage: decode redacted %s: %w", field, err)
 	}
 	return unwrapped[field], nil
+}
+
+// SanitizeText puts text through this run's redactor and hands it back. It
+// writes nothing: the caller is the one holding the text, and what it does with
+// the sanitized copy is its own. It is deliberately allowed after Finalize,
+// because repository evidence can only be measured once the run has ended, and
+// going through this bundle's redactor is what makes a secret named there the
+// same secret the argv, the prompt, the actions and the events already named.
+//
+// Text that is not valid UTF-8 is refused rather than sanitized. The redactor
+// reads JSON, and a JSON encoder does not fail on invalid bytes — it replaces
+// each one with U+FFFD. Handing that back would give the caller a mangled copy
+// of what it collected under the name of a sanitized one, so what cannot be
+// carried is reported as such and the caller decides what to record instead.
+func (b *Bundle) SanitizeText(text string) (string, error) {
+	if !utf8.ValidString(text) {
+		return "", errors.New("storage: text is not valid UTF-8 and cannot be sanitized")
+	}
+	return b.redactFreeText("evidence", text)
 }
 
 // WriteProcessStderr stores everything the provider process wrote to stderr,

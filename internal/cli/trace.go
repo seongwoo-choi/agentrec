@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seongwoo-choi/agentrec/internal/evidence"
 	"github.com/seongwoo-choi/agentrec/internal/lock"
 	"github.com/seongwoo-choi/agentrec/internal/provider"
 	"github.com/seongwoo-choi/agentrec/internal/provider/claude"
@@ -41,6 +42,17 @@ const gitTimeout = 30 * time.Second
 
 // locksDirName holds the per-repository locks beside the recorded runs.
 const locksDirName = "locks"
+
+// Bounds on the repository evidence, which is collected before and after the
+// run but never during it. Pinning the baseline is a handful of Git commands and
+// answers as quickly as the checks above; measuring what the run changed reads
+// the worktree and hashes what it finds, so it is given the longer deadline a
+// large repository needs and still cannot hang this process forever.
+const (
+	evidenceStartTimeout    = 10 * time.Second
+	evidenceFinalizeTimeout = 2 * time.Minute
+	evidenceCloseTimeout    = 10 * time.Second
+)
 
 // Exit codes. A provider's own exit code is passed through when it is one a
 // shell would read back as the provider's; 126 and above are the shell's own
@@ -158,6 +170,36 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
+	// The baseline is pinned before the prompt is written and before the
+	// provider is launched: what the run changed can only be measured against
+	// where the repository stood before any of the run happened. A baseline that
+	// could not be pinned is a run whose changes could never be attributed, so
+	// it is not started. Sanitizing goes through the bundle's own redactor, so a
+	// secret the evidence carries reads as the secret the rest of the run named.
+	startCtx, cancelStart := context.WithTimeout(context.Background(), evidenceStartTimeout)
+	capture, err := evidence.Start(startCtx, repo.Root(), runID, bundle.Dir(), evidence.Options{
+		Sanitize: bundle.SanitizeText,
+	})
+	cancelStart()
+	if err != nil {
+		return unrecordable(bundle, stderr, runID, err)
+	}
+	// Deferred before anything else can fail, so a prompt that could not be
+	// written or a provider that never started still takes the ref back out of
+	// the repository. Finalize closes the capture itself, and this close reports
+	// the same outcome, so it stands down once the run has been measured.
+	evidenceMeasured := false
+	defer func() {
+		if evidenceMeasured {
+			return
+		}
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), evidenceCloseTimeout)
+		defer cancelClose()
+		if err := capture.Close(closeCtx); err != nil {
+			fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
+		}
+	}()
+
 	// The prompt is written before the provider starts: a run whose own request
 	// could not be recorded is not one to launch, because whatever it then did
 	// would be evidence with nothing to explain it.
@@ -174,13 +216,38 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 		Parser:    parse,
 		Interrupt: interrupt,
 	})
+	// Handed straight back to the operating system now that the run this
+	// process was holding interrupts for is over. Everything below is agentrec's
+	// own work on the operator's terminal, and a Ctrl-C during it is an operator
+	// who wants out: buffering it here would swallow the one signal they have.
+	// The deferred Stop stays for the paths that return before the run started.
+	signal.Stop(interrupt)
+
+	// Measured now that the provider's process group has ended and its streams
+	// and manifest are on disk, so what the repository shows is what the run
+	// left. Attempted for every ending, including a bad one: an interrupted or
+	// failed run changed the repository too, and the lock is still held, so
+	// nothing else has touched it in between.
+	finalizeCtx, cancelFinalize := context.WithTimeout(context.Background(), evidenceFinalizeTimeout)
+	_, evidenceErr := capture.Finalize(finalizeCtx)
+	cancelFinalize()
+	evidenceMeasured = true
 
 	// The report is read back from the finalized bundle rather than rendered
 	// from what this process still holds, so what the operator sees is what was
 	// persisted. It is attempted for every ending, including a bad one: partial
 	// evidence is what an interrupted or failed run has to show.
-	if err := renderRun(stdout, root, runID); err != nil {
-		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
+	renderErr := renderRun(stdout, root, runID)
+	if evidenceErr != nil {
+		fmt.Fprintf(stderr, "cli: run %s: capture repository evidence: %v\n", runID, evidenceErr)
+	}
+	if renderErr != nil {
+		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, renderErr)
+	}
+	// A run whose repository evidence is missing is not a run to report as the
+	// provider's own ending: what the operator has been shown is incomplete, and
+	// the exit code says so.
+	if evidenceErr != nil || renderErr != nil {
 		return exitFailure
 	}
 	return traceExit(res, runErr, stderr, runID)

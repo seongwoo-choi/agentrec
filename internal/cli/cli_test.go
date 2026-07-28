@@ -892,6 +892,55 @@ const startedEnv = "AGENTREC_TEST_PROVIDER_STARTED"
 // what a provider does when the work it recorded did not succeed.
 const failPrompt = "fail"
 
+// Env options the helper acts on once it has been launched to record a run, so
+// that a test can drive a provider which changes the repository the way a real
+// agent would: a tracked file it overwrites, an untracked file it creates, and a
+// demand that the baseline was pinned before it was allowed to change anything.
+const (
+	trackedEnv    = "AGENTREC_TEST_PROVIDER_TRACKED"
+	untrackedEnv  = "AGENTREC_TEST_PROVIDER_UNTRACKED"
+	requireRefEnv = "AGENTREC_TEST_PROVIDER_REQUIRE_REF"
+)
+
+// refNamespace is where agentrec pins the baseline it measures a run against.
+const refNamespace = "refs/agentrec/"
+
+// helperToken is a synthetic secret the helper writes into everything it
+// changes, so a test can require the recorded evidence to name it with a marker
+// rather than carry it.
+const helperToken = "ghp_syntheticMMMMNNNNOOOOPPPP"
+
+// helperContent is what the helper writes into the files it was asked to change.
+// It is two lines where the fixture's tracked file held one, so the recorded
+// statistics have exactly one right answer.
+const helperContent = "changed by the helper\ntoken = " + helperToken + "\n"
+
+// changeRepository carries out the changes the helper was asked to make. The
+// baseline ref is checked first when the test demands it: the commit agentrec
+// measures the run against has to be pinned before the provider can change
+// anything, and a helper that ran without it recorded nothing worth comparing.
+func changeRepository() error {
+	if os.Getenv(requireRefEnv) != "" {
+		out, err := exec.Command("git", "for-each-ref", "--format=%(refname)", refNamespace).Output()
+		if err != nil {
+			return fmt.Errorf("list %s: %v", refNamespace, err)
+		}
+		if len(bytes.TrimSpace(out)) == 0 {
+			return fmt.Errorf("no %s ref pinned the baseline", refNamespace)
+		}
+	}
+	for _, env := range []string{trackedEnv, untrackedEnv} {
+		name := os.Getenv(env)
+		if name == "" {
+			continue
+		}
+		if err := os.WriteFile(name, []byte(helperContent), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // forbiddenFlags are the permission, sandbox and approval overrides agentrec
 // must never inject: what the operator may do is the operator's decision, and a
 // recorder that widens it silently is recording a different run than the one
@@ -936,6 +985,10 @@ func claudeHelper(args []string) int {
 		return 0
 	}
 	markStarted()
+	if err := changeRepository(); err != nil {
+		fmt.Fprintln(os.Stderr, "claude helper:", err)
+		return helperContractExit
+	}
 	if err := checkInvocation(args, [][]string{
 		{"--output-format", "stream-json"},
 		{"--verbose"},
@@ -955,6 +1008,10 @@ func codexHelper(args []string) int {
 		return 0
 	}
 	markStarted()
+	if err := changeRepository(); err != nil {
+		fmt.Fprintln(os.Stderr, "codex helper:", err)
+		return helperContractExit
+	}
 	if len(args) == 0 || args[0] != "exec" {
 		fmt.Fprintln(os.Stderr, "codex helper: exec must be the first argument")
 		return helperContractExit
@@ -1166,10 +1223,35 @@ func TestTraceRecordsAClaudeRunAndRendersItsTimeline(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, runID, "manifest.json")); err != nil {
 		t.Errorf("recorded bundle: %v", err)
 	}
+	wantGitArtifacts(t, filepath.Join(root, runID))
+}
+
+// wantGitArtifacts fails when a recorded run does not say what it left in the
+// repository. A run that changed nothing still has to say so: an absent
+// document is indistinguishable from evidence that was never collected.
+func wantGitArtifacts(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{"baseline.json", "tracked.patch", "tracked-stat.json", "untracked.json", "result.json"} {
+		if _, err := os.Stat(filepath.Join(dir, "git", name)); err != nil {
+			t.Errorf("repository evidence: %v", err)
+		}
+	}
+	// The status document is what tells a later reader that the collection ran
+	// to completion, rather than being interrupted partway with the artifacts it
+	// had already written left standing.
+	var result struct {
+		Status      string `json:"status"`
+		Reason      string `json:"reason"`
+		Attribution string `json:"attribution"`
+	}
+	readJSONFile(t, filepath.Join(dir, "git", "result.json"), &result)
+	if result.Status != "available" || result.Reason != "" || result.Attribution == "" {
+		t.Errorf("git/result.json = %+v, want a completed collection that says what it means", result)
+	}
 }
 
 func TestTraceRecordsACodexRunAndRendersItsTimeline(t *testing.T) {
-	home(t)
+	root := home(t)
 	cleanRepo(t)
 	stubProviders(t, "codex")
 
@@ -1193,6 +1275,148 @@ func TestTraceRecordsACodexRunAndRendersItsTimeline(t *testing.T) {
 	if !strings.Contains(listed, runID) || !strings.Contains(listed, "codex") {
 		t.Errorf("list =\n%s\nwant it to name run %s and its provider", listed, runID)
 	}
+	wantGitArtifacts(t, filepath.Join(root, runID))
+}
+
+// What a run left in the repository is evidence agentrec collects itself rather
+// than takes the provider's word for: the baseline is pinned before the provider
+// starts, the difference is measured after it has ended, and the ref that pinned
+// it does not outlive the run.
+func TestTraceRecordsWhatTheRunChangedInTheRepository(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	stubProviders(t, "claude")
+	t.Setenv(trackedEnv, "README.md")
+	t.Setenv(untrackedEnv, "notes.txt")
+	t.Setenv(requireRefEnv, "1")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "change the repository")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	dir := filepath.Join(root, traceRunID(t, stdout))
+	git := filepath.Join(dir, "git")
+
+	var baseline struct {
+		Status string `json:"status"`
+		Commit string `json:"commit"`
+		Ref    string `json:"ref"`
+	}
+	readJSONFile(t, filepath.Join(git, "baseline.json"), &baseline)
+	if baseline.Status != "available" || baseline.Commit == "" || !strings.HasPrefix(baseline.Ref, refNamespace) {
+		t.Errorf("baseline.json = %+v, want the commit the run started at, pinned", baseline)
+	}
+
+	patch := readFileString(t, filepath.Join(git, "tracked.patch"))
+	for _, want := range []string{"README.md", "changed by the helper"} {
+		if !strings.Contains(patch, want) {
+			t.Errorf("tracked.patch =\n%s\nwant it to contain %q", patch, want)
+		}
+	}
+
+	var stat struct {
+		Status      string `json:"status"`
+		Attribution string `json:"attribution"`
+		Files       []struct {
+			Path      string `json:"path"`
+			Additions *int   `json:"additions"`
+			Deletions *int   `json:"deletions"`
+		} `json:"files"`
+		Totals struct {
+			Files     int `json:"files"`
+			Additions int `json:"additions"`
+			Deletions int `json:"deletions"`
+		} `json:"totals"`
+	}
+	readJSONFile(t, filepath.Join(git, "tracked-stat.json"), &stat)
+	if stat.Status != "available" || stat.Attribution == "" {
+		t.Errorf("tracked-stat.json status = %q, attribution = %q, want available evidence that says what it means", stat.Status, stat.Attribution)
+	}
+	// The fixture's tracked file held one line and the helper wrote two.
+	if stat.Totals.Files != 1 || stat.Totals.Additions != 2 || stat.Totals.Deletions != 1 {
+		t.Errorf("tracked-stat.json totals = %+v, want 1 file, 2 additions, 1 deletion", stat.Totals)
+	}
+	if len(stat.Files) != 1 || stat.Files[0].Path != "README.md" {
+		t.Fatalf("tracked-stat.json files = %+v, want only README.md", stat.Files)
+	}
+
+	var untracked struct {
+		Attribution string `json:"attribution"`
+		Count       int    `json:"count"`
+		Stored      int    `json:"stored"`
+		Files       []struct {
+			Path     string `json:"path"`
+			Kind     string `json:"kind"`
+			SHA256   string `json:"sha256"`
+			Stored   bool   `json:"stored"`
+			StoredAs string `json:"storedAs"`
+		} `json:"files"`
+	}
+	readJSONFile(t, filepath.Join(git, "untracked.json"), &untracked)
+	if untracked.Count != 1 || untracked.Stored != 1 || len(untracked.Files) != 1 {
+		t.Fatalf("untracked.json = %+v, want the one file the run created, stored", untracked)
+	}
+	entry := untracked.Files[0]
+	if entry.Path != "notes.txt" || entry.Kind != "file" || entry.SHA256 == "" || !entry.Stored || entry.StoredAs == "" {
+		t.Fatalf("untracked entry = %+v, want notes.txt described and its body stored", entry)
+	}
+	body := readFileString(t, filepath.Join(git, entry.StoredAs))
+	if !strings.Contains(body, "changed by the helper") {
+		t.Errorf("stored body = %q, want the content the run wrote", body)
+	}
+
+	// The ref existed while the provider ran — the helper refused to change
+	// anything otherwise — and the repository is left as agentrec found it.
+	if refs := gitIn(t, repo, "for-each-ref", "--format=%(refname)", refNamespace); refs != "" {
+		t.Errorf("%s holds %q after the run, want the temporary ref removed", refNamespace, refs)
+	}
+
+	// The token the run wrote into the repository reaches the evidence, and the
+	// evidence names it with a marker instead of carrying it. The repository
+	// itself still holds it: only the bundle is scanned.
+	for name, content := range snapshot(t, dir) {
+		if strings.Contains(content, helperToken) {
+			t.Errorf("%s holds the token verbatim", name)
+		}
+	}
+	for name, content := range map[string]string{"tracked.patch": patch, entry.StoredAs: body} {
+		if !strings.Contains(content, "[REDACTED:") {
+			t.Errorf("%s = %q, want the token replaced by a marker", name, content)
+		}
+	}
+}
+
+func readJSONFile(t *testing.T, path string, into any) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if err := json.Unmarshal(raw, into); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+}
+
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(raw)
+}
+
+// gitIn asks the repository a question and returns its answer, trimmed.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // The recorded invocation is what agentrec decided to launch, so it is checked
