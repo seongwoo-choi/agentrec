@@ -29,7 +29,7 @@ Constraints:
 - never inject permission bypass, sandbox bypass, merge, scoring, winner, rank, or recommendation behavior;
 - execute legs serially so verification and shared external state are not concurrent, while documenting that mutable external state is not reset between legs;
 - first handled SIGINT/SIGTERM cancels the current process group, finalizes evidence when possible, removes worktrees, and exits 130; restore default signal behavior so a second signal remains an escape hatch;
-- provider failure, verification failure, evidence failure, source drift, or cleanup failure exits 1; usage/preflight rejection before worktree creation exits 2; both successful verified legs exit 0; an observed interrupt exits 130 even when cleanup also reports an error;
+- provider failure, verification failure, evidence failure, source drift, or cleanup failure exits 1; usage/preflight rejection before worktree creation exits 2; both successful verified legs exit 0; an observed interrupt exits 130 even when drift or cleanup also reports an error;
 - provider exit codes are evidence fields and are not passed through by the aggregate command.
 
 Private workspace policy:
@@ -250,9 +250,10 @@ Decisions taken while implementing, which the plan above did not settle:
 - **Linked worktrees are not a provider sandbox.** Shadow snapshots source
   `HEAD`, status, index, refs and worktree list, checks them after each owned
   worktree is removed, and stops before the next provider on observed drift.
-  It reports drift and exits 1 without destructive restoration. Git filters,
-  hooks, credentials, caches, network services and other external state remain
-  part of the operator/provider environment.
+  It reports drift and exits 1 without destructive restoration, unless an
+  interrupt was also observed, in which case exit 130 retains precedence. Git
+  filters, hooks, credentials, caches, network services and other external state
+  remain part of the operator/provider environment.
 - **Normal cleanup never runs repository-global `git worktree prune`.** It
   removes only the exact Shadow-owned path. `prune` remains a manual crash
   recovery command.

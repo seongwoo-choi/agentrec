@@ -2290,6 +2290,12 @@ func mutateSourceCheckout(provider string) error {
 	switch parts[1] {
 	case "file":
 		return os.WriteFile(filepath.Join(parts[2], "README.md"), []byte("mutated outside the shadow worktree\n"), 0o600)
+	case "assume-unchanged", "skip-worktree":
+		cmd := exec.Command("git", "-C", parts[2], "update-index", "--"+parts[1], "README.md")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("mutate source index flag: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		return os.WriteFile(filepath.Join(parts[2], "README.md"), []byte("mutated outside the shadow worktree\n"), 0o600)
 	case "ref":
 		cmd := exec.Command("git", "-C", parts[2], "branch", "provider-mutated-source")
 		if out, err := cmd.CombinedOutput(); err != nil {

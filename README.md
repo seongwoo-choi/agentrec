@@ -231,8 +231,9 @@ What the command does and does not give you:
   checkout. The lock coordinates agentrec processes only. After removing each
   owned worktree, agentrec compares the source `HEAD`, status, index, refs,
   worktree list and common repository config with its preflight snapshot.
-  Observed drift stops the next leg and exits `1`; agentrec reports it and does
-  not destructively restore it.
+  Observed drift stops the next leg and exits `1`, unless the run was also
+  interrupted, in which case `130` retains precedence. Agentrec reports the
+  drift and does not destructively restore it.
 
 Exit codes: `2` for a usage or preflight refusal — a runner named twice or
 missing, an unreadable task file, a dirty checkout, an uncommitted
@@ -240,9 +241,9 @@ missing, an unreadable task file, a dirty checkout, an uncommitted
 before any checkout or provider exists. Then `0` when both legs completed and
 both verifications passed, `1` when a leg failed, ended incomplete, changed the
 source repository, or its checkout could not be removed, and `130` when the run
-was interrupted. **A
-provider's own exit code is evidence in its bundle and is never passed through**
-by the aggregate command.
+was interrupted, including when drift was also observed. **A provider's own exit
+code is evidence in its bundle and is never passed through** by the aggregate
+command.
 
 An interrupt already held or queued at the final provider-launch decision prevents
 that provider from starting. One delivered after that userspace decision stops

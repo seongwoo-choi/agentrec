@@ -223,7 +223,7 @@ func TestShadowRecordsBothRunnersFromOneBaseline(t *testing.T) {
 // never launch the second provider. It does not destructively restore provider
 // changes.
 func TestShadowStopsWhenAProviderMutatesTheSourceRepository(t *testing.T) {
-	for _, mutation := range []string{"file", "ref", "head", "config"} {
+	for _, mutation := range []string{"file", "assume-unchanged", "skip-worktree", "ref", "head", "config"} {
 		t.Run(mutation, func(t *testing.T) {
 			root := home(t)
 			repo := cleanRepo(t)
@@ -247,7 +247,7 @@ func TestShadowStopsWhenAProviderMutatesTheSourceRepository(t *testing.T) {
 				t.Errorf("stderr = %q, want source drift reported", stderr)
 			}
 			switch mutation {
-			case "file":
+			case "file", "assume-unchanged", "skip-worktree":
 				if raw, err := os.ReadFile(filepath.Join(repo, "README.md")); err != nil || string(raw) != "mutated outside the shadow worktree\n" {
 					t.Errorf("source file = %q, %v; want provider change left for manual recovery", raw, err)
 				}
@@ -271,6 +271,29 @@ func TestShadowStopsWhenAProviderMutatesTheSourceRepository(t *testing.T) {
 				t.Errorf("second provider probe error = %v, want it not launched", err)
 			}
 			wantNoWorkspace(t, root)
+		})
+	}
+}
+
+func TestGitIndexDigestTracksFlagsInMainAndLinkedWorktrees(t *testing.T) {
+	repo := cleanRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	gitIn(t, repo, "worktree", "add", "--detach", linked, "HEAD")
+
+	for _, root := range []string{repo, linked} {
+		t.Run(filepath.Base(root), func(t *testing.T) {
+			before, err := gitIndexDigest(context.Background(), root)
+			if err != nil {
+				t.Fatalf("digest before index flag: %v", err)
+			}
+			gitIn(t, root, "update-index", "--assume-unchanged", "README.md")
+			after, err := gitIndexDigest(context.Background(), root)
+			if err != nil {
+				t.Fatalf("digest after index flag: %v", err)
+			}
+			if before == after {
+				t.Fatal("index digest did not change after assume-unchanged")
+			}
 		})
 	}
 }

@@ -608,7 +608,6 @@ func readRepositoryState(ctx context.Context, root string) (repositoryState, err
 	}{
 		{"HEAD", &state.head, []string{"rev-parse", "HEAD"}},
 		{"status", &state.status, []string{"status", "--porcelain=v2", "--untracked-files=all"}},
-		{"index", &state.index, []string{"ls-files", "--stage", "-z"}},
 		{"refs", &state.refs, []string{"for-each-ref", "--format=%(refname) %(objectname)"}},
 		{"worktrees", &state.worktrees, []string{"worktree", "list", "--porcelain", "-z"}},
 	}
@@ -619,12 +618,65 @@ func readRepositoryState(ctx context.Context, root string) (repositoryState, err
 		}
 		*reading.dst = value
 	}
+	index, err := gitIndexDigest(ctx, root)
+	if err != nil {
+		return repositoryState{}, fmt.Errorf("cli: snapshot source repository index: %w", err)
+	}
+	state.index = index
 	config, err := gitConfigDigest(ctx, root)
 	if err != nil {
 		return repositoryState{}, fmt.Errorf("cli: snapshot source repository config: %w", err)
 	}
 	state.config = config
 	return state, nil
+}
+
+func gitIndexDigest(ctx context.Context, root string) (string, error) {
+	path, err := shadowGit(ctx, root, "rev-parse", "--git-path", "index")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", strconv.Quote(path), err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is %s, want a regular Git index", strconv.Quote(path), info.Mode().Type())
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open %s: %w", strconv.Quote(path), err)
+	}
+	defer f.Close()
+	held, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("inspect open %s: %w", strconv.Quote(path), err)
+	}
+	if !os.SameFile(info, held) {
+		return "", fmt.Errorf("%s changed before it could be read", strconv.Quote(path))
+	}
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return "", fmt.Errorf("read %s: %w", strconv.Quote(path), err)
+	}
+	after, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("inspect read %s: %w", strconv.Quote(path), err)
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("reinspect %s: %w", strconv.Quote(path), err)
+	}
+	if !os.SameFile(held, current) {
+		return "", fmt.Errorf("%s was replaced while it was read", strconv.Quote(path))
+	}
+	if held.Size() != after.Size() || !held.ModTime().Equal(after.ModTime()) {
+		return "", fmt.Errorf("%s changed while it was read", strconv.Quote(path))
+	}
+	return fmt.Sprintf("%x", sum.Sum(nil)), nil
 }
 
 const maxGitConfigBytes = 1 << 20
