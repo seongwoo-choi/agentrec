@@ -152,6 +152,40 @@ func TestParseAgentMessagesAndOrder(t *testing.T) {
 	}
 }
 
+func TestParseProviderErrorsAsActionsWithoutParserWarnings(t *testing.T) {
+	stream := `{"type":"item.completed","item":{"id":"item_error_1","type":"error","message":"unstable feature enabled"}}
+{"type":"item.completed","item":{"id":"item_error_2","type":"error","message":"skill context budget shortened"}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.WarningCount != 0 {
+		t.Errorf("WarningCount = %d, want 0 for recognized provider errors", res.WarningCount)
+	}
+	if len(res.Actions) != 2 {
+		t.Fatalf("action count = %d, want 2", len(res.Actions))
+	}
+	for i, want := range []string{"unstable feature enabled", "skill context budget shortened"} {
+		got := res.Actions[i]
+		if got.Type != action.TypeProviderError {
+			t.Errorf("action[%d].Type = %q, want %q", i, got.Type, action.TypeProviderError)
+		}
+		if got.Status != statusFailed {
+			t.Errorf("action[%d].Status = %q, want %q", i, got.Status, statusFailed)
+		}
+		var input struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(got.Input, &input); err != nil {
+			t.Fatalf("unmarshal action[%d] Input: %v", i, err)
+		}
+		if input.Message != want {
+			t.Errorf("action[%d].Input.message = %q, want %q", i, input.Message, want)
+		}
+	}
+}
+
 // TestParseUnknownItemTypeWarnsWithoutError covers forward compatibility: an
 // item kind this parser does not model is counted and skipped, not fatal.
 func TestParseUnknownItemTypeWarnsWithoutError(t *testing.T) {

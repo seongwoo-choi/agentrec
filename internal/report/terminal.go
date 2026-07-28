@@ -48,9 +48,9 @@ const (
 // rather than silently missing.
 const none = "(none)"
 
-// zeroClock stands in for an action whose start time the provider never
-// reported, keeping the timestamp column aligned.
-const zeroClock = "--:--:--"
+// zeroClock states that the provider supplied no action timestamp. It must not
+// look like an observed clock value.
+const zeroClock = "not reported"
 
 // maxValueRunes bounds how much of any dynamic value is displayed. Long values
 // are cut to this width including the ellipsis, so one pathological path or
@@ -197,6 +197,7 @@ var labels = map[string]string{
 	action.TypeMCPCall:       "MCP",
 	action.TypeSubagentSpawn: "SUBAGENT",
 	action.TypeAgentMessage:  "MESSAGE",
+	action.TypeProviderError: "ERROR",
 }
 
 func label(actionType string) string {
@@ -221,6 +222,7 @@ var detailKeys = map[string][]string{
 	action.TypeWebFetch:      {"url"},
 	action.TypeMCPCall:       {"tool", "name"},
 	action.TypeSubagentSpawn: {"name"},
+	action.TypeProviderError: {"message"},
 }
 
 // fallbackKeys orders the whole allowlist for action kinds without a preference

@@ -33,6 +33,7 @@ const (
 	TypeSubagentSpawn = "subagent.spawn"
 	TypeToolCall      = "tool.call"
 	TypeRunResult     = "run.result"
+	TypeProviderError = "provider.error"
 )
 
 // Action is one normalized step in a recorded run. Input and Result hold

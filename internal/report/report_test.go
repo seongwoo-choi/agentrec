@@ -92,7 +92,7 @@ PROVIDER-REPORTED ACTIONS
   Exit         0
   Duration     226ms
 
---:--:--  PROBE  probe
+not reported  PROBE  probe
   Source       codex
   Assurance    provider_reported
   Parent       a2
@@ -151,7 +151,7 @@ const goldenMarkdown = "# Action Timeline\n" + `
 
 ### Action 3
 
-- ` + "`Time`" + `: ` + "`--:--:--`" + `
+- ` + "`Time`" + `: ` + "`not reported`" + `
 - ` + "`Action`" + `: ` + "`PROBE`" + `
 - ` + "`Detail`" + `: ` + "`probe`" + `
 - ` + "`Source`" + `: ` + "`codex`" + `
@@ -250,6 +250,31 @@ func TestEmptyReportStatesEverySectionIsEmpty(t *testing.T) {
 	}
 	if got := renderMarkdown(t, Report{}); got != emptyMarkdown {
 		t.Errorf("RenderMarkdown() =\n%s\nwant\n%s", got, emptyMarkdown)
+	}
+}
+
+func TestMissingProviderTimestampIsExplicitlyUnavailable(t *testing.T) {
+	report := Report{Actions: []action.Action{{Type: action.TypeShellExec}}}
+	for _, got := range []string{renderTerminal(t, report), renderMarkdown(t, report)} {
+		if !strings.Contains(got, "not reported") {
+			t.Errorf("rendering =\n%s\nwant missing provider time stated as not reported", got)
+		}
+		if strings.Contains(got, "--:--:--") {
+			t.Errorf("rendering =\n%s\nmust not show a clock-like placeholder for missing evidence", got)
+		}
+	}
+}
+
+func TestProviderErrorMessageIsVisibleAsBoundedActionDetail(t *testing.T) {
+	report := Report{Actions: []action.Action{{
+		Type:   action.TypeProviderError,
+		Status: "failed",
+		Input:  json.RawMessage(`{"message":"skill context budget shortened"}`),
+	}}}
+	for _, got := range []string{renderTerminal(t, report), renderMarkdown(t, report)} {
+		if !strings.Contains(got, "ERROR") || !strings.Contains(got, "skill context budget shortened") {
+			t.Errorf("rendering =\n%s\nwant provider error label and message", got)
+		}
 	}
 }
 

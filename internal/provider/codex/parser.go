@@ -66,7 +66,8 @@ type item struct {
 	AggregatedOutput string `json:"aggregated_output"`
 	ExitCode         *int   `json:"exit_code"`
 	// Agent message field.
-	Text string `json:"text"`
+	Text    string `json:"text"`
+	Message string `json:"message"`
 }
 
 // commandInput is the normalized input body for a command execution.
@@ -84,6 +85,10 @@ type commandResult struct {
 // messageResult is the normalized result body for an agent message.
 type messageResult struct {
 	Text string `json:"text"`
+}
+
+type providerErrorInput struct {
+	Message string `json:"message"`
 }
 
 // Parse reads Codex JSONL events and returns normalized actions in the order
@@ -159,6 +164,25 @@ func Parse(r io.Reader) (ParseResult, error) {
 				FinishedAt: parseTime(ev.Timestamp),
 				Status:     statusCompleted,
 				Result:     result,
+			})
+		case ev.Type == "item.completed" && ev.Item.Type == "error":
+			if !canClaimID(index, ev.Item.ID) {
+				res.WarningCount++
+				continue
+			}
+			index[ev.Item.ID] = len(res.Actions)
+			input, err := json.Marshal(providerErrorInput{Message: ev.Item.Message})
+			if err != nil {
+				continue
+			}
+			res.Actions = append(res.Actions, action.Action{
+				ID:         ev.Item.ID,
+				Type:       action.TypeProviderError,
+				Provider:   providerName,
+				Assurance:  action.AssuranceProviderReported,
+				FinishedAt: parseTime(ev.Timestamp),
+				Status:     statusFailed,
+				Input:      input,
 			})
 		case metadataEvents[ev.Type]:
 			// Known stream bookkeeping that carries no action of its own.
