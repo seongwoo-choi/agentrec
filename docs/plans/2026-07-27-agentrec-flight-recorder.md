@@ -992,7 +992,7 @@ Required before public release:
 - `SECURITY.md` explaining bundle sensitivity;
 - `docs/assurance-model.md` distinguishing provider-reported and observed evidence;
 - `docs/limitations.md` explicitly denying syscall completeness in native mode;
-- Apache-2.0 license;
+- MIT license with third-party notices;
 - checksummed release binaries;
 - README flow from installation to first trace in under ten minutes;
 - no company-specific source, path, prompt or credential in repository history.

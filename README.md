@@ -6,6 +6,7 @@
 
 [![CI](https://github.com/seongwoo-choi/agentrec/actions/workflows/ci.yml/badge.svg)](https://github.com/seongwoo-choi/agentrec/actions/workflows/ci.yml)
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
 
@@ -47,10 +48,6 @@ stream still fits.
 ```bash
 go install github.com/seongwoo-choi/agentrec/cmd/agentrec@latest
 ```
-
-> **Release candidate:** this repository is currently private and no reuse
-> license has been selected. The install path is for authorized evaluation; it
-> does not grant permission to use, copy, modify or redistribute the project.
 
 **Commit the verification config.** A run is verified only against checks the
 repository already held. Copy `.agentrec.example.yaml` to `.agentrec.yaml` and
@@ -225,3 +222,9 @@ go vet ./...
 gofmt -l .
 go build ./...
 ```
+
+## License
+
+agentrec is available under the [MIT License](LICENSE). Third-party attributions
+and dependency licenses are preserved in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
