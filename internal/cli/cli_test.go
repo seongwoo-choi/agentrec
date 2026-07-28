@@ -139,6 +139,50 @@ func TestListReportsRunsNewestFirstWithStableTieBreak(t *testing.T) {
 	}
 }
 
+func TestListFiltersByCleanedWorkingDirectory(t *testing.T) {
+	root := home(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	target := filepath.Join(work, "project")
+	if err := os.MkdirAll(filepath.Join(target, "child"), 0o700); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	writeRunIn(t, root, "match", target+string(filepath.Separator)+"child"+string(filepath.Separator)+"..")
+	writeRunIn(t, root, "other", filepath.Join(work, "other"))
+	writeRunIn(t, root, "relative", "project/child/..")
+	writeRunIn(t, root, "missing", "")
+	if err := os.Mkdir(filepath.Join(root, "malformed"), 0o700); err != nil {
+		t.Fatalf("create malformed run: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "malformed", "manifest.json"), []byte(`{"cwd":42}`), 0o600); err != nil {
+		t.Fatalf("write malformed manifest: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "unreadable"), 0o700); err != nil {
+		t.Fatalf("create unreadable run: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "unreadable", "manifest.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("write unreadable manifest: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "list", "--cwd", "./project/child/..")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
+		"match  claude  project  2026-07-27T09:00:00Z  unknown",
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("stdout =\n%q\nwant\n%q", stdout, want)
+	}
+	if stderr != "Warnings: 2 unreadable run(s).\n" {
+		t.Errorf("stderr = %q, want malformed and unreadable manifests reported", stderr)
+	}
+}
+
 // writeRunIn records a run whose manifest names cwd as the directory it ran in.
 func writeRunIn(t *testing.T, root, id, cwd string) {
 	t.Helper()
@@ -277,6 +321,30 @@ func TestListRejectsExtraArguments(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "usage") {
 		t.Errorf("stderr = %q, want it to state the usage", stderr)
+	}
+}
+
+func TestListRejectsMissingOrExtraCWDArguments(t *testing.T) {
+	home(t)
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"missing path", []string{"list", "--cwd"}},
+		{"extra argument", []string{"list", "--cwd", "path", "extra"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			code, stdout, stderr := run(t, tt.args...)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2", code)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+			if stderr != "usage: agentrec list [--cwd <path>]\n" {
+				t.Errorf("stderr = %q, want the list usage", stderr)
+			}
+		})
 	}
 }
 

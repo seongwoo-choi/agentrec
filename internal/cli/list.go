@@ -29,16 +29,25 @@ type runSummary struct {
 
 // runList prints the recorded runs, newest first.
 func runList(args []string, stdout, stderr io.Writer) int {
+	cwd := ""
 	if len(args) != 0 {
-		fmt.Fprint(stderr, "usage: agentrec list\n")
-		return 2
+		if len(args) != 2 || args[0] != "--cwd" {
+			fmt.Fprint(stderr, "usage: agentrec list [--cwd <path>]\n")
+			return 2
+		}
+		var err error
+		cwd, err = filepath.Abs(args[1])
+		if err != nil {
+			fmt.Fprintf(stderr, "cli: resolve working directory: %v\n", err)
+			return 1
+		}
 	}
 	root, err := runsRoot()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	runs, unreadable, err := listRuns(root)
+	runs, unreadable, err := listRuns(root, cwd)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -68,13 +77,14 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// listRuns summarizes every readable run under root, newest first, and reports
-// how many run directories it could not read. An entry that never was a run —
+// listRuns summarizes readable runs under root, newest first, and reports how
+// many run directories it could not read. When cwd is nonempty, it includes
+// only runs recorded there. An entry that never was a run —
 // a stray file, a symlink, a name no run could have — is passed over silently:
 // only a run directory that will not open is a run missing from the table. A
 // runs directory that does not exist yet is a tool that has recorded nothing,
 // not a failure.
-func listRuns(root string) ([]runSummary, int, error) {
+func listRuns(root, cwd string) ([]runSummary, int, error) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, 0, nil
@@ -96,6 +106,9 @@ func listRuns(root string) ([]runSummary, int, error) {
 		manifest, err := readManifest(dir)
 		if err != nil {
 			unreadable++
+			continue
+		}
+		if cwd != "" && (!filepath.IsAbs(manifest.CWD) || filepath.Clean(manifest.CWD) != cwd) {
 			continue
 		}
 		runs = append(runs, runSummary{
@@ -141,7 +154,7 @@ func projectName(cwd string) string {
 	if !filepath.IsAbs(cwd) {
 		return unknownValue
 	}
-	switch base := filepath.Base(cwd); base {
+	switch base := filepath.Base(filepath.Clean(cwd)); base {
 	case string(filepath.Separator), ".", "..":
 		return unknownValue
 	default:

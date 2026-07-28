@@ -114,7 +114,7 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 // rather than shorter, so the difficulty is reported instead of the newest run
 // that happened to be readable.
 func newestRunID(root string) (string, error) {
-	runs, unreadable, err := listRuns(root)
+	runs, unreadable, err := listRuns(root, "")
 	if err != nil {
 		return "", err
 	}

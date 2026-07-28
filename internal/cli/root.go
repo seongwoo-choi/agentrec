@@ -10,7 +10,7 @@ const usage = `agentrec records coding-agent execution as a replayable action ti
 
 Usage:
   agentrec trace <provider> [--verify] -- <args...>
-  agentrec list
+  agentrec list [--cwd <path>]
   agentrec show <run-id>
 `
 
