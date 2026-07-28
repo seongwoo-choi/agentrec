@@ -555,6 +555,77 @@ func TestShowDerivesSupervisorFieldsFromAnActiveRun(t *testing.T) {
 	}
 }
 
+func TestExitReason(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest storage.Manifest
+		result   *processResult
+		want     string
+	}{
+		{
+			name:     "manifest wins",
+			manifest: storage.Manifest{ExitReason: "interrupted"},
+			result:   &processResult{ExitReason: "completed"},
+			want:     "interrupted",
+		},
+		{
+			name:   "process result fallback",
+			result: &processResult{ExitReason: "completed"},
+			want:   "completed",
+		},
+		{name: "both absent", want: unknownValue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := exitReason(tt.manifest, tt.result); got != tt.want {
+				t.Errorf("exitReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunDuration(t *testing.T) {
+	ended := late.Add(time.Second)
+	beforeStart := late.Add(-time.Second)
+	tests := []struct {
+		name     string
+		manifest storage.Manifest
+		result   *processResult
+		want     string
+	}{
+		{
+			name:     "process duration wins",
+			manifest: storage.Manifest{StartedAt: late, EndedAt: &ended},
+			result:   &processResult{DurationMillis: 1500},
+			want:     "1.5s",
+		},
+		{
+			name:     "manifest times fallback",
+			manifest: storage.Manifest{StartedAt: late, EndedAt: &ended},
+			want:     "1s",
+		},
+		{
+			name:     "missing end",
+			manifest: storage.Manifest{StartedAt: late},
+			want:     unknownValue,
+		},
+		{
+			name:     "reversed end",
+			manifest: storage.Manifest{StartedAt: late, EndedAt: &beforeStart},
+			want:     unknownValue,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runDuration(tt.manifest, tt.result); got != tt.want {
+				t.Errorf("runDuration() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShowReportsTheProviderVersionWhenRecorded(t *testing.T) {
 	root := home(t)
 	b, err := storage.Create(root, "run-a", storage.Manifest{
