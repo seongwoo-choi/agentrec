@@ -148,6 +148,11 @@ func runShadow(args []string, stdout, stderr io.Writer) int {
 // it before Run starts so they can synchronize on forwarding without sleeps.
 var commandSignalForwarded = func() {}
 
+// commandBeforeProviderStart is a no-op in production. Tests replace it to
+// inject a signal at the last userspace boundary before the provider process
+// starts.
+var commandBeforeProviderStart = func() {}
+
 type commandLaunch struct {
 	start  func() error
 	result chan error
@@ -222,7 +227,17 @@ func (s *commandSignals) run() {
 			if interrupted {
 				req.result <- runner.ErrInterrupted
 			} else {
-				req.result <- req.start()
+				commandBeforeProviderStart()
+				select {
+				case sig := <-s.incoming:
+					latch(sig)
+				default:
+				}
+				if interrupted {
+					req.result <- runner.ErrInterrupted
+				} else {
+					req.result <- req.start()
+				}
 			}
 		case result := <-s.stop:
 			signal.Stop(s.incoming)

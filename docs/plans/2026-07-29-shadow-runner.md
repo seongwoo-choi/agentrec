@@ -213,10 +213,11 @@ Done:
   after the checkouts are gone.
 - Task 5: per-leg owned cleanup, cleanup failure exits 1 and is printed, one
   operating-system signal subscription durably latches the first signal and
-  restores default disposition before forwarding it, serializes the final
-  provider start through that latch, and out-of-process tests cover setup/version
-  discovery without provider launch, both leg positions, repository release,
-  plus the second-signal escape hatch without fixed sleeps.
+  restores default disposition before forwarding it, and serializes the final
+  provider launch through that latch. A deterministic boundary seam proves a
+  signal queued before that launch decision prevents it; out-of-process tests
+  cover setup/version discovery without provider launch, both leg positions,
+  repository release, plus the second-signal escape hatch without fixed sleeps.
 - Source drift checks include the common repository config digest in addition
   to `HEAD`, status, index, refs and worktree registrations; observed config
   mutation stops the second provider without destructive restoration.

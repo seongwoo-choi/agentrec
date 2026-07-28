@@ -65,6 +65,28 @@ func TestCommandSignalBridgeSettlesAQueuedSignalBeforeLaunchAndStop(t *testing.T
 	}
 }
 
+func TestCommandSignalBridgeStopsAtTheProviderStartBoundary(t *testing.T) {
+	signals := holdCommandSignals()
+	old := commandBeforeProviderStart
+	commandBeforeProviderStart = func() { signals.incoming <- syscall.SIGINT }
+	t.Cleanup(func() { commandBeforeProviderStart = old })
+
+	launched := false
+	err := signals.Start(func() error {
+		launched = true
+		return nil
+	})
+	if !errors.Is(err, runner.ErrInterrupted) {
+		t.Fatalf("provider release error = %v, want ErrInterrupted", err)
+	}
+	if launched {
+		t.Fatal("provider release ran after the boundary received an interrupt")
+	}
+	if !signals.Stop() {
+		t.Fatal("Stop did not report the latched signal")
+	}
+}
+
 func waitForRecorderExit(t *testing.T, rec *exec.Cmd, resume string, stderr *bytes.Buffer) {
 	t.Helper()
 	done := make(chan struct{})

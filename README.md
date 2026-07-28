@@ -219,8 +219,8 @@ What the command does and does not give you:
   checkout exists.
 - **The task is one command-line argument.** The task file is read once — one
   regular, non-symlink, UTF-8 file of at most 64 KiB — and handed to each agent
-  as `claude -p <task>` and `codex exec <task>`. A prompt on stdin, or spread
-  over several arguments, is not supported here.
+  as `claude -p -- <task>` and `codex exec --json -- <task>`. A prompt on stdin,
+  or spread over several arguments, is not supported here.
 - **Verification is mandatory, and the legs are serialized.** Both runs are
   verified against the committed `.agentrec.yaml`, and they execute one after
   another. Their checks do not overlap, but mutable authentication, caches,
@@ -244,9 +244,12 @@ was interrupted. **A
 provider's own exit code is evidence in its bundle and is never passed through**
 by the aggregate command.
 
-An interrupt stops the current leg's process group, finalizes that leg's
-evidence, removes the checkouts and never launches the leg that had not started;
-the comparison then shows the runner that did not run as `(not run)`. If
+An interrupt already held or queued at the final provider-launch decision prevents
+that provider from starting. One delivered after that userspace decision stops
+the current leg's process group; POSIX signal delivery and process start are not
+one atomic operation. Agentrec finalizes that leg's evidence, removes the
+checkouts and never launches the next leg; the comparison then shows the runner
+that did not run as `(not run)`. If
 agentrec is killed outright — `SIGKILL`, or the machine going down — the
 leftover checkout is recovered by running `git worktree prune` in the source
 repository and deleting the leftover directory under `$AGENTREC_HOME/shadow`.
