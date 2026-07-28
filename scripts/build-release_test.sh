@@ -98,14 +98,15 @@ if [ -e "$tmp/go-called" ]; then
 fi
 
 rm -f "$tmp/go-called"
-unsafe_output="${tmp}/${escape}[31mevil"
-if AGENTREC_TEST_GO_CALLED="$tmp/go-called" PATH="$tmp/bin:$PATH" \
-	"$repo_root/scripts/build-release.sh" \
-	v0.1.0 \
-	0123456789abcdef0123456789abcdef01234567 \
-	2026-07-28T00:00:00Z \
-	"$unsafe_output" >"$stdout" 2>"$stderr"; then
-	echo "build-release.sh accepted a control character in the output path" >&2
+unsafe_output="${escape}[31mevil"
+if (cd "$tmp" && \
+	AGENTREC_TEST_GO_CALLED="$tmp/go-called" PATH="$tmp/bin:$PATH" \
+		"$repo_root/scripts/build-release.sh" \
+		v0.1.0 \
+		0123456789abcdef0123456789abcdef01234567 \
+		2026-07-28T00:00:00Z \
+		"$unsafe_output") >"$stdout" 2>"$stderr"; then
+	echo "build-release.sh accepted a leading control character in the output path" >&2
 	exit 1
 fi
 case $(cat "$stdout" "$stderr") in
@@ -114,8 +115,8 @@ case $(cat "$stdout" "$stderr") in
 	exit 1
 	;;
 esac
-if [ -e "$unsafe_output" ] || [ -e "$tmp/go-called" ]; then
-	echo "build-release.sh acted before rejecting the output-path control character" >&2
+if [ -e "$tmp/$unsafe_output" ] || [ -e "$tmp/go-called" ]; then
+	echo "build-release.sh acted before rejecting the leading output-path control character" >&2
 	exit 1
 fi
 

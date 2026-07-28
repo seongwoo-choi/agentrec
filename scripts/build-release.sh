@@ -61,7 +61,10 @@ if [ "$normalized" != "$built" ]; then
 fi
 # A path, not an option and not a shell fragment: leading dashes and the
 # characters a careless caller could smuggle a second word in with are refused.
-check_arg "output directory" "$output" '[^-][^[:cntrl:]$`|;&<>*?"'"'"']*'
+case $output in
+-*) fail "invalid output directory" ;;
+esac
+check_arg "output directory" "$output" '[^[:cntrl:]$`|;&<>*?"'"'"']+'
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 package=github.com/seongwoo-choi/agentrec/internal/cli
