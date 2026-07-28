@@ -48,6 +48,10 @@ stream still fits.
 go install github.com/seongwoo-choi/agentrec/cmd/agentrec@latest
 ```
 
+> **Release candidate:** this repository is currently private and no reuse
+> license has been selected. The install path is for authorized evaluation; it
+> does not grant permission to use, copy, modify or redistribute the project.
+
 **Commit the verification config.** A run is verified only against checks the
 repository already held. Copy `.agentrec.example.yaml` to `.agentrec.yaml` and
 commit it — each command is launched directly, with no shell, so an argument is
