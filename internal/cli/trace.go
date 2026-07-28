@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/evidence"
@@ -21,7 +20,6 @@ import (
 	"github.com/seongwoo-choi/agentrec/internal/provider/codex"
 	"github.com/seongwoo-choi/agentrec/internal/report"
 	"github.com/seongwoo-choi/agentrec/internal/runner"
-	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
 // traceDelimiter separates agentrec's own arguments from the provider's. It is
@@ -196,156 +194,34 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	// timeout: how long an agent may work is the operator's decision, taken with
 	// that same Ctrl-C.
 	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(interrupt, handledSignals...)
 	defer signal.Stop(interrupt)
+	stopHolding := stopHoldingAfterTheFirstSignal()
+	defer stopHolding()
 
-	// The manifest records the invocation exactly as it will be launched,
-	// executable included, so the recorded argv is the command that ran and not
-	// the one the operator typed. Storage sets the redaction rule version.
-	bundle, err := storage.Create(root, runID, storage.Manifest{
-		Provider:        name,
-		ProviderVersion: cmd.Version,
-		Argv:            append([]string{cmd.Executable}, cmd.Args...),
-		CWD:             cwd,
-		StartedAt:       time.Now(),
-	})
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	out := record(recordRequest{
+		Provider:  name,
+		Command:   cmd,
+		Parser:    parse,
+		Prompt:    prompt,
+		CWD:       cwd,
+		RepoRoot:  repo.Root(),
+		RunsRoot:  root,
+		RunID:     runID,
+		Verify:    verify,
+		Interrupt: interrupt,
+		Timeline:  stdout,
+	}, stderr)
+
+	// A run that never reached the supervisor has left a finalized bundle saying
+	// so, and the recorder has already said why.
+	if !out.Recorded {
 		return exitFailure
 	}
-
-	// The baseline is pinned before the prompt is written and before the
-	// provider is launched: what the run changed can only be measured against
-	// where the repository stood before any of the run happened. A baseline that
-	// could not be pinned is a run whose changes could never be attributed, so
-	// it is not started. Sanitizing goes through the bundle's own redactor, so a
-	// secret the evidence carries reads as the secret the rest of the run named.
-	startCtx, cancelStart := context.WithTimeout(context.Background(), evidenceStartTimeout)
-	capture, err := evidence.Start(startCtx, repo.Root(), runID, bundle.Dir(), evidence.Options{
-		Sanitize: bundle.SanitizeText,
-	})
-	cancelStart()
-	if err != nil {
-		return unrecordable(bundle, stderr, runID, err)
-	}
-	// Deferred before anything else can fail, so a prompt that could not be
-	// written or a provider that never started still takes the ref back out of
-	// the repository. Finalize closes the capture itself, and this close reports
-	// the same outcome, so it stands down once the run has been measured.
-	evidenceMeasured := false
-	defer func() {
-		if evidenceMeasured {
-			return
-		}
-		closeCtx, cancelClose := context.WithTimeout(context.Background(), evidenceCloseTimeout)
-		defer cancelClose()
-		if err := capture.Close(closeCtx); err != nil {
-			fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
-		}
-	}()
-
-	// The checks are fixed before the provider starts, for the same reason the
-	// baseline is: what a run is verified against has to be what an operator
-	// reviewed, and a configuration read afterwards is one the run could have
-	// written. A verification that could not be pinned is a run whose result
-	// could never be trusted, so it is not started.
-	var verifier *evidence.PinnedVerification
-	verifierClosed := false
-	if verify {
-		pinCtx, cancelPin := context.WithTimeout(context.Background(), verifyPinTimeout)
-		verifier, err = evidence.PinVerification(pinCtx, repo.Root(), bundle.Dir(), filepath.Join(repo.Root(), verifyConfigFile), evidence.VerificationOptions{
-			Sanitize: bundle.SanitizeText,
-		})
-		cancelPin()
-		if err != nil {
-			return unrecordable(bundle, stderr, runID, err)
-		}
-		// Deferred for the paths that return before the checks are run. Close
-		// reports the same outcome every time, so the one below stands down once
-		// the run has closed the verification itself.
-		defer func() {
-			if verifierClosed {
-				return
-			}
-			if err := verifier.Close(); err != nil {
-				fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
-			}
-		}()
-	}
-
-	// The prompt is written before the provider starts: a run whose own request
-	// could not be recorded is not one to launch, because whatever it then did
-	// would be evidence with nothing to explain it.
-	if prompt != "" {
-		if err := bundle.WritePrompt(prompt); err != nil {
-			return unrecordable(bundle, stderr, runID, err)
-		}
-	}
-
-	res, runErr := runner.Run(context.Background(), runner.Request{
-		Command:   cmd,
-		CWD:       cwd,
-		Bundle:    bundle,
-		Parser:    parse,
-		Interrupt: interrupt,
-	})
-	// Handed straight back to the operating system now that the run this
-	// process was holding interrupts for is over. Everything below is agentrec's
-	// own work on the operator's terminal, and a Ctrl-C during it is an operator
-	// who wants out: buffering it here would swallow the one signal they have.
-	// The deferred Stop stays for the paths that return before the run started.
-	signal.Stop(interrupt)
-
-	// Measured now that the provider's process group has ended and its streams
-	// and manifest are on disk, so what the repository shows is what the run
-	// left. Attempted for every ending, including a bad one: an interrupted or
-	// failed run changed the repository too, and the lock is still held, so
-	// nothing else has touched it in between.
-	finalizeCtx, cancelFinalize := context.WithTimeout(context.Background(), evidenceFinalizeTimeout)
-	_, evidenceErr := capture.Finalize(finalizeCtx)
-	cancelFinalize()
-	evidenceMeasured = true
-
-	// The checks run against the repository the run left, and after it has been
-	// measured, so nothing a check writes can be read as the agent's work. They
-	// run whatever the provider did: a failed or interrupted run still left work
-	// behind, and whether it holds up is the question the checks answer.
-	var (
-		verification      evidence.VerificationResult
-		verifyErr         error
-		verifyCloseErr    error
-		verifyInterrupted bool
-	)
-	if verifier != nil {
-		// Its own handler, installed for the checks alone: an operator's Ctrl-C
-		// during a verification is a verification they want stopped, and the
-		// cancellation is what takes the check's process group down with it. A
-		// SIGTERM says the same thing, from a parent rather than from a terminal.
-		verifyCtx, stopVerify := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		verification, verifyErr = verifier.Run(verifyCtx)
-		verifyInterrupted = verifyCtx.Err() != nil
-		stopVerify()
-		verifyCloseErr = verifier.Close()
-		verifierClosed = true
-	}
-
-	// The report is read back from the finalized bundle rather than rendered
-	// from what this process still holds, so what the operator sees is what was
-	// persisted. It is attempted for every ending, including a bad one: partial
-	// evidence is what an interrupted or failed run has to show.
-	renderErr := renderRun(stdout, root, runID)
-	if evidenceErr != nil {
-		fmt.Fprintf(stderr, "cli: run %s: capture repository evidence: %v\n", runID, evidenceErr)
-	}
-	if renderErr != nil {
-		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, renderErr)
-	}
-	for _, err := range []error{verifyErr, verifyCloseErr} {
-		if err != nil {
-			fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
-		}
-	}
-	if verifyInterrupted {
+	// An interrupt that arrived while the recorder was measuring, verifying or
+	// filing the report is the operator's own ending, whatever the provider had
+	// reported before it.
+	if out.Interrupted {
 		return exitInterrupted
 	}
 	// A run whose repository evidence is missing is not a run to report as the
@@ -353,27 +229,13 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	// the exit code says so. A verification that did not pass is the recorder's
 	// own finding about the work, and it fails the command whatever the provider
 	// reported — while a verification that passed leaves that reporting alone.
-	if evidenceErr != nil || renderErr != nil || verifyErr != nil || verifyCloseErr != nil {
+	if out.Incomplete {
 		return exitFailure
 	}
-	if verifier != nil && verification.Status != evidence.VerificationPassed {
+	if out.Verified && out.Verification.Status != evidence.VerificationPassed {
 		return exitFailure
 	}
-	return traceExit(res, runErr, stderr, runID)
-}
-
-// unrecordable ends a run that could not be recorded before its provider was
-// ever launched. The bundle is finalized rather than left open, so the run
-// directory describes a run that stopped instead of one still going.
-func unrecordable(bundle *storage.Bundle, stderr io.Writer, runID string, cause error) int {
-	fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, cause)
-	if err := bundle.Finalize(storage.Finalization{
-		EndedAt:    time.Now(),
-		ExitReason: runner.ReasonStorageError,
-	}); err != nil {
-		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
-	}
-	return exitFailure
+	return traceExit(out.Result, out.RunErr, stderr, runID)
 }
 
 // traceExit reports the run to the shell. How the run was ended comes first: an
@@ -400,34 +262,6 @@ func traceExit(res runner.Result, runErr error, stderr io.Writer, runID string) 
 	}
 	fmt.Fprintf(stderr, "cli: run %s ended: %s\n", runID, res.ExitReason)
 	return exitFailure
-}
-
-// renderRun writes the recorded run into the bundle and then prints it,
-// announcing the run ID first so the operator can ask for it again later. The
-// bundle is read once and rendered twice from what it said, so the Markdown
-// filed under the run and the timeline on the terminal describe the same
-// reading of the same evidence.
-//
-// The report is written first, and a run whose report could not be written is
-// reported as a failure rather than shown: the terminal keeps what it was given
-// only until the next command, while the bundle is what is left of a run once
-// the repository it was recorded against has moved on.
-func renderRun(stdout io.Writer, root, runID string) error {
-	rep, err := readRun(root, runID)
-	if err != nil {
-		return err
-	}
-	dir, err := runDir(root, runID)
-	if err != nil {
-		return err
-	}
-	if err := installReport(dir, rep); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(stdout, "Run ID: %s\n\n", runID); err != nil {
-		return err
-	}
-	return report.RenderTerminal(stdout, rep)
 }
 
 // installReport writes the rendered report into the run directory. The run is

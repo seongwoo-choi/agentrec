@@ -8,6 +8,8 @@
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+English | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
+
 </div>
 
 ## The problem
@@ -96,6 +98,9 @@ agentrec trace claude --verify -- -p "add a regression test for the parser"
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
 
+# Record the same task with both agents, from one commit
+agentrec shadow run task.md --runner claude --runner codex
+
 # Read runs back
 agentrec list
 agentrec list --cwd /Users/you/code/agentrec
@@ -157,6 +162,91 @@ VERIFICATION-OBSERVED RESULT
 before printing anything, once and never again: a report already standing at that
 name is refused rather than overwritten.
 
+## Comparing two agents on one task
+
+`agentrec shadow run` records one task twice — once with Claude Code, once with
+Codex — from a single committed baseline, and prints the two recorded runs side
+by side:
+
+```bash
+agentrec shadow run task.md --runner claude --runner codex
+```
+
+Each leg is recorded in a disposable **detached Git worktree** created from the
+source repository's `HEAD`, under `$AGENTREC_HOME/shadow/<group>/<runner>` with
+mode `0700`, and removed once that leg's evidence has been closed. Both legs
+leave ordinary run bundles, so `agentrec list` and `agentrec show <run-id>` read
+them back after the checkouts are gone. The comparison itself is printed to
+stdout; each leg's durable `report.md` stays in its own bundle.
+
+The comparison prints one block per runner, always in this order and with these
+fields in this order — a run ID, how the checks ended and what they were pinned
+to, how the process ended, what the run left in its checkout, and how much it
+did:
+
+```
+SHADOW COMPARISON
+
+claude
+  Run ID       20260729T101500.000000000Z-1a2b3c4d
+  Verification PASS
+  Config SHA-256 e20695bb3ebee3381b54da6fc46b6b1efa1adc9b87a5eb99b45505b5dbdfae3f
+  Exit Reason  completed
+  Exit Code    0
+  Duration     2m50.625s
+  Repository   AVAILABLE  1 files (1 tracked, 0 untracked)  +18/-1, 0 binary
+  Actions      12
+  Warnings     0
+
+codex
+  ...
+```
+
+What the command does and does not give you:
+
+- **Isolation narrows interference; it is not causal attribution.** Each leg's
+  repository delta is still recorded as `observed during run, not causal proof`.
+- **No score, no winner, no recommendation.** The comparison shows recorded
+  fields and nothing derived from them. Which run to prefer is the reader's
+  judgement. Provider-reported cost and token fields are not in the recorded
+  evidence today, so the comparison does not show them.
+- **Committed bytes only.** A linked worktree receives what `HEAD` holds:
+  untracked `.env` files and local credentials are not copied into it. The
+  provider CLIs use their own existing authentication and cache; agentrec adds
+  no credential transport and runs no workspace-preparation step, so a project
+  whose setup is not committed is a project each leg starts without.
+- **Repositories it cannot prepare are refused, not half-prepared.** A committed
+  `.gitmodules` or a committed Git LFS pointer file is rejected before any
+  checkout exists.
+- **The task is one command-line argument.** The task file is read once — one
+  regular, non-symlink, UTF-8 file of at most 64 KiB — and handed to each agent
+  as `claude -p <task>` and `codex exec <task>`. A prompt on stdin, or spread
+  over several arguments, is not supported here.
+- **Verification is mandatory, and the legs are serialized.** Both runs are
+  verified against the committed `.agentrec.yaml`, and they execute one after
+  another, so the checks and any external state they touch never overlap.
+- **The source checkout is left as it was found.** It must be clean, it is
+  locked for the whole command, and its `HEAD`, status, refs, worktree list and
+  tracked bytes are unchanged afterwards — on success, on failure, and on an
+  interrupt.
+
+Exit codes: `2` for a usage or preflight refusal — a runner named twice or
+missing, an unreadable task file, a dirty checkout, an uncommitted
+`.agentrec.yaml`, an `AGENTREC_HOME` inside the repository — all of which happen
+before any checkout or provider exists. Then `0` when both legs completed and
+both verifications passed, `1` when a leg failed, ended incomplete, or a
+checkout could not be removed, and `130` when the run was interrupted. **A
+provider's own exit code is evidence in its bundle and is never passed through**
+by the aggregate command.
+
+An interrupt stops the current leg's process group, finalizes that leg's
+evidence, removes the checkouts and never launches the leg that had not started;
+the comparison then shows the runner that did not run as `(not run)`. If
+agentrec is killed outright — `SIGKILL`, or the machine going down — the
+leftover checkout is recovered by running `git worktree prune` in the source
+repository and deleting the leftover directory under `$AGENTREC_HOME/shadow`.
+There is no automatic stale-worktree collection.
+
 ## Where runs are stored
 
 Under `$AGENTREC_HOME/runs` when that is set, otherwise
@@ -186,10 +276,17 @@ Exit codes: `0` provider completed and any verification passed; `1`–`125` the
 provider's own exit code passed through; `1` recording, rendering or verification
 failed; `2` agentrec was called wrongly; `130` interrupted.
 
-Ctrl-C and SIGTERM are both held rather than obeyed where they land: agentrec
-stops the provider's process group, closes out the manifest, measures the
-repository, writes the report, and exits `130` — so an interrupted run says how
-it ended instead of being left standing at `PENDING`.
+Ctrl-C and SIGTERM are both held rather than obeyed where they land, for the
+whole recording and not only while the provider runs: agentrec stops the
+provider's process group, closes out the manifest, measures the repository, runs
+the pinned checks, files the report, and exits `130` — so a run interrupted at
+any point in that sequence says how it ended instead of being left standing at
+`PENDING`. The first signal is the last one held: the disposition then goes back
+to the operating system, so a second Ctrl-C ends the process where it stands.
+
+`process/result.json` records an exit code when the process exited and the
+terminating signal when it was killed by one. A process killed by a signal has
+no exit code, and neither field is inferred from the other.
 
 ## Security
 
@@ -234,6 +331,11 @@ Behavior claims are backed by
 fixed 20-attempt checkpoint plus follow-on real mutations, covering verification
 `FAIL`, provider nonzero, config `TAINTED`, interruption, and what those runs do
 **not** establish.
+
+`agentrec shadow run` is **not** covered by that evidence. Its behavior above —
+isolation, cleanup, signal handling, exit codes and comparison output — is
+backed by repository tests using stand-in providers; it has not yet been
+recorded against the real Claude Code and Codex CLIs.
 
 ## Development
 

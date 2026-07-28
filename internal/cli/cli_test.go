@@ -1687,8 +1687,80 @@ func TestMain(m *testing.M) {
 		os.Exit(codexHelper(os.Args[1:]))
 	case verifyHelperName:
 		os.Exit(verifyHelper(os.Args[1:]))
+	case gitHelperName:
+		os.Exit(gitHelper(os.Args[1:]))
 	}
 	os.Exit(m.Run())
+}
+
+// --- git stand-in mode -------------------------------------------------------
+//
+// agentrec asks the repository its questions by launching Git directly, so the
+// test binary can stand in for Git the same way it stands in for a provider.
+// The stand-in only exists to hold one command open: it announces the question
+// it was asked, waits to be released, and then hands the question to the real
+// Git and reports back exactly what Git said. That window is where a test puts
+// a signal it needs to arrive at a particular moment of the recording.
+
+// gitHelperName is the name the test binary is symlinked under when it stands
+// in for Git.
+const gitHelperName = "git"
+
+const (
+	// gitRealEnv names the Git the stand-in delegates to.
+	gitRealEnv = "AGENTREC_TEST_GIT_REAL"
+	// gitPauseEnv names the file the stand-in creates when it has been asked
+	// the question a test is waiting for.
+	gitPauseEnv = "AGENTREC_TEST_GIT_PAUSE"
+	// gitResumeEnv names the file a test creates to release the stand-in.
+	gitResumeEnv = "AGENTREC_TEST_GIT_RESUME"
+)
+
+// gitPauseQuestion is the argument that identifies the repository measurement
+// agentrec makes once the provider has ended: the diff from the pinned baseline
+// is asked for with --binary and nothing else agentrec runs uses it.
+const gitPauseQuestion = "--binary"
+
+func gitHelper(args []string) int {
+	real := os.Getenv(gitRealEnv)
+	if real == "" {
+		fmt.Fprintln(os.Stderr, "git helper: no git to delegate to")
+		return helperContractExit
+	}
+	if pause := os.Getenv(gitPauseEnv); pause != "" && slices.Contains(args, gitPauseQuestion) {
+		if err := os.WriteFile(pause, []byte("measuring\n"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, "git helper:", err)
+			return helperContractExit
+		}
+		if !waitForFile(os.Getenv(gitResumeEnv), lingerLimit) {
+			fmt.Fprintln(os.Stderr, "git helper: never released")
+			return helperContractExit
+		}
+	}
+	cmd := exec.Command(real, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	err := cmd.Run()
+	if err == nil {
+		return 0
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	fmt.Fprintln(os.Stderr, "git helper:", err)
+	return helperContractExit
+}
+
+// waitForFile reports whether path appeared before the deadline.
+func waitForFile(path string, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
 }
 
 // --- verification helper mode ------------------------------------------------
@@ -2052,6 +2124,10 @@ func claudeHelper(args []string) int {
 		return 0
 	}
 	markStarted()
+	if err := probeWorkspace("claude"); err != nil {
+		fmt.Fprintln(os.Stderr, "claude helper:", err)
+		return helperContractExit
+	}
 	if err := changeRepository(); err != nil {
 		fmt.Fprintln(os.Stderr, "claude helper:", err)
 		return helperContractExit
@@ -2097,6 +2173,10 @@ func codexHelper(args []string) int {
 		return 0
 	}
 	markStarted()
+	if err := probeWorkspace("codex"); err != nil {
+		fmt.Fprintln(os.Stderr, "codex helper:", err)
+		return helperContractExit
+	}
 	if err := changeRepository(); err != nil {
 		fmt.Fprintln(os.Stderr, "codex helper:", err)
 		return helperContractExit
@@ -2110,7 +2190,59 @@ func codexHelper(args []string) int {
 		return helperContractExit
 	}
 	fmt.Print(codexStream)
+	linger()
 	return providerExit(args)
+}
+
+// workspaceProbe is what a provider stand-in found where it was launched, taken
+// before it changes anything. A shadow run deletes the checkout its providers
+// ran in, so what that checkout held is a question only the provider itself can
+// still answer afterwards.
+type workspaceProbe struct {
+	CWD    string `json:"cwd"`
+	Head   string `json:"head"`
+	Status string `json:"status"`
+	Config bool   `json:"config"`
+	Mode   uint32 `json:"mode"`
+}
+
+// probeEnv names the directory the stand-ins describe their workspace into, one
+// document per provider name.
+const probeEnv = "AGENTREC_TEST_PROVIDER_PROBE"
+
+func probeWorkspace(name string) error {
+	dir := os.Getenv(probeEnv)
+	if dir == "" {
+		return nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	head, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return fmt.Errorf("read HEAD: %v", err)
+	}
+	status, err := exec.Command("git", "status", "--porcelain=v1", "--untracked-files=all").Output()
+	if err != nil {
+		return fmt.Errorf("read status: %v", err)
+	}
+	_, cerr := os.Stat(verifyConfigFile)
+	here, err := os.Stat(".")
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(workspaceProbe{
+		CWD:    cwd,
+		Head:   strings.TrimSpace(string(head)),
+		Status: strings.TrimSpace(string(status)),
+		Config: cerr == nil,
+		Mode:   uint32(here.Mode().Perm()),
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, name+".json"), raw, 0o600)
 }
 
 // markStarted records that the helper was launched to record a run, for the
@@ -2927,10 +3059,10 @@ func TestUnrecordableFinalizesTheBundle(t *testing.T) {
 	}
 	var stderr bytes.Buffer
 
-	code := unrecordable(bundle, &stderr, "run-a", errors.New("synthetic storage failure"))
+	out := unrecordable(bundle, &stderr, "run-a", errors.New("synthetic storage failure"))
 
-	if code != exitFailure {
-		t.Errorf("exit code = %d, want %d", code, exitFailure)
+	if out.Recorded {
+		t.Errorf("outcome = %+v, want a run reported as never having reached its provider", out)
 	}
 	if !strings.Contains(stderr.String(), "synthetic storage failure") {
 		t.Errorf("stderr = %q, want it to report the cause", stderr.String())

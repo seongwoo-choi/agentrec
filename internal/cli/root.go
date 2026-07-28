@@ -10,6 +10,7 @@ const usage = `agentrec records coding-agent execution as a replayable action ti
 
 Usage:
   agentrec trace <provider> [--verify] -- <args...>
+  agentrec shadow run <task-file> --runner claude --runner codex
   agentrec list [--cwd <path>]
   agentrec show <run-id>
   agentrec version
@@ -25,6 +26,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "trace":
 		return runTrace(args[1:], stdout, stderr)
+	case "shadow":
+		return runShadow(args[1:], stdout, stderr)
 	case "list":
 		return runList(args[1:], stdout, stderr)
 	case "show":

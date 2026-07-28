@@ -929,6 +929,32 @@ Comparison priority:
 
 Do not generate an automatic quality score.
 
+## Delivered on 2026-07-29
+
+`agentrec shadow run <task-file> --runner claude --runner codex`, implemented
+against [2026-07-29-shadow-runner.md](2026-07-29-shadow-runner.md):
+
+- one detached worktree per runner, created from one pinned baseline under
+  `<dataRoot>/shadow/<group>/<runner>` with mode `0700`, removed after each
+  leg's evidence has been closed;
+- serialized legs, mandatory verification against the committed
+  `.agentrec.yaml`, ordinary retained bundles, process-group cleanup, and a
+  source checkout whose HEAD, status, refs, worktree list and tracked bytes are
+  unchanged after success, failure and handled signals;
+- `.env`/credential policy is "committed bytes only, no credential transport";
+  submodules and Git LFS pointers are refused rather than half-prepared;
+  recovery from abnormal death is `git worktree prune`;
+- comparison output is informational, deterministic, in fixed runner order, and
+  carries no score, winner, rank or recommendation.
+
+Not delivered in this slice, and still open above:
+
+- `agentrec shadow show <group-id>` and durable group storage;
+- a workspace preparation command and any dependency/cache preparation;
+- scope-violation comparison, which needs a scope to compare against;
+- cost as a comparison field: no provider cost or token value is recorded in a
+  bundle today, so the comparison shows duration but nothing about cost.
+
 ---
 
 # Phase 5: Audited Execution Research Track

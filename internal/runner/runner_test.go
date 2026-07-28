@@ -106,6 +106,12 @@ func helperMain(mode string, args []string) int {
 	case "sleep":
 		time.Sleep(10 * time.Minute)
 		return 0
+	case "mark":
+		// Records that a process really was launched, which is the mark a run
+		// refused before its provider must never leave behind.
+		os.WriteFile(args[0], []byte("launched"), 0o600)
+		emit("evt-1")
+		return 0
 	}
 	fmt.Fprintf(os.Stderr, "helper: unknown mode %q\n", mode)
 	return 2
@@ -840,6 +846,76 @@ func TestRunFinalizesAnUnusableRequestThatHasABundle(t *testing.T) {
 			// is how a process that was never started shows up here.
 			if events := readLines(t, filepath.Join(b.Dir(), "provider-events.sanitized.jsonl")); len(events) != 0 {
 				t.Errorf("provider events = %q, want none: the request was refused before any process", events)
+			}
+			if werr := b.WriteProviderEvent([]byte(`{"id":"late"}`)); !errors.Is(werr, storage.ErrFinalized) {
+				t.Errorf("write after Run = %v, want storage.ErrFinalized", werr)
+			}
+		})
+	}
+}
+
+// An interrupt that arrived while the run was still being prepared is the
+// operator's answer to this run too. The supervisor is handed a signal it
+// already holds, so there is no window here for the answer to be lost in: the
+// provider is never launched, and the bundle is still finalized as the
+// interrupted run it is rather than left open.
+func TestRunNeverLaunchesAProviderItAlreadyHoldsAnInterruptFor(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command func(marker string) provider.Command
+	}{
+		// A provider that records having been launched. What it leaves behind is
+		// the mark of a process that ran at all.
+		{"a provider that marks its own launch", func(marker string) provider.Command {
+			return helperCommand("mark", marker)
+		}},
+		// An executable that is not there: launching it can only fail, and that
+		// failure is recorded as a start error. So the reason recorded here says
+		// whether the launch was ever attempted, without depending on how quickly
+		// a launched process gets to run before the supervisor ends it.
+		{"an executable no launch could have succeeded with", func(string) provider.Command {
+			return provider.Command{Executable: filepath.Join(t.TempDir(), "not-installed")}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBundle(t)
+			marker := filepath.Join(t.TempDir(), "launched")
+			interrupt := make(chan os.Signal, 1)
+			interrupt <- os.Interrupt
+
+			res, err := Run(context.Background(), Request{
+				Command:   tc.command(marker),
+				Bundle:    b,
+				Parser:    jsonlParser("", 0),
+				Timeout:   30 * time.Second,
+				Interrupt: interrupt,
+			})
+
+			if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("provider launch marker = %v, want the provider never launched", statErr)
+			}
+			if !errors.Is(err, ErrInterrupted) {
+				t.Errorf("Run error = %v, want ErrInterrupted", err)
+			}
+			if res.ExitReason != ReasonInterrupted {
+				t.Errorf("ExitReason = %q, want %q: nothing may be launched after the interrupt", res.ExitReason, ReasonInterrupted)
+			}
+			if res.ExitCode != nil {
+				t.Errorf("ExitCode = %v, want nil for a run that never started", *res.ExitCode)
+			}
+			if res.StartedAt.IsZero() || res.EndedAt.IsZero() || res.EndedAt.Before(res.StartedAt) {
+				t.Errorf("Result timing is not recorded coherently: %+v", res)
+			}
+
+			// The bundle describes a run that stopped, not one still going.
+			if m := readManifest(t, b.Dir()); m.ExitReason != ReasonInterrupted || m.EndedAt == nil {
+				t.Errorf("manifest exitReason = %q, endedAt = %v, want a finalized interrupted run", m.ExitReason, m.EndedAt)
+			}
+			if pr := readProcessResult(t, b.Dir()); pr.ExitReason != ReasonInterrupted || pr.ExitCode != nil {
+				t.Errorf("result.json = %+v, want interrupted with a null exit code", pr)
+			}
+			if events := readLines(t, filepath.Join(b.Dir(), "provider-events.sanitized.jsonl")); len(events) != 0 {
+				t.Errorf("provider events = %q, want none: no provider ran", events)
 			}
 			if werr := b.WriteProviderEvent([]byte(`{"id":"late"}`)); !errors.Is(werr, storage.ErrFinalized) {
 				t.Errorf("write after Run = %v, want storage.ErrFinalized", werr)

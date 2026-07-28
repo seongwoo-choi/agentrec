@@ -143,10 +143,20 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	setProcessGroup(cmd)
 
 	stdout, stderr, err := pipes(cmd)
-	if err == nil {
-		err = cmd.Start()
-	}
 	if err != nil {
+		return unstarted(req.Bundle, res, fmt.Errorf("runner: start %s: %w", req.Command.Executable, err))
+	}
+	// Asked at the final userspace boundary before launch. The watch below can
+	// only end a process that already exists, so an interrupt that arrived while
+	// this run was preparing its command or pipes must prevent that process from
+	// starting at all. The run is still finalized as interrupted evidence.
+	if held(req.Interrupt) {
+		res.ExitReason = ReasonInterrupted
+		res.EndedAt = time.Now()
+		res.Duration = res.EndedAt.Sub(res.StartedAt)
+		return finish(req.Bundle, res, ErrInterrupted)
+	}
+	if err := cmd.Start(); err != nil {
 		return unstarted(req.Bundle, res, fmt.Errorf("runner: start %s: %w", req.Command.Executable, err))
 	}
 
@@ -226,6 +236,17 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		watcher.err,
 	)
 	return finish(req.Bundle, res, runErr)
+}
+
+// held reports whether the operator has already asked for the run to stop,
+// without waiting for an ask that has not arrived. A nil channel never has one.
+func held(interrupt <-chan os.Signal) bool {
+	select {
+	case <-interrupt:
+		return true
+	default:
+		return false
+	}
 }
 
 // unstarted records a run that never reached a running process, whether the
