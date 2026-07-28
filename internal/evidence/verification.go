@@ -179,8 +179,10 @@ type PinnedVerification struct {
 
 	// resultInfo identifies the status document as this verification wrote it,
 	// so the one file this package replaces is only ever replaced while it is
-	// still the file it installed.
+	// still the file it installed. The open handle keeps its inode allocated, so
+	// a replacement cannot reuse the same identity after deleting it.
 	resultInfo os.FileInfo
+	resultHold *os.File
 
 	ran      bool
 	closed   bool
@@ -309,7 +311,21 @@ func (p *PinnedVerification) pend() error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("evidence: %s is %s, want the regular file this verification just wrote", verifyResultFile, info.Mode().Type())
 	}
-	p.resultInfo = info
+	hold, err := p.root.Open(verifyResultFile)
+	if err != nil {
+		return fmt.Errorf("evidence: hold %s: %w", verifyResultFile, err)
+	}
+	heldInfo, err := hold.Stat()
+	if err != nil {
+		hold.Close()
+		return fmt.Errorf("evidence: inspect held %s: %w", verifyResultFile, err)
+	}
+	if !heldInfo.Mode().IsRegular() || !os.SameFile(info, heldInfo) {
+		hold.Close()
+		return fmt.Errorf("evidence: %s changed before it could be held", verifyResultFile)
+	}
+	p.resultInfo = heldInfo
+	p.resultHold = hold
 	return nil
 }
 
@@ -575,9 +591,15 @@ func (p *PinnedVerification) Close() error {
 		return p.closeErr
 	}
 	p.closed = true
+	if p.resultHold != nil {
+		if err := p.resultHold.Close(); err != nil {
+			p.closeErr = fmt.Errorf("evidence: close held %s: %w", verifyResultFile, err)
+		}
+		p.resultHold = nil
+	}
 	if p.root != nil {
 		if err := p.root.Close(); err != nil {
-			p.closeErr = fmt.Errorf("evidence: close %s: %w", strconv.Quote(p.dir), err)
+			p.closeErr = errors.Join(p.closeErr, fmt.Errorf("evidence: close %s: %w", strconv.Quote(p.dir), err))
 		}
 		p.root = nil
 	}

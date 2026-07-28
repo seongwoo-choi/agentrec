@@ -196,8 +196,11 @@ type Capture struct {
 
 	// resultInfo identifies the status document as this capture wrote it, so
 	// that the one file this package replaces is only ever replaced when it is
-	// still the file it installed and not something put there since.
+	// still the file it installed and not something put there since. The open
+	// handle keeps its inode allocated, so a replacement cannot reuse the same
+	// identity after deleting it.
 	resultInfo os.FileInfo
+	resultHold *os.File
 
 	finalized bool
 	closed    bool
@@ -396,7 +399,21 @@ func (c *Capture) pend(ctx context.Context) (*Capture, error) {
 	if !info.Mode().IsRegular() {
 		return nil, c.abort(ctx, fmt.Errorf("evidence: %s is %s, want the regular file this capture just wrote", resultFile, info.Mode().Type()))
 	}
-	c.resultInfo = info
+	hold, err := c.root.Open(resultFile)
+	if err != nil {
+		return nil, c.abort(ctx, fmt.Errorf("evidence: hold %s: %w", resultFile, err))
+	}
+	heldInfo, err := hold.Stat()
+	if err != nil {
+		hold.Close()
+		return nil, c.abort(ctx, fmt.Errorf("evidence: inspect held %s: %w", resultFile, err))
+	}
+	if !heldInfo.Mode().IsRegular() || !os.SameFile(info, heldInfo) {
+		hold.Close()
+		return nil, c.abort(ctx, fmt.Errorf("evidence: %s changed before it could be held", resultFile))
+	}
+	c.resultInfo = heldInfo
+	c.resultHold = hold
 	return c, nil
 }
 
@@ -594,6 +611,12 @@ func (c *Capture) Close(ctx context.Context) error {
 	c.closed = true
 
 	err := c.removeRef(ctx)
+	if c.resultHold != nil {
+		if cerr := c.resultHold.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("evidence: close held %s: %w", resultFile, cerr))
+		}
+		c.resultHold = nil
+	}
 	if c.root != nil {
 		if cerr := c.root.Close(); cerr != nil {
 			err = errors.Join(err, fmt.Errorf("evidence: close %s: %w", strconv.Quote(c.dir), cerr))

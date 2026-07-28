@@ -617,6 +617,37 @@ func TestPlantedNamesAreRefused(t *testing.T) {
 		}
 	})
 
+	t.Run("results replaced by a regular file during the run", func(t *testing.T) {
+		repo, run := gitRepo(t), runDir(t)
+		writeConfig(t, repo, configYAML(checkSpec{name: "a", timeout: "10s", argv: helperArgv(t, "exit", "0")}))
+		p := pin(t, repo, run)
+
+		if err := os.Remove(verifyResultPath(run)); err != nil {
+			t.Fatalf("remove the pending results: %v", err)
+		}
+		const intruder = "not this run's result\n"
+		if err := os.WriteFile(verifyResultPath(run), []byte(intruder), 0o600); err != nil {
+			t.Fatalf("write the replacement: %v", err)
+		}
+		replacement, err := os.Lstat(verifyResultPath(run))
+		if err != nil {
+			t.Fatalf("inspect the replacement: %v", err)
+		}
+		if os.SameFile(replacement, p.resultInfo) {
+			t.Fatal("replacement reused the identity of the held pending result")
+		}
+		if _, err := p.Run(context.Background()); err == nil {
+			t.Fatal("Run replaced a result it did not write")
+		}
+		body, err := os.ReadFile(verifyResultPath(run))
+		if err != nil {
+			t.Fatalf("read the replacement: %v", err)
+		}
+		if string(body) != intruder {
+			t.Errorf("replacement = %q, want it untouched", body)
+		}
+	})
+
 	t.Run("results replaced by a symlink during the run", func(t *testing.T) {
 		repo, run := gitRepo(t), runDir(t)
 		target := filepath.Join(outside(t), "target")
