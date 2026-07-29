@@ -108,6 +108,9 @@ func comparisonFields(runsRoot string, l leg) ([]field, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateUnparsedStream(dir, manifest.UnparsedLines); err != nil {
+		return nil, err
+	}
 	result, err := readProcessResult(dir)
 	if err != nil {
 		return nil, err

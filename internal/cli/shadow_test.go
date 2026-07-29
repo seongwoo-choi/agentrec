@@ -8,9 +8,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/lock"
 	"github.com/seongwoo-choi/agentrec/internal/runner"
+	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
 // probeWorkspaces collects what each provider stand-in found in the checkout it
@@ -467,6 +469,65 @@ func TestShadowComparisonIsFixedInOrderAndReadFromTheBundles(t *testing.T) {
 				t.Errorf("comparison =\n%s\nwant no %q in it", out.String(), evaluative)
 			}
 		}
+	}
+}
+
+func TestShadowComparisonRefusesAnUnparsedStreamThatDoesNotMatchTheManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		lines   []string
+		wantErr bool
+	}{
+		{name: "missing file", wantErr: true},
+		{name: "too few lines", lines: []string{"one line"}, wantErr: true},
+		{name: "too many lines", lines: []string{"one line", "two lines", "three lines"}, wantErr: true},
+		{name: "matching file", lines: []string{"one line", "two lines"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := home(t)
+			b, err := storage.Create(root, "run-a", storage.Manifest{
+				Provider:  "claude",
+				Argv:      []string{"claude", "-p", "hello"},
+				CWD:       "/tmp",
+				StartedAt: late,
+			})
+			if err != nil {
+				t.Fatalf("create run: %v", err)
+			}
+			if err := b.WriteAction(readAction(late)); err != nil {
+				t.Fatalf("write action: %v", err)
+			}
+			for _, line := range tc.lines {
+				if err := b.WriteUnparsedLine([]byte(line)); err != nil {
+					t.Fatalf("write unparsed line: %v", err)
+				}
+			}
+			if err := b.Finalize(storage.Finalization{
+				EndedAt:       late.Add(time.Second),
+				ExitReason:    "completed",
+				UnparsedLines: 2,
+			}); err != nil {
+				t.Fatalf("finalize: %v", err)
+			}
+
+			var out strings.Builder
+			err = renderComparison(&out, root, []leg{{runner: "claude", runID: "run-a", order: 1}})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("render comparison error = nil, want inconsistent unparsed evidence refused")
+				}
+				if !strings.Contains(err.Error(), "provider-stdout.unparsed.log") {
+					t.Errorf("render comparison error = %q, want the inconsistent artifact named", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("render comparison: %v", err)
+			}
+			if !strings.Contains(out.String(), "Unparsed     2") {
+				t.Errorf("comparison =\n%s\nwant the verified unparsed count", out.String())
+			}
+		})
 	}
 }
 
