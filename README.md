@@ -23,6 +23,18 @@ normalized action timeline, the supervised process result, the repository
 difference across the run window, and the outcome of checks the repository itself
 pinned. Each comes from a different observer, and the bundle keeps them apart.
 
+## Why use agentrec
+
+Use agentrec when an agent run must be more than a transient terminal session — when it becomes input to a code review, incident investigation, handoff, or a decision to trust a new agent or provider version.
+
+- **Review work without trusting a summary.** `report.md` distinguishes provider-reported actions from the process outcome, the measured repository delta, and the checks that actually ran. A reviewer can inspect the claim, the change, and the verification independently.
+- **Debug a failed or suspicious run after the fact.** The bundle preserves exit reason, stderr context, warnings, unparsed provider stdout, and the repository state observed across the run. This makes a timeout, parser mismatch, non-zero exit, or unexpected diff diagnosable after scrollback is gone.
+- **Make handoffs reproducible.** The bundle pins the starting commit and verification configuration, then records what those checks returned. The next engineer receives durable artifacts and commands, rather than an account of what someone remembers seeing.
+- **Compare agents without inventing a winner.** `shadow run` gives Claude and Codex separate worktrees and evidence bundles from one baseline. It presents the recorded facts; it does not turn action counts, diffs, or check results into an ungrounded score.
+- **Upgrade providers conservatively.** Unsupported provider versions are refused by default. An explicit override leaves a visible `versionUnverified` mark in the manifest and report, so a parser-risky timeline cannot later be mistaken for fully understood evidence.
+
+agentrec is not an interactive transcript UI, a cloud telemetry service, or proof that an agent caused every observed file change. It is a local evidence boundary around one non-interactive run: useful precisely because it states what was observed, by whom, and what it cannot establish.
+
 ## Four evidence layers
 
 | Layer | Observer | What it means | Attribution recorded |

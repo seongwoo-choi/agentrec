@@ -21,6 +21,18 @@ agentrec 把一次非交互式的 Claude Code 或 Codex 运行记录成一个证
 动作时间线、受监督进程的结果、运行窗口前后仓库的差异，以及仓库自身固定下来的检查的
 结果。它们各自来自不同的观察者，证据包把它们分开保存。
 
+## 为什么要使用 agentrec
+
+当一次智能体运行不再只是短暂的终端会话，而会成为代码审查、故障调查、交接，或决定是否信任某个新智能体或提供方版本的输入时，就应使用 agentrec。
+
+- **不依赖摘要来审查工作。** `report.md` 把提供方报告的动作、进程结果、测得的仓库差异和实际运行的检查分开。审查者可以独立核对主张、变更和验证。
+- **事后诊断失败或可疑的运行。** 证据包保留退出原因、stderr 上下文、警告、未解析的 provider stdout，以及运行窗口内观察到的仓库状态。scrollback 消失后，仍可诊断 timeout、parser mismatch、non-zero exit 或意外 diff。
+- **让交接可以复现。** 它固定起始提交和 verification config，并记录这些检查返回的结果。下一位工程师拿到的是持久的 artifact 和 command，而不是某人记得自己看过什么的说法。
+- **不凭空评出胜者地比较智能体。** `shadow run` 从同一个 baseline 为 Claude 和 Codex 提供独立的 worktree 和 evidence bundle。它展示记录到的事实，而不会把 action 数、diff 或检查结果变成没有依据的 score。
+- **保守地升级提供方。** 不受支持的 provider version 默认会被拒绝。显式 override 会在 manifest 和 report 中留下 `versionUnverified`，使有 parser 风险的 timeline 日后不会被误认为是完全理解的证据。
+
+agentrec 不是交互式 transcript UI，不是 cloud telemetry service，也不能证明智能体导致了每一处观察到的文件变更。它是一条围绕一次非交互式运行的 local evidence boundary；它的价值正在于同时说明谁观察到了什么，以及它无法证明什么。
+
 ## 四个证据层
 
 | 层 | 观察者 | 含义 | 记录的归属 |

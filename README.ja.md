@@ -24,6 +24,18 @@ agentrec は、非対話モードの Claude Code または Codex の実行 1 回
 チェックの結果が含まれる。それぞれは異なる観測者に由来し、バンドルはそれらを分けて
 保持する。
 
+## agentrec を使う理由
+
+エージェント実行が一時的なターミナルセッション以上のもの、すなわちコードレビュー、障害調査、引き継ぎ、新しいエージェントやプロバイダーバージョンを信頼するかどうかの判断材料になるときに agentrec を使う。
+
+- **要約を信用せずにレビューする。** `report.md` は、プロバイダーが報告したアクション、プロセスの結果、測定されたリポジトリ差分、実際に実行されたチェックを分ける。レビュー担当者は主張・変更・検証を独立して確認できる。
+- **失敗した、または疑わしい実行を後から診断する。** バンドルは終了理由、stderr の文脈、警告、解釈できなかった provider stdout、実行区間で観測したリポジトリ状態を残す。scrollback が消えた後でも timeout、parser mismatch、non-zero exit、予期しない diff を調査できる。
+- **引き継ぎを再現可能にする。** 開始コミットと verification config を固定し、そのチェックが返した結果を記録する。次のエンジニアは、誰かが見たと記憶していることではなく、永続する artifact と command を受け取る。
+- **勝者を捏造せずにエージェントを比較する。** `shadow run` は一つの baseline から Claude と Codex に別々の worktree と evidence bundle を与える。記録された事実を提示するだけで、action 数・diff・チェック結果を根拠のない score に変えない。
+- **プロバイダーのアップグレードを保守的に扱う。** サポートされない provider version はデフォルトで拒否する。明示的な override は manifest と report に `versionUnverified` を残すため、parser リスクのある timeline が後で完全に理解された証拠と誤認されない。
+
+agentrec は対話的な transcript UI でも、cloud telemetry service でも、エージェントが観測されたすべてのファイル変更を引き起こした証明でもない。一つの非対話的実行を囲む local evidence boundary である。何を誰が観測したか、何を確定できないかをともに示すからこそ有用である。
+
 ## 4 つの証拠レイヤー
 
 | レイヤー | 観測者 | 意味するもの | 記録される帰属 |

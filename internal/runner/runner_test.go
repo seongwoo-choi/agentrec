@@ -79,6 +79,13 @@ func helperMain(mode string, args []string) int {
 		os.Stdout.Write([]byte("notice: \xff\n"))
 		emit("evt-1")
 		return 0
+	case "at-limit":
+		// A raw stdout record at the scanner cap, including its newline delimiter.
+		// The recorder must reject it whole and keep draining the provider output.
+		os.Stdout.Write(bytes.Repeat([]byte("x"), maxLineBytes))
+		os.Stdout.Write([]byte("\n"))
+		emit("evt-1")
+		return 0
 	case "overlong":
 		// One line past what the recorder can store whole, then far more than a
 		// pipe buffer's worth of further output. A supervisor that stops reading
@@ -933,6 +940,38 @@ func TestRunWritesNoUnparsedStreamWhenEveryLineWasAnEvent(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(b.Dir(), "provider-stdout.unparsed.log")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("stat unparsed stream = %v, want it never created", err)
+	}
+}
+
+// A raw stdout record at the scanner cap includes its newline delimiter and is
+// therefore rejected as unstoreable. It must surface as a storage error rather
+// than being silently truncated or accepted past the bounded limit.
+func TestRunRejectsAnExactLimitStdoutLine(t *testing.T) {
+	b := newBundle(t)
+
+	res, err := Run(context.Background(), Request{
+		Command: helperCommand("at-limit"),
+		Bundle:  b,
+		Parser:  tolerantJSONLParser(),
+		Timeout: 30 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("Run error = nil, want the exact-limit line surfaced")
+	}
+	if res.ExitReason != ReasonStorageError {
+		t.Errorf("ExitReason = %q, want %q", res.ExitReason, ReasonStorageError)
+	}
+	if m := readManifest(t, b.Dir()); m.ExitReason != ReasonStorageError {
+		t.Errorf("manifest exitReason = %q, want %q", m.ExitReason, ReasonStorageError)
+	}
+	if pr := readProcessResult(t, b.Dir()); pr.ExitReason != ReasonStorageError {
+		t.Errorf("result.json exitReason = %q, want %q", pr.ExitReason, ReasonStorageError)
+	}
+	if _, err := os.Stat(filepath.Join(b.Dir(), "provider-stdout.unparsed.log")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stat unparsed stream = %v, want no partial record", err)
+	}
+	if events := readLines(t, filepath.Join(b.Dir(), "provider-events.sanitized.jsonl")); len(events) != 0 {
+		t.Errorf("provider events = %d, want none after scanner rejection", len(events))
 	}
 }
 

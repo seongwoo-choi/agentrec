@@ -23,6 +23,18 @@ agentrec은 비대화형 Claude Code 또는 Codex 실행 하나를 번들로 기
 저장소 자신이 고정해 둔 검사의 결과가 담긴다. 각각은 서로 다른 관찰자에게서
 나오며, 번들은 이들을 분리해 둔다.
 
+## agentrec을 써야 하는 이유
+
+에이전트 실행이 일회성 터미널 세션을 넘어 코드 리뷰, 장애 조사, 인수인계, 새 에이전트나 제공자 버전을 신뢰할지에 대한 판단의 입력이 되는 순간 agentrec을 쓴다.
+
+- **요약을 믿지 않고 리뷰한다.** `report.md`는 제공자가 보고한 액션, 프로세스 결과, 측정된 저장소 차이, 실제로 실행된 검사를 분리한다. 리뷰어는 주장·변경·검증을 독립적으로 확인할 수 있다.
+- **실패했거나 의심스러운 실행을 나중에 진단한다.** 번들은 종료 사유, stderr 맥락, 경고, 파싱되지 않은 provider stdout, 실행 구간에서 관찰한 저장소 상태를 보존한다. scrollback이 사라진 뒤에도 timeout, parser mismatch, non-zero exit, 예상 밖 diff를 진단할 수 있다.
+- **인수인계를 재현 가능하게 만든다.** 시작 커밋과 verification config를 고정하고, 그 검사가 반환한 결과를 기록한다. 다음 엔지니어는 누군가의 기억이나 설명 대신 지속되는 artifact와 command를 받는다.
+- **승자를 지어내지 않고 에이전트를 비교한다.** `shadow run`은 하나의 baseline에서 Claude와 Codex에 별도 worktree와 evidence bundle을 준다. 기록된 사실을 보여 줄 뿐, action 수·diff·검사 결과를 근거 없는 score로 바꾸지 않는다.
+- **제공자 업그레이드를 보수적으로 다룬다.** 지원하지 않는 provider version은 기본적으로 거부한다. 명시적 override는 manifest와 report에 `versionUnverified`를 남기므로 parser 위험이 있는 timeline이 나중에 완전히 이해된 증거로 오인되지 않는다.
+
+agentrec은 대화형 transcript UI도, cloud telemetry service도, 에이전트가 관찰된 모든 파일 변경을 일으켰다는 증명도 아니다. 비대화형 실행 하나를 둘러싼 local evidence boundary다. 무엇을 누가 관찰했는지와 무엇을 확정할 수 없는지를 함께 밝히기 때문에 유용하다.
+
 ## 네 가지 증거 계층
 
 | 계층 | 관찰자 | 의미 | 기록되는 귀속 |
