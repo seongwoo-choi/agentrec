@@ -220,6 +220,7 @@ claude
   Repository   AVAILABLE  1 files (1 tracked, 0 untracked)  +18/-1, 0 binary
   Actions      12
   Warnings     0
+  Unparsed     0
 
 codex
   ...

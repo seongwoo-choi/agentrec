@@ -858,6 +858,32 @@ func TestRunKeepsNonEventStdoutLinesWithoutFailingTheRun(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotClaimAnUnparsedLineWasKeptWhenItsStreamCannotBeCreated(t *testing.T) {
+	b := newBundle(t)
+	if err := os.Mkdir(filepath.Join(b.Dir(), "provider-stdout.unparsed.log"), 0o700); err != nil {
+		t.Fatalf("block the unparsed stream path: %v", err)
+	}
+
+	res, err := Run(context.Background(), Request{
+		Command: helperCommand("chatty"),
+		Bundle:  b,
+		Parser:  tolerantJSONLParser(),
+		Timeout: 30 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("Run error = nil, want the unparsed stream creation failure")
+	}
+	if res.ExitReason != ReasonStorageError {
+		t.Errorf("ExitReason = %q, want %q", res.ExitReason, ReasonStorageError)
+	}
+	if res.UnparsedLines != 0 {
+		t.Errorf("UnparsedLines = %d, want 0 because no line was kept", res.UnparsedLines)
+	}
+	if got := readManifest(t, b.Dir()).UnparsedLines; got != 0 {
+		t.Errorf("manifest unparsedLines = %d, want 0 because no line was kept", got)
+	}
+}
+
 // A run whose provider only ever emitted events leaves no unparsed stream at
 // all: an empty file would read as a run that had lines to keep and kept none.
 func TestRunWritesNoUnparsedStreamWhenEveryLineWasAnEvent(t *testing.T) {

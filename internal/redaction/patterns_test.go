@@ -589,8 +589,18 @@ func TestRedactJSONRedactsVendorTokenShapesAddedInRuleVersionTwo(t *testing.T) {
 		},
 		{
 			name: "slack user token",
-			raw:  `{"note":"xoxp-000000000000-synthetic0001 belongs to the app"}`,
+			raw:  `{"note":"` + "xox" + `p-000000000000-synthetic0001 belongs to the app"}`,
 			want: `{"note":"[REDACTED:1] belongs to the app"}`,
+		},
+		{
+			name: "slack browser session token",
+			raw:  `{"note":"browser session ` + "xox" + `c-synthetic000000000000000000"}`,
+			want: `{"note":"browser session [REDACTED:1]"}`,
+		},
+		{
+			name: "slack browser session cookie",
+			raw:  `{"note":"browser cookie ` + "xox" + `d-synthetic000000000000000000"}`,
+			want: `{"note":"browser cookie [REDACTED:1]"}`,
 		},
 		{
 			name: "slack incoming webhook url",

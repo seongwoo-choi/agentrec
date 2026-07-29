@@ -351,8 +351,10 @@ func tee(stdout io.Reader, pw *io.PipeWriter, b *storage.Bundle) teeOutcome {
 		if len(bytes.TrimSpace(line)) > 0 {
 			err := b.WriteProviderEvent(line)
 			if errors.Is(err, storage.ErrNotProviderEvent) {
-				out.unparsed++
 				err = b.WriteUnparsedLine(line)
+				if err == nil {
+					out.unparsed++
+				}
 			}
 			keep(err)
 		}

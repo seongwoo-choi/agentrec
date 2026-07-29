@@ -3325,6 +3325,11 @@ func TestShowStatesAnUnverifiedVersionAndUnparsedStdoutLines(t *testing.T) {
 	if err := b.WriteAction(readAction(late)); err != nil {
 		t.Fatalf("write action: %v", err)
 	}
+	for _, line := range []string{"update available", "deprecated option"} {
+		if err := b.WriteUnparsedLine([]byte(line)); err != nil {
+			t.Fatalf("write unparsed line: %v", err)
+		}
+	}
 	if err := b.Finalize(storage.Finalization{
 		EndedAt:       late.Add(time.Second),
 		ExitReason:    "completed",
@@ -3343,6 +3348,49 @@ func TestShowStatesAnUnverifiedVersionAndUnparsedStdoutLines(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Unparsed     2 stdout line(s) kept in provider-stdout.unparsed.log") {
 		t.Errorf("stdout =\n%s\nwant the unparsed lines named with the file holding them", stdout)
+	}
+}
+
+func TestShowRefusesAnUnparsedStreamThatDoesNotMatchTheManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lines []string
+	}{
+		{name: "missing file"},
+		{name: "too few lines", lines: []string{"one line"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := home(t)
+			b, err := storage.Create(root, "run-x", storage.Manifest{
+				Provider:  "claude",
+				Argv:      []string{"claude", "-p", "hello"},
+				CWD:       "/tmp",
+				StartedAt: late,
+			})
+			if err != nil {
+				t.Fatalf("create run: %v", err)
+			}
+			for _, line := range tc.lines {
+				if err := b.WriteUnparsedLine([]byte(line)); err != nil {
+					t.Fatalf("write unparsed line: %v", err)
+				}
+			}
+			if err := b.Finalize(storage.Finalization{
+				EndedAt:       late.Add(time.Second),
+				ExitReason:    "completed",
+				UnparsedLines: 2,
+			}); err != nil {
+				t.Fatalf("finalize: %v", err)
+			}
+
+			code, _, stderr := run(t, "show", "run-x")
+			if code != exitFailure {
+				t.Fatalf("exit code = %d, want %d (stderr %q)", code, exitFailure, stderr)
+			}
+			if !strings.Contains(stderr, "provider-stdout.unparsed.log") {
+				t.Errorf("stderr = %q, want the inconsistent artifact named", stderr)
+			}
+		})
 	}
 }
 

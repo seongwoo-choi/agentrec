@@ -46,6 +46,7 @@ const (
 	maxActionBytes       = 4 << 20
 	maxActionStreamBytes = 64 << 20
 	maxActions           = 100000
+	maxUnparsedLines     = 100000
 	// maxEvidenceItems bounds the lists inside one evidence document. A run that
 	// pinned more checks than this, or a warning naming more paths, is past
 	// anything a reviewable verification produced.
@@ -140,6 +141,9 @@ func readRun(root, runID string) (report.Report, error) {
 	}
 	manifest, err := readManifest(dir)
 	if err != nil {
+		return report.Report{}, err
+	}
+	if err := validateUnparsedStream(dir, manifest.UnparsedLines); err != nil {
 		return report.Report{}, err
 	}
 	actions, err := readActions(dir)
@@ -495,6 +499,54 @@ func readActions(dir string) ([]action.Action, error) {
 		return nil, fmt.Errorf("cli: read %s: %w", actionsFile, err)
 	}
 	return actions, nil
+}
+
+// validateUnparsedStream proves the manifest's claim that non-event stdout was
+// kept in the named artifact. The provider material is not rendered, but the
+// file is still opened through the same confined path as every artifact show
+// reads, and both its size and line count are bounded before the claim is shown.
+func validateUnparsedStream(dir string, want int) error {
+	switch {
+	case want < 0:
+		return fmt.Errorf("cli: manifest has a negative unparsed line count")
+	case want == 0:
+		return nil
+	case want > maxUnparsedLines:
+		return fmt.Errorf("cli: manifest holds more than %d unparsed lines", maxUnparsedLines)
+	}
+
+	f, err := openRegular(dir, unparsedFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("cli: read %s: %w", unparsedFile, err)
+	}
+	if info.Size() > maxActionStreamBytes {
+		return fmt.Errorf("cli: %s is larger than %d bytes", unparsedFile, maxActionStreamBytes)
+	}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(nil, maxActionBytes)
+	got := 0
+	for scanner.Scan() {
+		got++
+		if got > want {
+			return fmt.Errorf("cli: %s holds %d lines, manifest records %d", unparsedFile, got, want)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return fmt.Errorf("cli: %s holds a line longer than %d bytes", unparsedFile, maxActionBytes)
+		}
+		return fmt.Errorf("cli: read %s: %w", unparsedFile, err)
+	}
+	if got != want {
+		return fmt.Errorf("cli: %s holds %d lines, manifest records %d", unparsedFile, got, want)
+	}
+	return nil
 }
 
 // openRegular opens a bundle file, confined to the run directory it belongs to.

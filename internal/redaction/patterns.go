@@ -79,8 +79,8 @@ var tokenRules = []*regexp.Regexp{
 	regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`),
 	// JWTs: three base64url segments, the first carrying a JSON header.
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
-	// Slack bot, user, app, refresh, workflow and legacy tokens.
-	regexp.MustCompile(`\bxox[abeoprs]-[A-Za-z0-9-]{10,}`),
+	// Slack bot, user, app, refresh, workflow, browser-session and legacy tokens.
+	regexp.MustCompile(`\bxox[abcdeoprs]-[A-Za-z0-9-]{10,}`),
 	// Slack webhook URLs, whose path is the credential. All three delivery
 	// endpoints are matched: a workflow or trigger URL is as much a credential
 	// as the incoming-webhook one it is usually confused with.
