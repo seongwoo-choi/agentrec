@@ -103,6 +103,39 @@ const (
 	maxReportBytes             = 2 * maxActionStreamBytes
 )
 
+// traceOptions are the options agentrec takes for itself, as opposed to the
+// ones it hands to the provider untouched.
+type traceOptions struct {
+	verify           bool
+	allowUnsupported bool
+}
+
+// parseTraceOptions reads the arguments between the provider and the delimiter,
+// which are agentrec's own and are two things at most. An option it does not
+// know, or one given twice, is refused rather than ignored: an operator who
+// asked for something must not be told a run was recorded the way they asked
+// for. Order carries no meaning — neither option is the other's prerequisite.
+//
+// It is a function of its arguments and nothing else, so what agentrec accepts
+// can be established without launching an agent: a test that drove the whole
+// command would depend on which provider CLIs happen to be installed and on the
+// state of the repository it ran in, and would prove nothing about parsing on a
+// machine where either differed.
+func parseTraceOptions(args []string) (traceOptions, bool) {
+	var opts traceOptions
+	for _, opt := range args {
+		switch {
+		case opt == verifyFlag && !opts.verify:
+			opts.verify = true
+		case opt == allowUnsupportedVersionFlag && !opts.allowUnsupported:
+			opts.allowUnsupported = true
+		default:
+			return traceOptions{}, false
+		}
+	}
+	return opts, true
+}
+
 // runTrace records one provider run: it prepares the invocation, opens a
 // bundle for it, supervises the process, and then renders the run back from the
 // bundle it just wrote.
@@ -116,23 +149,13 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	name, providerArgs := args[0], args[delimiter+1:]
-	// Everything between the provider and the delimiter is agentrec's own, and
-	// there are two things it may be. An option it does not know, or one given
-	// twice, is refused rather than ignored: an operator who asked for something
-	// must not be told a run was recorded the way they asked for.
-	verify, allowUnsupported := false, false
-	for _, opt := range args[1:delimiter] {
-		switch {
-		case opt == verifyFlag && !verify:
-			verify = true
-		case opt == allowUnsupportedVersionFlag && !allowUnsupported:
-			allowUnsupported = true
-		default:
-			fmt.Fprint(stderr, traceUsage)
-			return exitUsage
-		}
+	own, ok := parseTraceOptions(args[1:delimiter])
+	if !ok {
+		fmt.Fprint(stderr, traceUsage)
+		return exitUsage
 	}
-	opts := provider.Options{AllowUnsupportedVersion: allowUnsupported}
+	verify := own.verify
+	opts := provider.Options{AllowUnsupportedVersion: own.allowUnsupported}
 
 	var (
 		cmd    provider.Command

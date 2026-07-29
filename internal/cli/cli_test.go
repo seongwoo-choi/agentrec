@@ -3269,22 +3269,38 @@ func TestTraceRejectsUnknownAndRepeatedOwnOptions(t *testing.T) {
 	}
 }
 
-// The two options agentrec takes for itself are independent and may be given in
-// either order: neither is the other's prerequisite, and an operator who spelled
-// both correctly must not be refused over how they arranged them.
-func TestTraceAcceptsItsOwnOptionsInEitherOrder(t *testing.T) {
-	home(t)
-	for _, args := range [][]string{
-		{"trace", "claude", verifyFlag, allowUnsupportedVersionFlag, "--", "-p", "x"},
-		{"trace", "claude", allowUnsupportedVersionFlag, verifyFlag, "--", "-p", "x"},
+// What agentrec accepts for itself is decided by parsing alone, so it is
+// established by parsing alone. Driving the whole command to prove a flag was
+// accepted would launch a real agent against the repository the test runs in —
+// and would then pass or fail on which provider CLIs happen to be installed
+// rather than on the parsing it claims to be about.
+func TestParseTraceOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want traceOptions
+		ok   bool
+	}{
+		{"none", nil, traceOptions{}, true},
+		{"verify alone", []string{verifyFlag}, traceOptions{verify: true}, true},
+		{"override alone", []string{allowUnsupportedVersionFlag}, traceOptions{allowUnsupported: true}, true},
+		// Neither option is the other's prerequisite, so an operator who spelled
+		// both correctly is never refused over how they arranged them.
+		{"both", []string{verifyFlag, allowUnsupportedVersionFlag}, traceOptions{true, true}, true},
+		{"both reversed", []string{allowUnsupportedVersionFlag, verifyFlag}, traceOptions{true, true}, true},
+		{"unknown", []string{"--allow-unsupported"}, traceOptions{}, false},
+		{"repeated verify", []string{verifyFlag, verifyFlag}, traceOptions{}, false},
+		{"repeated override", []string{allowUnsupportedVersionFlag, allowUnsupportedVersionFlag}, traceOptions{}, false},
+		{"provider option", []string{"-p"}, traceOptions{}, false},
+		{"prefix of a known option", []string{"--verif"}, traceOptions{}, false},
+		{"known option with a value attached", []string{"--verify=true"}, traceOptions{}, false},
 	} {
-		code, _, stderr := run(t, args...)
-		// These runs get as far as probing for a `claude` that is not installed
-		// here, which is a recording failure and not a usage one. What matters is
-		// that the arrangement itself was accepted.
-		if code == 2 || stderr == traceUsage {
-			t.Errorf("run(%q) = %d, %q; want the options accepted", args, code, stderr)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseTraceOptions(tc.args)
+			if ok != tc.ok || got != tc.want {
+				t.Errorf("parseTraceOptions(%q) = (%+v, %v), want (%+v, %v)", tc.args, got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }
 
