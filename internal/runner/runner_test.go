@@ -72,6 +72,13 @@ func helperMain(mode string, args []string) int {
 		fmt.Printf("note: exported API_TOKEN=%s\n", chattySecret)
 		emit("evt-2")
 		return 0
+	case "invalid-utf8":
+		// A provider can emit bytes that are not text between valid JSONL events.
+		// The recorder must retain that fact as its fixed marker rather than
+		// replacing bytes and pretending those replacement characters were output.
+		os.Stdout.Write([]byte("notice: \xff\n"))
+		emit("evt-1")
+		return 0
 	case "overlong":
 		// One line past what the recorder can store whole, then far more than a
 		// pipe buffer's worth of further output. A supervisor that stops reading
@@ -855,6 +862,29 @@ func TestRunKeepsNonEventStdoutLinesWithoutFailingTheRun(t *testing.T) {
 	}
 	if !strings.Contains(joined, "[REDACTED:") {
 		t.Errorf("unparsed lines = %q, want a redaction marker where the credential was", joined)
+	}
+}
+
+func TestRunKeepsInvalidUTF8UnparsedStdoutAsAMarker(t *testing.T) {
+	b := newBundle(t)
+
+	res, err := Run(context.Background(), Request{
+		Command: helperCommand("invalid-utf8"),
+		Bundle:  b,
+		Parser:  tolerantJSONLParser(),
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitReason != ReasonCompleted || res.UnparsedLines != 1 {
+		t.Errorf("result exit reason = %q, unparsed lines = %d; want completed and 1", res.ExitReason, res.UnparsedLines)
+	}
+	if got := readLines(t, filepath.Join(b.Dir(), "provider-stdout.unparsed.log")); len(got) != 1 || got[0] != "[agentrec: a stdout line was not valid UTF-8 and was not stored]" {
+		t.Errorf("unparsed stdout = %q, want the invalid UTF-8 marker", got)
+	}
+	if got := readManifest(t, b.Dir()).UnparsedLines; got != 1 {
+		t.Errorf("manifest unparsedLines = %d, want 1", got)
 	}
 }
 

@@ -1583,6 +1583,10 @@ const helperContractExit = 3
 // no mark.
 const startedEnv = "AGENTREC_TEST_PROVIDER_STARTED"
 
+// providerVersionEnv lets a CLI fixture report an exact version without ever
+// consulting an installed provider binary.
+const providerVersionEnv = "AGENTREC_TEST_PROVIDER_VERSION"
+
 // agentrecName is the name the test binary is symlinked under when it is the
 // recorder itself rather than a provider, for the one test that has to signal
 // agentrec as the operating system would rather than call it in process.
@@ -2171,13 +2175,20 @@ func TestTraceRefusesToVerifyWithoutAPinnableConfiguration(t *testing.T) {
 	}
 }
 
+func helperProviderVersion(fallback string) string {
+	if version := os.Getenv(providerVersionEnv); version != "" {
+		return version
+	}
+	return fallback
+}
+
 func claudeHelper(args []string) int {
 	if slices.Equal(args, []string{"--version"}) {
 		if err := pauseVersionProbe(); err != nil {
 			fmt.Fprintln(os.Stderr, "claude helper:", err)
 			return helperContractExit
 		}
-		fmt.Println(claudeHelperVersion)
+		fmt.Println(helperProviderVersion(claudeHelperVersion))
 		return 0
 	}
 	markStarted()
@@ -3301,6 +3312,61 @@ func TestParseTraceOptions(t *testing.T) {
 				t.Errorf("parseTraceOptions(%q) = (%+v, %v), want (%+v, %v)", tc.args, got, ok, tc.want, tc.ok)
 			}
 		})
+	}
+}
+
+func TestTraceRecordsAnExplicitUnsupportedVersionOverride(t *testing.T) {
+	root := home(t)
+	cleanRepo(t)
+	stubProviders(t, "claude")
+	started := providerStarted(t)
+	t.Setenv(providerVersionEnv, "3.0.0 (Claude Code)")
+
+	code, stdout, stderr := run(t, "trace", "claude", "--", "-p", "hello")
+	if code != exitFailure {
+		t.Fatalf("strict trace exit code = %d, want %d (stdout %q, stderr %q)", code, exitFailure, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "outside the supported range") {
+		t.Errorf("strict trace stderr = %q, want unsupported version refusal", stderr)
+	}
+	wantNothingRecorded(t, root, started)
+
+	code, stdout, stderr = run(t, "trace", "claude", allowUnsupportedVersionFlag, "--", "-p", "hello")
+	if code != 0 {
+		t.Fatalf("override trace exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !started() {
+		t.Fatal("override trace did not launch the stub provider")
+	}
+	if !strings.Contains(stderr, "timeline may be incomplete") {
+		t.Errorf("override trace stderr = %q, want uncertainty warning", stderr)
+	}
+	if !strings.Contains(stdout, "unsupported; timeline may be incomplete") {
+		t.Errorf("override trace stdout =\n%s\nwant unsupported report annotation", stdout)
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("runs root = %v (%v), want one recorded override run", entries, err)
+	}
+	id := entries[0].Name()
+	manifest, err := readManifest(filepath.Join(root, id))
+	if err != nil {
+		t.Fatalf("read override manifest: %v", err)
+	}
+	if manifest.ProviderVersion != "3.0.0" || !manifest.VersionUnverified {
+		t.Errorf("manifest version = %q, unverified = %v; want 3.0.0 and true", manifest.ProviderVersion, manifest.VersionUnverified)
+	}
+
+	code, shown, showErr := run(t, "show", id)
+	if code != 0 {
+		t.Fatalf("show exit code = %d, want 0 (stderr %q)", code, showErr)
+	}
+	if !strings.Contains(shown, "Version      3.0.0  (unsupported; timeline may be incomplete)") {
+		t.Errorf("show output =\n%s\nwant unsupported version annotation", shown)
+	}
+	if rendered := readFileString(t, filepath.Join(root, id, reportFile)); !strings.Contains(rendered, "unsupported; timeline may be incomplete") {
+		t.Errorf("report.md =\n%s\nwant unsupported version annotation", rendered)
 	}
 }
 

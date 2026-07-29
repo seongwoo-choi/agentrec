@@ -229,6 +229,57 @@ func TestProviderEventsFromTheFixtureArePersistedSanitized(t *testing.T) {
 	}
 }
 
+func TestWriteUnparsedLineReplacesInvalidUTF8AndCountsIt(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := b.WriteUnparsedLine([]byte{0xff, 0xfe}); err != nil {
+		t.Fatalf("WriteUnparsedLine: %v", err)
+	}
+	if err := b.Finalize(Finalization{
+		EndedAt:       testManifest().StartedAt.Add(time.Second),
+		ExitReason:    "completed",
+		UnparsedLines: 1,
+	}); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	lines := readLines(t, filepath.Join(b.Dir(), unparsedFile))
+	if len(lines) != 1 || lines[0] != unparsedNotUTF8 {
+		t.Errorf("unparsed lines = %q, want only %q", lines, unparsedNotUTF8)
+	}
+	if got := readManifest(t, b).UnparsedLines; got != 1 {
+		t.Errorf("manifest unparsedLines = %d, want 1", got)
+	}
+}
+
+func TestFinalizeReportsAnUnparsedStreamCloseFailureAfterWritingManifest(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := b.WriteUnparsedLine([]byte("provider banner")); err != nil {
+		t.Fatalf("WriteUnparsedLine: %v", err)
+	}
+	if err := b.unparsed.Close(); err != nil {
+		t.Fatalf("close unparsed stream before Finalize: %v", err)
+	}
+
+	err = b.Finalize(Finalization{
+		EndedAt:       testManifest().StartedAt.Add(time.Second),
+		ExitReason:    "storage_error",
+		UnparsedLines: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), unparsedFile) {
+		t.Fatalf("Finalize error = %v, want unparsed stream failure", err)
+	}
+	manifest := readManifest(t, b)
+	if manifest.ExitReason != "storage_error" || manifest.UnparsedLines != 1 {
+		t.Errorf("manifest exit = %q, unparsedLines = %d; want storage_error and 1", manifest.ExitReason, manifest.UnparsedLines)
+	}
+}
+
 func TestWriteProviderEventFailsClosedOnMalformedEvents(t *testing.T) {
 	// Arrange
 	b, err := Create(t.TempDir(), "run-1", testManifest())
