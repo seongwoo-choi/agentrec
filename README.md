@@ -35,12 +35,26 @@ pinned. Each comes from a different observer, and the bundle keeps them apart.
 Events carrying only provider progress, collaboration waits or todo-list
 lifecycle are stream metadata: they name no action, and do not inflate warnings.
 
+A stdout line that is not a provider event at all — an update banner, a
+deprecation warning, anything an agent CLI prints beside its event stream — is
+kept in `provider-stdout.unparsed.log`, redacted like everything else, counted
+in the manifest as `unparsedLines`, and named in the report. It is not filed
+among the events, and it does not fail the run: a provider that printed one line
+of prose has still run, and throwing that recording away would destroy the
+evidence agentrec exists to keep.
+
 ## Quick start
 
 **Prerequisites.** Building from source requires Go 1.26 or newer. A supported
 provider CLI must already be on `PATH`; agentrec launches it, never installs it.
 A version outside the range is refused, not recorded on the assumption its event
-stream still fits.
+stream still fits. `agentrec trace --allow-unsupported-version` overrides that
+refusal: the run is recorded, the manifest is stamped `versionUnverified`, and
+every report says so — the timeline was read by a parser that does not claim to
+understand that version's stream, while the other three evidence layers do not
+depend on the parser at all. `agentrec shadow run` has no such override, because
+a comparison between one timeline that was read properly and one that was not is
+not a comparison.
 
 | Provider | Executable | Supported range | Notes |
 |---|---|---|---|
@@ -97,6 +111,9 @@ agentrec trace claude --verify -- -p "add a regression test for the parser"
 
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
+
+# Record against a provider version this parser was not written for
+agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 
 # Record the same task with both agents, from one commit
 agentrec shadow run task.md --runner claude --runner codex
@@ -189,6 +206,7 @@ SHADOW COMPARISON
 
 claude
   Run ID       20260729T101500.000000000Z-1a2b3c4d
+  Order        1
   Verification PASS
   Config SHA-256 e20695bb3ebee3381b54da6fc46b6b1efa1adc9b87a5eb99b45505b5dbdfae3f
   Exit Reason  completed
@@ -200,7 +218,16 @@ claude
 
 codex
   ...
+
+The legs ran in the Order shown, one after another. Provider authentication,
+caches, rate limits and any network service both agents use are not reset
+between them, so a later leg may observe what an earlier one left.
 ```
+
+`Order` is the position each leg actually ran in, which is not the order the
+blocks are printed in: the runner blocks are always rendered `claude` then
+`codex` so two operators read the same comparison, and that fixed order is
+exactly what would otherwise hide which agent went first.
 
 What the command does and does not give you:
 
@@ -225,7 +252,9 @@ What the command does and does not give you:
   verified against the committed `.agentrec.yaml`, and they execute one after
   another. Their checks do not overlap, but mutable authentication, caches,
   network services and other external state are not reset between legs; input
-  runner order can therefore affect what the second provider observes.
+  runner order can therefore affect what the second provider observes. The
+  comparison shows each leg's `Order` and states this, so the two results are
+  never read as though they were produced under identical conditions.
 - **A linked worktree is not a security boundary.** It shares the repository's
   common Git directory and refs, and a provider can explicitly reach the source
   checkout. The lock coordinates agentrec processes only. After removing each
@@ -265,6 +294,9 @@ so it is readable only by the user who recorded it. One directory per run holds
 `manifest.json`, `prompt.txt`, the sanitized event stream and stderr,
 `actions.jsonl`, `process/result.json`, `git/` (baseline, result, untracked
 bodies), `verification/results.json` and `report.md`.
+`provider-stdout.unparsed.log` joins them only when the provider printed
+something on stdout that was not an event; a run that emitted nothing but events
+leaves no empty file claiming otherwise.
 
 ## Statuses and exit codes
 
@@ -299,11 +331,16 @@ no exit code, and neither field is inferred from the other.
 
 ## Security
 
-- **Structural redaction before persistence.** Provider events and stderr are
-  redacted before they are written. Values under field names whose canonicalized
-  form ends in one of 13 secret suffixes (`TOKEN`, `SECRET`, `PASSWORD`,
-  `APIKEY`, `AUTHORIZATION`, `COOKIE`, …), plus `NAME=VALUE` assignments and
-  token shapes, become `[REDACTED:n]`; the rule version is stamped per manifest.
+- **Structural redaction before persistence.** Provider events, stderr and
+  non-event stdout lines are redacted before they are written. Values under field
+  names whose canonicalized form ends in one of 17 secret suffixes (`TOKEN`,
+  `SECRET`, `PASSWORD`, `APIKEY`, `PASSPHRASE`, `AUTHORIZATION`, `COOKIE`, …),
+  plus `NAME=VALUE` assignments and 13 vendor token shapes (GitHub, OpenAI, AWS,
+  Google, Stripe, JWT, Slack tokens and webhooks, GitLab, npm, Hugging Face,
+  PyPI), become `[REDACTED:n]`. Matching on the suffix rather than a substring is
+  what keeps `PUBLIC_KEY`, `primaryKey` and `token_id` readable. The rule version
+  is stamped per manifest — bundles stamped `1` and `2` were judged by different
+  rules, and their redaction counts are not comparable.
 - **Untracked file bodies are stored** under `git/untracked/`, hashed over
   sanitized text — a hash of raw text would hand a short secret back by guessing.
 - **Reports never embed the raw provider event stream, tracked patch, or untracked

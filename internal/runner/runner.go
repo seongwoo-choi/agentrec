@@ -101,6 +101,11 @@ type Result struct {
 	Signal       string
 	ExitReason   string
 	WarningCount int
+	// UnparsedLines counts the stdout lines that were not provider events and
+	// were kept apart from them. They are included in WarningCount, and counted
+	// separately as well, so a reader can tell a run whose agent reported
+	// problems from one whose CLI merely printed a banner.
+	UnparsedLines int
 }
 
 // processResult is process/result.json: how the run was executed, kept apart
@@ -192,7 +197,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		pr.CloseWithError(err)
 		parsed <- parseOutcome{out, err}
 	}()
-	streamed := make(chan error, 1)
+	streamed := make(chan teeOutcome, 1)
 	go func() { streamed <- tee(stdout, pw, req.Bundle) }()
 
 	signaller := &groupSignaller{pid: cmd.Process.Pid}
@@ -200,7 +205,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 
 	// Wait only once every reader is finished: the pipes are closed by Wait, and
 	// what has not been read by then is evidence that never arrives.
-	streamErr := <-streamed
+	stream := <-streamed
 	parse := <-parsed
 	stderrOut := <-stderrDone
 
@@ -210,6 +215,12 @@ func Run(ctx context.Context, req Request) (Result, error) {
 
 	res.EndedAt = time.Now()
 	res.Duration = res.EndedAt.Sub(res.StartedAt)
+	// Counted, not added: a line neither the parser nor the event writer could
+	// read is one line, and both of them saw it. The parsers already raise a
+	// warning for a line they cannot read as an event, so this is the same
+	// occurrence named more precisely — adding the two would report one banner
+	// as two things having gone wrong.
+	res.UnparsedLines = stream.unparsed
 	res.WarningCount = parse.out.WarningCount
 	if cmd.ProcessState != nil {
 		res.ExitCode, res.Signal = exitStatus(cmd.ProcessState)
@@ -217,7 +228,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 
 	storageErr := writeEvidence(req.Bundle, stderrOut.text, parse)
 	if storageErr == nil {
-		storageErr = firstOf(streamErr, stderrOut.err)
+		storageErr = firstOf(stream.err, stderrOut.err)
 	}
 
 	// The supervisor's own reason comes first: a run it ended is described by
@@ -285,9 +296,10 @@ func finish(b *storage.Bundle, res Result, runErr error) (Result, error) {
 		res.ExitReason = ReasonStorageError
 	}
 	finalizeErr := b.Finalize(storage.Finalization{
-		EndedAt:      res.EndedAt,
-		ExitReason:   res.ExitReason,
-		WarningCount: res.WarningCount,
+		EndedAt:       res.EndedAt,
+		ExitReason:    res.ExitReason,
+		WarningCount:  res.WarningCount,
+		UnparsedLines: res.UnparsedLines,
 	})
 	return res, firstOf(runErr, resultErr, finalizeErr)
 }
@@ -303,22 +315,46 @@ func pipes(cmd *exec.Cmd) (stdout, stderr io.Reader, err error) {
 	return stdout, stderr, nil
 }
 
+// teeOutcome is what recording the stdout stream came to: how many lines were
+// not provider events, and the first failure that stopped one from being
+// recorded at all.
+type teeOutcome struct {
+	unparsed int
+	err      error
+}
+
 // tee records every complete stdout line as a provider event and passes it on
 // to the parser reading the other end of pw. The stream is read to the end even
 // once something has gone wrong, so the provider never blocks writing into a
 // pipe nobody is emptying.
-func tee(stdout io.Reader, pw *io.PipeWriter, b *storage.Bundle) error {
+//
+// A line that is not a provider event at all — an update banner, a deprecation
+// warning, anything an agent CLI prints beside its event stream — is kept in
+// the bundle's unparsed stream and counted, not treated as a failure to record.
+// A provider that printed one line of prose has still run, and a recorder that
+// threw the whole run away over it would be destroying the evidence it exists
+// to keep. What does fail is the recorder being unable to store that line
+// either: at that point something the provider said is being lost.
+func tee(stdout io.Reader, pw *io.PipeWriter, b *storage.Bundle) teeOutcome {
 	defer pw.Close()
 
-	var first error
+	var out teeOutcome
+	keep := func(err error) {
+		if err != nil && out.err == nil {
+			out.err = err
+		}
+	}
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, initialLineBuffer), maxLineBytes)
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(bytes.TrimSpace(line)) > 0 {
-			if err := b.WriteProviderEvent(line); err != nil && first == nil {
-				first = err
+			err := b.WriteProviderEvent(line)
+			if errors.Is(err, storage.ErrNotProviderEvent) {
+				out.unparsed++
+				err = b.WriteUnparsedLine(line)
 			}
+			keep(err)
 		}
 		// A write that fails here means the parser stopped reading, which is
 		// already reported as the parser's own error; the loop carries on so the
@@ -333,14 +369,12 @@ func tee(stdout io.Reader, pw *io.PipeWriter, b *storage.Bundle) error {
 		// The scanner stops there, so the rest of the stream is read and dropped
 		// here; a provider still writing into a pipe nobody empties never exits,
 		// and an unbounded run has no timeout to rescue it.
-		if first == nil {
-			first = fmt.Errorf("runner: read provider output: %w", err)
-		}
-		if _, derr := io.Copy(io.Discard, stdout); derr != nil && first == nil {
-			first = fmt.Errorf("runner: read provider output: %w", derr)
+		keep(fmt.Errorf("runner: read provider output: %w", err))
+		if _, derr := io.Copy(io.Discard, stdout); derr != nil {
+			keep(fmt.Errorf("runner: read provider output: %w", derr))
 		}
 	}
-	return first
+	return out
 }
 
 var newline = []byte("\n")

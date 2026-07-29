@@ -33,11 +33,22 @@ agentrec 把一次非交互式的 Claude Code 或 Codex 运行记录成一个证
 只携带提供方进度、协作等待或待办列表生命周期的事件属于流元数据：它们不指向任何动作，
 也不会抬高警告数。
 
+根本就不是提供方事件的那一行 stdout —— 更新横幅、弃用警告，以及智能体 CLI 在事件流
+旁边打印的任何东西 —— 会被保留在 `provider-stdout.unparsed.log` 中，像其他一切一样
+被脱敏，在清单中以 `unparsedLines` 计数，并在报告中点明。它不会被混进事件里，也不会
+让这次运行失败：打印了一行散文的提供方同样是运行过的，而丢掉那份记录就是在摧毁
+agentrec 存在的意义所在的证据。
+
 ## 快速开始
 
 **前置条件。** 从源码构建需要 Go 1.26 或更高版本。受支持的提供方 CLI 必须已经在
 `PATH` 上；agentrec 只启动它，绝不安装它。超出支持范围的版本会被拒绝，而不会在
-「它的事件流大概还对得上」的假设下被记录。
+「它的事件流大概还对得上」的假设下被记录。`agentrec trace
+--allow-unsupported-version` 会覆盖这次拒绝：运行会被记录，清单上会标注
+`versionUnverified`，并且每一份报告都会说明这一点 —— 时间线是由一个并不声称理解该
+版本事件流的解析器读出来的，而其余三个证据层完全不依赖解析器。`agentrec shadow run`
+没有这个覆盖，因为一条被正确读出的时间线和一条没有被正确读出的时间线之间的比较，
+并不是比较。
 
 | 提供方 | 可执行文件 | 支持范围 | 说明 |
 |---|---|---|---|
@@ -92,6 +103,9 @@ agentrec trace claude --verify -- -p "add a regression test for the parser"
 
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
+
+# 针对本解析器并非为之编写的提供方版本进行记录
+agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 
 # Record the same task with both agents, from one commit
 agentrec shadow run task.md --runner claude --runner codex
@@ -179,6 +193,7 @@ SHADOW COMPARISON
 
 claude
   Run ID       20260729T101500.000000000Z-1a2b3c4d
+  Order        1
   Verification PASS
   Config SHA-256 e20695bb3ebee3381b54da6fc46b6b1efa1adc9b87a5eb99b45505b5dbdfae3f
   Exit Reason  completed
@@ -190,7 +205,15 @@ claude
 
 codex
   ...
+
+The legs ran in the Order shown, one after another. Provider authentication,
+caches, rate limits and any network service both agents use are not reset
+between them, so a later leg may observe what an earlier one left.
 ```
+
+`Order` 是每条支路实际运行的次序，而不是这些区块被打印出来的次序：runner 区块始终按
+`claude`、`codex` 渲染，好让两位运维读到同一份比较，而恰恰是这个固定次序会掩盖哪个
+智能体先跑。
 
 这条命令给你什么，不给你什么：
 
@@ -211,6 +234,8 @@ codex
 - **验证是强制的，两条支路是串行的。** 两次运行都针对已提交的 `.agentrec.yaml` 做
   验证，并且一条接着一条执行。检查不会重叠，但可变的认证、缓存、网络服务和其他外部
   状态不会在支路之间重置；输入的 runner 顺序因此可能影响第二个提供方观察到的状态。
+  比较会显示每条支路的 `Order` 并说明这一点，因此两个结果绝不会被当作是在完全相同的
+  条件下产生的。
 - **链接工作树不是安全边界。** 它共享仓库的公共 Git 目录和引用，提供方也可以明确访问
   源检出。锁只协调 agentrec 进程。agentrec 在移除每个 owned worktree 后，把源仓库的
   `HEAD`、状态、索引、引用、工作树列表和公共仓库 config 与预检 snapshot 比较。
@@ -239,7 +264,9 @@ drift，只要运行被中断就为 `130`。
 创建，`report.md` 也不例外 —— 证据包可能引用一个私有仓库，所以它只对记录它的那个
 用户可读。每次运行对应一个目录，里面有 `manifest.json`、`prompt.txt`、经过净化的
 事件流和 stderr、`actions.jsonl`、`process/result.json`、`git/`（基线、结果、未跟踪
-文件的内容）、`verification/results.json` 和 `report.md`。
+文件的内容）、`verification/results.json` 和 `report.md`。只有当提供方在 stdout 上
+打印了并非事件的东西时，`provider-stdout.unparsed.log` 才会一并出现；只发出事件的
+运行不会留下一个假装并非如此的空文件。
 
 ## 状态与退出码
 
@@ -268,10 +295,14 @@ Ctrl-C 和 SIGTERM 都会被接住而不是就地服从，并且贯穿整个记�
 
 ## 安全
 
-- **持久化之前做结构化脱敏。** 提供方事件和 stderr 在写入之前会被脱敏。字段名规范化
-  之后以 13 个秘密后缀之一（`TOKEN`、`SECRET`、`PASSWORD`、`APIKEY`、
-  `AUTHORIZATION`、`COOKIE`、……）结尾的那些值，加上 `NAME=VALUE` 形式的赋值和令牌
-  形状，都会变成 `[REDACTED:n]`；规则版本按清单逐份标注。
+- **持久化之前做结构化脱敏。** 提供方事件、stderr 以及并非事件的 stdout 行在写入之前
+  都会被脱敏。字段名规范化之后以 17 个秘密后缀之一（`TOKEN`、`SECRET`、`PASSWORD`、
+  `APIKEY`、`PASSPHRASE`、`AUTHORIZATION`、`COOKIE`、……）结尾的那些值，加上
+  `NAME=VALUE` 形式的赋值和 13 种厂商令牌形状（GitHub、OpenAI、AWS、Google、Stripe、
+  JWT、Slack 令牌与 Webhook、GitLab、npm、Hugging Face、PyPI），都会变成
+  `[REDACTED:n]`。按后缀而不是按子串匹配，正是 `PUBLIC_KEY`、`primaryKey` 和
+  `token_id` 得以保持可读的原因。规则版本按清单逐份标注 —— 标注为 `1` 和 `2` 的证据
+  包是由不同规则判定的，它们的脱敏计数不可比较。
 - **未跟踪文件的内容会被保存**，位于 `git/untracked/` 下，哈希是对净化后的文本计算的
   —— 对原始文本做哈希会让一个短秘密通过猜测被还原出来。
 - **报告绝不嵌入原始的提供方事件流、被跟踪文件的补丁或未跟踪文件的内容。** 它们确实

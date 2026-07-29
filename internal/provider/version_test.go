@@ -146,3 +146,74 @@ func TestResolveVersionIgnoresNonVersionLinesAndDigitRuns(t *testing.T) {
 		}
 	}
 }
+
+// An unsupported version is refused by default, and the refusal is the one
+// version failure a caller may knowingly proceed past — so it is reported under
+// a sentinel, and it carries the version that was read. Everything else that
+// stops a version being established leaves nothing to record and says so by
+// returning no version at all.
+func TestResolveVersionDistinguishesUnsupportedFromUnreadable(t *testing.T) {
+	version, err := ResolveVersion(context.Background(), "claude", stubProbe("claude 4.0.0"), testSpec)
+	if !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("ResolveVersion error = %v, want it to wrap ErrUnsupportedVersion", err)
+	}
+	// Returned with the error on purpose: a caller told to record such a run
+	// still has to record which version it recorded.
+	if version != "4.0.0" {
+		t.Errorf("ResolveVersion version = %q, want the version that was read", version)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		probe VersionProbe
+	}{
+		{"no version in the output", stubProbe("some other program")},
+		{"probe could not be run", func(context.Context, string) (string, error) {
+			return "", errors.New("exec: not found")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			version, err := ResolveVersion(context.Background(), "claude", tc.probe, testSpec)
+			if err == nil {
+				t.Fatal("ResolveVersion error = nil, want a refusal")
+			}
+			if errors.Is(err, ErrUnsupportedVersion) {
+				t.Errorf("ResolveVersion error = %v, want it not to claim an unsupported version", err)
+			}
+			if version != "" {
+				t.Errorf("ResolveVersion version = %q, want none: there was none to read", version)
+			}
+		})
+	}
+}
+
+// The override applies to the one refusal it is for, and to nothing else: a
+// version that could not be read at all is not a version an operator can decide
+// to record anyway, because there is nothing there to decide about.
+func TestResolveVersionForAppliesTheOverrideOnlyToUnsupportedVersions(t *testing.T) {
+	allow := Options{AllowUnsupportedVersion: true}
+
+	version, unverified, err := ResolveVersionFor(context.Background(), "claude", stubProbe("claude 4.0.0"), testSpec, allow)
+	if err != nil {
+		t.Fatalf("ResolveVersionFor error = %v, want the run recorded", err)
+	}
+	if version != "4.0.0" || !unverified {
+		t.Errorf("ResolveVersionFor = (%q, %v), want (\"4.0.0\", true)", version, unverified)
+	}
+
+	if _, _, err := ResolveVersionFor(context.Background(), "claude", stubProbe("some other program"), testSpec, allow); err == nil {
+		t.Error("ResolveVersionFor error = nil for an unreadable version, want it still refused")
+	}
+
+	// A supported version is never stamped unverified, whatever the caller asked
+	// for: the flag widens what is recordable, it does not weaken what is known.
+	version, unverified, err = ResolveVersionFor(context.Background(), "claude", stubProbe("claude 2.1.220"), testSpec, allow)
+	if err != nil || version != "2.1.220" || unverified {
+		t.Errorf("ResolveVersionFor = (%q, %v, %v), want (\"2.1.220\", false, nil)", version, unverified, err)
+	}
+
+	// And the default is still the refusal.
+	if _, _, err := ResolveVersionFor(context.Background(), "claude", stubProbe("claude 4.0.0"), testSpec, Options{}); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Errorf("ResolveVersionFor error = %v with no override, want the refusal", err)
+	}
+}

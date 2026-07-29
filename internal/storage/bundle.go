@@ -25,6 +25,12 @@ const (
 	promptFile   = "prompt.txt"
 	actionsFile  = "actions.jsonl"
 	eventsFile   = "provider-events.sanitized.jsonl"
+	// unparsedFile holds the stdout lines that were not provider events at all —
+	// an update banner, a deprecation warning, anything the provider printed
+	// beside its event stream. They are kept apart from the events because they
+	// are not events, and kept rather than dropped because a line the recorder
+	// could not read is still something the provider said.
+	unparsedFile = "provider-stdout.unparsed.log"
 )
 
 // Process artifacts describe the provider process itself and are written once,
@@ -49,22 +55,30 @@ const (
 // that produced the markers in this bundle, so it is set from the redaction
 // package rather than by the caller.
 type Manifest struct {
-	Provider             string     `json:"provider"`
-	ProviderVersion      string     `json:"providerVersion,omitempty"`
-	Argv                 []string   `json:"argv"`
-	CWD                  string     `json:"cwd"`
+	Provider        string   `json:"provider"`
+	ProviderVersion string   `json:"providerVersion,omitempty"`
+	Argv            []string `json:"argv"`
+	CWD             string   `json:"cwd"`
+	// VersionUnverified records that the provider's version was outside the
+	// range agentrec's parser was written against and the run was recorded
+	// anyway, on the operator's explicit say-so. What the run reports about
+	// itself was read by a parser that does not claim to understand this
+	// version's event stream, and every reader of this bundle is told so.
+	VersionUnverified    bool       `json:"versionUnverified,omitempty"`
 	StartedAt            time.Time  `json:"startedAt"`
 	EndedAt              *time.Time `json:"endedAt,omitempty"`
 	ExitReason           string     `json:"exitReason,omitempty"`
 	WarningCount         int        `json:"warningCount"`
+	UnparsedLines        int        `json:"unparsedLines,omitempty"`
 	RedactionRuleVersion string     `json:"redactionRuleVersion"`
 }
 
 // Finalization is what only the end of a run knows.
 type Finalization struct {
-	EndedAt      time.Time
-	ExitReason   string
-	WarningCount int
+	EndedAt       time.Time
+	ExitReason    string
+	WarningCount  int
+	UnparsedLines int
 }
 
 // ErrFinalized is returned by every write once the run has been finalized, and
@@ -72,16 +86,25 @@ type Finalization struct {
 // anything arriving after it belongs to a run that is no longer being recorded.
 var ErrFinalized = errors.New("storage: run already finalized")
 
+// ErrNotProviderEvent reports that a line offered as a provider event was not
+// one JSON object. It is the shape of the line being wrong and not this package
+// failing, so a supervisor can keep the line as what it actually is — see
+// WriteUnparsedLine — instead of ending the recording over it.
+var ErrNotProviderEvent = redaction.ErrNotJSONObject
+
 // Bundle is an open run directory. It holds one redactor for the whole run, so
 // a secret seen in argv, in the prompt, in an action and in a provider event is
 // recorded under a single marker. A Bundle is for one goroutine only and is not
 // safe for concurrent use: its caller must serialize writes and finalization.
 type Bundle struct {
-	dir       string
-	red       *redaction.Redactor
-	manifest  Manifest
-	actions   *os.File
-	events    *os.File
+	dir      string
+	red      *redaction.Redactor
+	manifest Manifest
+	actions  *os.File
+	events   *os.File
+	// unparsed is opened on the first line that was not an event, so a run whose
+	// provider only ever emitted events leaves no empty file claiming otherwise.
+	unparsed  *os.File
 	writeErr  error
 	finalized bool
 }
@@ -326,6 +349,42 @@ func (b *Bundle) WriteProviderEvent(raw []byte) error {
 	return b.appendLine(b.events, eventsFile, safe)
 }
 
+// unparsedNotUTF8 stands in for a line that cannot be carried as text. The
+// bytes are dropped rather than mangled into U+FFFD, which would read as what
+// the provider printed while differing from it; the line is still counted, so a
+// reader sees that something was said rather than a shorter file.
+const unparsedNotUTF8 = "[agentrec: a stdout line was not valid UTF-8 and was not stored]"
+
+// WriteUnparsedLine stores one stdout line that was not a provider event,
+// sanitized as free text. It exists so that a line the event reader refuses is
+// kept as what it actually is instead of ending the recording: an agent CLI
+// that prints an update banner or a deprecation warning beside its event stream
+// has still run, and a recorder that threw the whole run away over one such line
+// would be destroying the evidence it exists to keep.
+//
+// The line goes through the run's own redactor, so a secret printed here reads
+// as the same secret the events, the argv and the prompt already named.
+func (b *Bundle) WriteUnparsedLine(raw []byte) error {
+	if err := b.writable(); err != nil {
+		return err
+	}
+	safe := unparsedNotUTF8
+	if utf8.Valid(raw) {
+		var err error
+		if safe, err = b.redactFreeText("stdout", string(raw)); err != nil {
+			return b.fail(err)
+		}
+	}
+	if b.unparsed == nil {
+		f, err := createFile(b.path(unparsedFile))
+		if err != nil {
+			return b.fail(err)
+		}
+		b.unparsed = f
+	}
+	return b.appendLine(b.unparsed, unparsedFile, []byte(safe))
+}
+
 // Finalize closes the streams and rewrites the manifest with how the run
 // ended. Every ending is finalizable, including an interrupted or timed-out
 // one: a run that stopped badly is exactly the run whose record matters.
@@ -344,7 +403,12 @@ func (b *Bundle) Finalize(f Finalization) error {
 	for _, s := range []struct {
 		name string
 		file *os.File
-	}{{actionsFile, b.actions}, {eventsFile, b.events}} {
+	}{{actionsFile, b.actions}, {eventsFile, b.events}, {unparsedFile, b.unparsed}} {
+		// The unparsed stream is opened only if the run needed it, so a nil file
+		// here is a run that had nothing to put in it rather than one to report.
+		if s.file == nil {
+			continue
+		}
 		if err := syncClose(s.file); err != nil && streamErr == nil {
 			streamErr = fmt.Errorf("storage: finish %s: %w", s.name, err)
 		}
@@ -353,6 +417,7 @@ func (b *Bundle) Finalize(f Finalization) error {
 	b.manifest.EndedAt = &f.EndedAt
 	b.manifest.ExitReason = f.ExitReason
 	b.manifest.WarningCount = f.WarningCount
+	b.manifest.UnparsedLines = f.UnparsedLines
 	if err := b.writeManifest(); err != nil && streamErr == nil {
 		return err
 	}
@@ -403,12 +468,12 @@ func (b *Bundle) appendLine(f *os.File, name string, line []byte) error {
 // caller-supplied path is not something a failed create should ever perform,
 // and a directory holding anything unexpected is left standing.
 func (b *Bundle) discard() {
-	for _, f := range []*os.File{b.actions, b.events} {
+	for _, f := range []*os.File{b.actions, b.events, b.unparsed} {
 		if f != nil {
 			f.Close()
 		}
 	}
-	for _, name := range []string{eventsFile, actionsFile, manifestFile} {
+	for _, name := range []string{unparsedFile, eventsFile, actionsFile, manifestFile} {
 		os.Remove(b.path(name))
 	}
 	os.Remove(b.dir)

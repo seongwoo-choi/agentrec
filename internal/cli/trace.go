@@ -26,13 +26,23 @@ import (
 // including flags agentrec itself understands.
 const traceDelimiter = "--"
 
-const traceUsage = "usage: agentrec trace <claude|codex> [--verify] -- <provider args...>\n"
+const traceUsage = "usage: agentrec trace <claude|codex> [--verify] [--allow-unsupported-version] -- <provider args...>\n"
 
 // verifyFlag asks for the repository's own checks to be run against the work
-// once the provider has stopped. It is the only option agentrec takes for
-// itself, and it is spelled exactly: anything else before the delimiter is an
-// invocation agentrec does not understand rather than one it guesses at.
+// once the provider has stopped. Options agentrec takes for itself are spelled
+// exactly: anything else before the delimiter is an invocation agentrec does
+// not understand rather than one it guesses at.
 const verifyFlag = "--verify"
+
+// allowUnsupportedVersionFlag records a run against a provider version outside
+// the range agentrec's parser was written for, instead of refusing it. The
+// refusal is still the default, because a stream this parser does not
+// understand produces a timeline that quietly says less than it appears to.
+// This is the operator's way of saying they know that and want the other three
+// evidence layers anyway — the process result, the repository difference and
+// the pinned checks do not depend on the parser at all — and the bundle is
+// stamped so every later reader is told which run they are looking at.
+const allowUnsupportedVersionFlag = "--allow-unsupported-version"
 
 // verifyConfigFile is where the checks are read from, at the root of the
 // repository being recorded. It is not configurable: a verification an operator
@@ -107,17 +117,22 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	}
 	name, providerArgs := args[0], args[delimiter+1:]
 	// Everything between the provider and the delimiter is agentrec's own, and
-	// there is one thing it may be. An option it does not know, or one given
+	// there are two things it may be. An option it does not know, or one given
 	// twice, is refused rather than ignored: an operator who asked for something
 	// must not be told a run was recorded the way they asked for.
-	verify := false
+	verify, allowUnsupported := false, false
 	for _, opt := range args[1:delimiter] {
-		if opt != verifyFlag || verify {
+		switch {
+		case opt == verifyFlag && !verify:
+			verify = true
+		case opt == allowUnsupportedVersionFlag && !allowUnsupported:
+			allowUnsupported = true
+		default:
 			fmt.Fprint(stderr, traceUsage)
 			return exitUsage
 		}
-		verify = true
 	}
+	opts := provider.Options{AllowUnsupportedVersion: allowUnsupported}
 
 	var (
 		cmd    provider.Command
@@ -128,10 +143,10 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
 	switch name {
 	case "claude":
-		cmd, err = claude.PrepareCommand(ctx, providerArgs, nil)
+		cmd, err = claude.PrepareCommand(ctx, providerArgs, nil, opts)
 		parse, prompt = claudeParser, claudePrompt(providerArgs)
 	case "codex":
-		cmd, err = codex.PrepareCommand(ctx, providerArgs, nil)
+		cmd, err = codex.PrepareCommand(ctx, providerArgs, nil, opts)
 		parse, prompt = codexParser, codexPrompt(providerArgs)
 	default:
 		cancel()
@@ -142,6 +157,13 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailure
+	}
+	// Said once, where the operator is standing, and recorded in the manifest for
+	// everyone who reads the bundle later: a run whose event stream was read by a
+	// parser that does not claim to understand it must never look like an
+	// ordinary one.
+	if cmd.VersionUnverified {
+		fmt.Fprintf(stderr, "cli: %s %s is outside the range agentrec's parser was written for; recording anyway, and the provider-reported timeline may be incomplete\n", name, cmd.Version)
 	}
 
 	cwd, err := os.Getwd()

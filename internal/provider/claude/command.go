@@ -24,6 +24,10 @@ type Command = provider.Command
 // VersionProbe reports the raw `--version` output of the named executable.
 type VersionProbe = provider.VersionProbe
 
+// Options are the caller's decisions about how strictly the command is
+// prepared. The zero value refuses an unsupported version.
+type Options = provider.Options
+
 // supported is the Claude Code range agentrec's parser was written against:
 // the stream-json events of 2.1.x. A major release may reshape them, so
 // anything from 3.0.0 up is refused rather than recorded on the assumption it
@@ -37,7 +41,7 @@ var supported = provider.VersionSpec{
 // PrepareCommand validates caller arguments and returns the full Claude Code
 // invocation agentrec should run. A nil probe runs `claude --version`. The
 // caller's slice is never mutated.
-func PrepareCommand(ctx context.Context, args []string, probe VersionProbe) (Command, error) {
+func PrepareCommand(ctx context.Context, args []string, probe VersionProbe, opts Options) (Command, error) {
 	options := optionArgs(args)
 	if !hasFlag(options, "-p", "--print") {
 		return Command{}, fmt.Errorf("claude: non-interactive mode requires -p or --print in the argument list")
@@ -50,7 +54,7 @@ func PrepareCommand(ctx context.Context, args []string, probe VersionProbe) (Com
 		return Command{}, err
 	}
 
-	version, err := provider.ResolveVersion(ctx, executable, probe, supported)
+	version, unverified, err := provider.ResolveVersionFor(ctx, executable, probe, supported, opts)
 	if err != nil {
 		return Command{}, err
 	}
@@ -67,7 +71,7 @@ func PrepareCommand(ctx context.Context, args []string, probe VersionProbe) (Com
 	}
 	prepared = append(prepared, args...)
 
-	return Command{Executable: executable, Args: prepared, Version: version}, nil
+	return Command{Executable: executable, Args: prepared, Version: version, VersionUnverified: unverified}, nil
 }
 
 // optionArgs returns the leading arguments Claude Code parses as options,

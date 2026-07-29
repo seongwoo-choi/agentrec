@@ -37,12 +37,26 @@ agentrec は、非対話モードの Claude Code または Codex の実行 1 回
 イベントはストリームのメタデータである。これらはいかなるアクションも指し示さず、
 警告数を膨らませない。
 
+そもそもプロバイダーのイベントではない stdout の行 — 更新バナー、非推奨の警告、
+エージェント CLI がイベントストリームの傍らに出力する何であれ — は
+`provider-stdout.unparsed.log` に保持され、他のすべてと同じように秘匿され、
+マニフェストに `unparsedLines` として数えられ、レポートに明示される。イベントの
+中に紛れ込ませることはなく、実行を失敗させることもない。散文を 1 行出力した
+プロバイダーもまた実行されたのであり、その記録を捨てることは agentrec が守るために
+存在する証拠を破壊することだからである。
+
 ## クイックスタート
 
 **前提条件。** ソースからビルドするには Go 1.26 以降が必要である。サポートされる
 プロバイダー CLI が `PATH` 上にすでに存在していなければならない。agentrec はそれ
 を起動するだけで、インストールはしない。サポート範囲外のバージョンは、イベント
 ストリームがまだ合致するだろうという前提で記録されることはなく、拒否される。
+`agentrec trace --allow-unsupported-version` はその拒否を上書きする。実行は記録され、
+マニフェストには `versionUnverified` が刻まれ、すべてのレポートがそれを述べる —
+タイムラインは、そのバージョンのストリームを理解すると主張しないパーサーが読んだもので
+あり、残る 3 つの証拠層はパーサーにまったく依存しない。`agentrec shadow run` にこの
+上書きはない。正しく読まれたタイムラインとそうでないタイムラインの比較は、比較では
+ないからである。
 
 | プロバイダー | 実行ファイル | サポート範囲 | 備考 |
 |---|---|---|---|
@@ -101,6 +115,9 @@ agentrec trace claude --verify -- -p "add a regression test for the parser"
 
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
+
+# このパーサーが対象としていないプロバイダーバージョンに対して記録する
+agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 
 # Record the same task with both agents, from one commit
 agentrec shadow run task.md --runner claude --runner codex
@@ -194,6 +211,7 @@ SHADOW COMPARISON
 
 claude
   Run ID       20260729T101500.000000000Z-1a2b3c4d
+  Order        1
   Verification PASS
   Config SHA-256 e20695bb3ebee3381b54da6fc46b6b1efa1adc9b87a5eb99b45505b5dbdfae3f
   Exit Reason  completed
@@ -205,7 +223,15 @@ claude
 
 codex
   ...
+
+The legs ran in the Order shown, one after another. Provider authentication,
+caches, rate limits and any network service both agents use are not reset
+between them, so a later leg may observe what an earlier one left.
 ```
+
+`Order` は各レグが実際に実行された順序であり、ブロックが出力される順序ではない。
+ランナーのブロックは 2 人の運用者が同じ比較を読めるよう常に `claude`、`codex` の順に
+描画され、まさにその固定順序こそが、どちらのエージェントが先に走ったかを覆い隠す。
 
 このコマンドが与えるものと、与えないもの:
 
@@ -229,7 +255,9 @@ codex
 - **検証は必須であり、レグは直列化される。** 両方の実行はコミットされた
   `.agentrec.yaml` に対して検証され、片方ずつ順に実行される。チェックは重ならないが、
   可変な認証、キャッシュ、ネットワークサービスなどの外部状態はレグ間で初期化されない。
-  そのため入力したランナー順が 2 番目のプロバイダーの観測に影響しうる。
+  そのため入力したランナー順が 2 番目のプロバイダーの観測に影響しうる。比較は各レグの
+  `Order` を示してこのことを述べるので、2 つの結果が同一条件で得られたかのように
+  読まれることはない。
 - **リンクされたワークツリーはセキュリティ境界ではない。** 共通 Git ディレクトリと参照を
   共有し、プロバイダーはソースチェックアウトへ明示的に到達できる。ロックが調整するのは
   agentrec プロセス同士だけである。agentrec は各 owned worktree を削除したあと、ソースの
@@ -266,6 +294,9 @@ agentrec はそのレグの証拠を確定し、チェックアウトを削除�
 ディレクトリが `manifest.json`、`prompt.txt`、サニタイズ済みのイベントストリームと
 stderr、`actions.jsonl`、`process/result.json`、`git/`（ベースライン、結果、追跡
 されていないファイルの本文）、`verification/results.json`、`report.md` を保持する。
+`provider-stdout.unparsed.log` が加わるのは、プロバイダーが stdout にイベントではない
+何かを出力したときだけである。イベントしか出さなかった実行は、そうでないかのように
+見せる空のファイルを残さない。
 
 ## ステータスと終了コード
 
@@ -300,11 +331,16 @@ Ctrl-C と SIGTERM はどちらも、届いた場所で従うのではなく保�
 
 ## セキュリティ
 
-- **永続化の前に構造的な秘匿を行う。** プロバイダーのイベントと stderr は、書き出さ
-  れる前に秘匿される。正規化した形が 13 個の秘密サフィックス（`TOKEN`、`SECRET`、
-  `PASSWORD`、`APIKEY`、`AUTHORIZATION`、`COOKIE`、…）のいずれかで終わるフィールド
-  名の下にある値、加えて `NAME=VALUE` の代入とトークン形状は `[REDACTED:n]` になる。
-  ルールのバージョンはマニフェストごとに刻まれる。
+- **永続化の前に構造的な秘匿を行う。** プロバイダーのイベント、stderr、そしてイベント
+  ではない stdout の行は、書き出される前に秘匿される。正規化した形が 17 個の秘密
+  サフィックス（`TOKEN`、`SECRET`、`PASSWORD`、`APIKEY`、`PASSPHRASE`、
+  `AUTHORIZATION`、`COOKIE`、…）のいずれかで終わるフィールド名の下にある値、加えて
+  `NAME=VALUE` の代入と 13 個のベンダートークン形状（GitHub、OpenAI、AWS、Google、
+  Stripe、JWT、Slack のトークンと Webhook、GitLab、npm、Hugging Face、PyPI）は
+  `[REDACTED:n]` になる。部分文字列ではなくサフィックスで判定することが、
+  `PUBLIC_KEY`、`primaryKey`、`token_id` を読める形で残す理由である。ルールの
+  バージョンはマニフェストごとに刻まれる — `1` と `2` が刻まれた証拠バンドルは異なる
+  ルールで判定されており、その秘匿件数は比較できない。
 - **追跡されていないファイルの本文は保存される。** 場所は `git/untracked/` の下で、
   ハッシュはサニタイズ済みのテキストに対して取られる — 生のテキストのハッシュは、
   短い秘密を推測によって取り戻させてしまうからである。

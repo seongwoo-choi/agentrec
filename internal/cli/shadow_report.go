@@ -36,14 +36,14 @@ func renderComparison(w io.Writer, runsRoot string, legs []leg) error {
 		if _, err := fmt.Fprintf(w, "\n%s\n", name); err != nil {
 			return err
 		}
-		runID, ok := legRun(legs, name)
+		l, ok := legRun(legs, name)
 		if !ok {
 			if _, err := fmt.Fprintf(w, "  %s\n", notRun); err != nil {
 				return err
 			}
 			continue
 		}
-		fields, err := comparisonFields(runsRoot, runID)
+		fields, err := comparisonFields(runsRoot, l)
 		if err != nil {
 			return err
 		}
@@ -53,18 +53,37 @@ func renderComparison(w io.Writer, runsRoot string, legs []leg) error {
 			}
 		}
 	}
-	return nil
+	return renderSequenceNote(w, legs)
 }
 
-// legRun names the run one runner's leg was recorded under, if that leg ran at
-// all.
-func legRun(legs []leg, name string) (string, bool) {
+// sequenceNote says what the Order field means, so the two results are not read
+// as though they were produced under identical conditions. The legs are
+// serialized and nothing between them is reset, which is a property of the
+// comparison and not a caveat about one of the runs — so it is stated once, at
+// the end, rather than repeated inside each block.
+const sequenceNote = "The legs ran in the Order shown, one after another. Provider authentication,\n" +
+	"caches, rate limits and any network service both agents use are not reset\n" +
+	"between them, so a later leg may observe what an earlier one left."
+
+// renderSequenceNote states the ordering caveat, and only when more than one leg
+// actually ran: a comparison with a single recorded run has no sequence for it
+// to be about.
+func renderSequenceNote(w io.Writer, legs []leg) error {
+	if len(legs) < 2 {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "\n%s\n", sequenceNote)
+	return err
+}
+
+// legRun reports one runner's leg, if that leg ran at all.
+func legRun(legs []leg, name string) (leg, bool) {
 	for _, l := range legs {
 		if l.runner == name {
-			return l.runID, true
+			return l, true
 		}
 	}
-	return "", false
+	return leg{}, false
 }
 
 // field is one line of a leg's summary. The slice of them is built in one fixed
@@ -79,7 +98,8 @@ type field struct {
 // its process ended, what it left in its checkout, and how much it did. A
 // document the run never wrote is reported as the absence it is rather than as
 // a measured zero.
-func comparisonFields(runsRoot, runID string) ([]field, error) {
+func comparisonFields(runsRoot string, l leg) ([]field, error) {
+	runID := l.runID
 	dir, err := runDir(runsRoot, runID)
 	if err != nil {
 		return nil, err
@@ -105,7 +125,9 @@ func comparisonFields(runsRoot, runID string) ([]field, error) {
 		return nil, err
 	}
 
-	fields := []field{{"Run ID", runID}}
+	// Second, right under the run it identifies: what conditions a leg ran under
+	// is the first thing a reader needs before comparing anything else about it.
+	fields := []field{{"Run ID", runID}, {"Order", strconv.Itoa(l.order)}}
 	if verification == nil {
 		fields = append(fields, field{"Verification", none})
 	} else {

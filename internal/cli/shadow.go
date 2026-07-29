@@ -287,12 +287,20 @@ func shadowWorkspaces(dataRoot, group string) (string, error) {
 	return dir, nil
 }
 
-// leg is one recorded side of a comparison: which agent was recorded, and the
-// run its evidence is under. It carries no verdict of its own — what the two
-// runs came to is read back from their bundles.
+// leg is one recorded side of a comparison: which agent was recorded, the run
+// its evidence is under, and where in the sequence it ran. It carries no
+// verdict of its own — what the two runs came to is read back from their
+// bundles.
+//
+// The order is recorded because the legs are serialized and nothing between
+// them is reset: provider authentication, on-disk caches, rate limits and any
+// network service both agents talk to are whatever the previous leg left them.
+// A comparison that showed only the two results would be inviting a reading the
+// evidence does not support, so the position each run held is shown with it.
 type leg struct {
 	runner string
 	runID  string
+	order  int
 }
 
 // shadowLegs records each runner in the order the operator gave them, one after
@@ -308,7 +316,7 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 		}
 	}()
 
-	for _, name := range inv.runners {
+	for position, name := range inv.runners {
 		// Asked before every leg, so an interrupt that arrived while the last one
 		// was being finished or this one prepared never launches another agent.
 		if pending(interrupt) {
@@ -378,7 +386,7 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 		if !out.Recorded {
 			return legs, true, false
 		}
-		legs = append(legs, leg{runner: name, runID: runID})
+		legs = append(legs, leg{runner: name, runID: runID, order: position + 1})
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), gitTimeout)
 		cleanupErr := tree.Remove(cleanupCtx)
 		cancelCleanup()
@@ -451,17 +459,22 @@ func pending(interrupt <-chan os.Signal) bool {
 // traced run goes through, so what a comparison launches is what agentrec
 // records everywhere else: the task on the command line, and nothing added to
 // widen what the agent may do.
+// Both legs are prepared strictly: `trace` lets an operator record a run
+// against a provider whose version this parser does not understand, but a
+// comparison between one timeline that was read properly and one that was not
+// is not a comparison, so there is no override here.
 func shadowCommand(ctx context.Context, name, task string) (provider.Command, runner.Parser, error) {
+	var strict provider.Options
 	switch name {
 	case "claude":
-		cmd, err := claude.PrepareCommand(ctx, []string{"-p", "--", task}, nil)
+		cmd, err := claude.PrepareCommand(ctx, []string{"-p", "--", task}, nil, strict)
 		return cmd, claudeParser, err
 	case "codex":
 		// Behind the delimiter, so the task reaches Codex as the one positional
 		// prompt whatever it spells: a task file beginning with an option would
 		// otherwise be read as that option, and the agent launched with something
 		// the operator never asked for.
-		cmd, err := codex.PrepareCommand(ctx, []string{"exec", "--", task}, nil)
+		cmd, err := codex.PrepareCommand(ctx, []string{"exec", "--", task}, nil, strict)
 		return cmd, codexParser, err
 	}
 	return provider.Command{}, nil, fmt.Errorf("cli: %s is not an agent agentrec records", strconv.Quote(name))
