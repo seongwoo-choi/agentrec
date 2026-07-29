@@ -387,6 +387,7 @@ const wantComparison = `SHADOW COMPARISON
 
 claude
   Run ID       run-a
+  Order        1
   Verification PASS
   Config SHA-256 ` + evidenceConfigSum + `
   Exit Reason  completed
@@ -398,6 +399,7 @@ claude
 
 codex
   Run ID       run-b
+  Order        2
   Verification FAIL
   Config SHA-256 ` + evidenceConfigSum + `
   Exit Reason  nonzero
@@ -406,6 +408,8 @@ codex
   Repository   AVAILABLE  3 files (2 tracked, 1 untracked)  +32/-8, 0 binary
   Actions      1
   Warnings     0
+
+` + sequenceNote + `
 `
 
 // failedVerification is a verification whose one pinned check ran and failed.
@@ -436,7 +440,13 @@ func TestShadowComparisonIsFixedInOrderAndReadFromTheBundles(t *testing.T) {
 	writeGit(t, root, "run-b", availableGit())
 	writeVerification(t, root, "run-b", failedVerification())
 
-	asked := []leg{{runner: "claude", runID: "run-a"}, {runner: "codex", runID: "run-b"}}
+	// The same two legs, holding the same recorded execution order, handed over
+	// in either slice order: what a leg ran under travels with the leg, so how
+	// the caller happened to collect them changes nothing about the rendering.
+	asked := []leg{
+		{runner: "claude", runID: "run-a", order: 1},
+		{runner: "codex", runID: "run-b", order: 2},
+	}
 	reversed := []leg{asked[1], asked[0]}
 
 	for _, legs := range [][]leg{asked, reversed} {
@@ -465,6 +475,7 @@ const wantPartialComparison = `SHADOW COMPARISON
 
 claude
   Run ID       run-c
+  Order        1
   Verification (none)
   Exit Reason  unknown
   Duration     unknown
@@ -483,11 +494,51 @@ func TestShadowComparisonStatesWhatALegDidNotRecord(t *testing.T) {
 	writeRun(t, root, "run-c", "claude", late, "")
 
 	var out strings.Builder
-	if err := renderComparison(&out, root, []leg{{runner: "claude", runID: "run-c"}}); err != nil {
+	if err := renderComparison(&out, root, []leg{{runner: "claude", runID: "run-c", order: 1}}); err != nil {
 		t.Fatalf("render comparison: %v", err)
 	}
 	if out.String() != wantPartialComparison {
 		t.Errorf("comparison =\n%s\nwant\n%s", out.String(), wantPartialComparison)
+	}
+	// One recorded run is not a sequence, so there is no ordering caveat to
+	// state: a note about what a later leg may have observed, printed under a
+	// comparison with no later leg, would be describing something that never
+	// happened.
+	if strings.Contains(out.String(), sequenceNote) {
+		t.Errorf("comparison =\n%s\nwant no sequence note for a single recorded leg", out.String())
+	}
+}
+
+// The order a leg is shown in is the order it ran in, not the position it is
+// rendered at: the runner blocks are printed in a fixed order so two operators
+// read the same comparison, and that fixed order is exactly what would otherwise
+// hide which agent went first.
+func TestShadowComparisonShowsRecordedExecutionOrderNotRenderOrder(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	writeRun(t, root, "run-b", "codex", early, "completed")
+
+	// Codex was asked for first and ran first; Claude is still rendered first.
+	legs := []leg{
+		{runner: "codex", runID: "run-b", order: 1},
+		{runner: "claude", runID: "run-a", order: 2},
+	}
+	var out strings.Builder
+	if err := renderComparison(&out, root, legs); err != nil {
+		t.Fatalf("render comparison: %v", err)
+	}
+	rendered := out.String()
+	if !strings.Contains(rendered, "Run ID       run-a\n  Order        2\n") {
+		t.Errorf("comparison =\n%s\nwant claude's leg recorded as having run second", rendered)
+	}
+	if !strings.Contains(rendered, "Run ID       run-b\n  Order        1\n") {
+		t.Errorf("comparison =\n%s\nwant codex's leg recorded as having run first", rendered)
+	}
+	if strings.Index(rendered, "\nclaude\n") > strings.Index(rendered, "\ncodex\n") {
+		t.Errorf("comparison =\n%s\nwant the runner blocks in the fixed order whatever ran first", rendered)
+	}
+	if !strings.Contains(rendered, sequenceNote) {
+		t.Errorf("comparison =\n%s\nwant the ordering caveat stated", rendered)
 	}
 }
 

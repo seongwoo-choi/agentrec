@@ -97,11 +97,12 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 	// executable included, so the recorded argv is the command that ran and not
 	// the one the operator typed. Storage sets the redaction rule version.
 	bundle, err := storage.Create(req.RunsRoot, runID, storage.Manifest{
-		Provider:        req.Provider,
-		ProviderVersion: req.Command.Version,
-		Argv:            append([]string{req.Command.Executable}, req.Command.Args...),
-		CWD:             req.CWD,
-		StartedAt:       time.Now(),
+		Provider:          req.Provider,
+		ProviderVersion:   req.Command.Version,
+		VersionUnverified: req.Command.VersionUnverified,
+		Argv:              append([]string{req.Command.Executable}, req.Command.Args...),
+		CWD:               req.CWD,
+		StartedAt:         time.Now(),
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)

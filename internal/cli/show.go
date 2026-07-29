@@ -31,6 +31,10 @@ const (
 	gitDir        = "git"
 	verifyDir     = "verification"
 	verifyResults = "results.json"
+	// unparsedFile is named in the report rather than read: the lines in it are
+	// provider material this command does not render, and pointing at the file is
+	// how a reader is told where to find them.
+	unparsedFile = "provider-stdout.unparsed.log"
 )
 
 // Reading bounds. A bundle is written by this tool but read back from the
@@ -564,7 +568,14 @@ func lstatConfined(root *os.Root, name string) (os.FileInfo, error) {
 func supervisorFields(m storage.Manifest, result *processResult) []report.Field {
 	fields := []report.Field{{Name: "Provider", Value: m.Provider}}
 	if m.ProviderVersion != "" {
-		fields = append(fields, report.Field{Name: "Version", Value: m.ProviderVersion})
+		// A version the parser does not claim to understand is never shown as a
+		// bare version: what follows in the timeline was read by a parser written
+		// for a different stream, and the reader is told that where they read it.
+		version := m.ProviderVersion
+		if m.VersionUnverified {
+			version += "  (unsupported; timeline may be incomplete)"
+		}
+		fields = append(fields, report.Field{Name: "Version", Value: version})
 	}
 	fields = append(fields, report.Field{Name: "Exit Reason", Value: exitReason(m, result)})
 	if result != nil && result.ExitCode != nil {
@@ -573,10 +584,16 @@ func supervisorFields(m storage.Manifest, result *processResult) []report.Field 
 	if result != nil && result.Signal != "" {
 		fields = append(fields, report.Field{Name: "Signal", Value: result.Signal})
 	}
-	return append(fields,
+	fields = append(fields,
 		report.Field{Name: "Duration", Value: runDuration(m, result)},
 		report.Field{Name: "Warnings", Value: strconv.Itoa(m.WarningCount)},
 	)
+	// Shown only when there were any: a run whose provider emitted nothing but
+	// events has no line here, rather than a zero to read past.
+	if m.UnparsedLines > 0 {
+		fields = append(fields, report.Field{Name: "Unparsed", Value: fmt.Sprintf("%d stdout line(s) kept in %s", m.UnparsedLines, unparsedFile)})
+	}
+	return fields
 }
 
 // exitReason prefers the manifest, which is what the recorder concluded about

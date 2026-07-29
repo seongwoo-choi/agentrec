@@ -28,7 +28,7 @@ func TestPrepareCommandRequiresExecMode(t *testing.T) {
 		{"exec-with-typo"},
 		{"--cd", "/repo", "exec"},
 	} {
-		_, err := PrepareCommand(context.Background(), args, okProbe())
+		_, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 		if err == nil {
 			t.Fatalf("PrepareCommand(%q) = nil error, want error", args)
 		}
@@ -39,7 +39,7 @@ func TestPrepareCommandRequiresExecMode(t *testing.T) {
 }
 
 func TestPrepareCommandAcceptsExecMode(t *testing.T) {
-	cmd, err := PrepareCommand(context.Background(), []string{"exec"}, okProbe())
+	cmd, err := PrepareCommand(context.Background(), []string{"exec"}, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestPrepareCommandInjectsJSONRightAfterExec(t *testing.T) {
 	// would be parsed as part of the prompt rather than as an option.
 	args := []string{"exec", "--model", "gpt-5-codex", "summarize the repo"}
 
-	cmd, err := PrepareCommand(context.Background(), args, okProbe())
+	cmd, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestPrepareCommandAddsNoDuplicateJSONFlag(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, err := PrepareCommand(context.Background(), tc.args, okProbe())
+			cmd, err := PrepareCommand(context.Background(), tc.args, okProbe(), Options{})
 			if err != nil {
 				t.Fatalf("PrepareCommand error: %v", err)
 			}
@@ -117,7 +117,7 @@ func TestPrepareCommandIgnoresJSONAfterSeparator(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, err := PrepareCommand(context.Background(), tc.args, okProbe())
+			cmd, err := PrepareCommand(context.Background(), tc.args, okProbe(), Options{})
 			if err != nil {
 				t.Fatalf("PrepareCommand error: %v", err)
 			}
@@ -129,7 +129,7 @@ func TestPrepareCommandIgnoresJSONAfterSeparator(t *testing.T) {
 }
 
 func TestPrepareCommandNeverInjectsSandboxOrApprovalFlags(t *testing.T) {
-	cmd, err := PrepareCommand(context.Background(), []string{"exec", "audit"}, okProbe())
+	cmd, err := PrepareCommand(context.Background(), []string{"exec", "audit"}, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestPrepareCommandPreservesUserArgsIncludingSandboxAndApproval(t *testing.T
 		"--json",
 	}
 
-	cmd, err := PrepareCommand(context.Background(), args, okProbe())
+	cmd, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestPrepareCommandDoesNotMutateCallerArgs(t *testing.T) {
 	args = append(args, "exec", "prompt")
 	snapshot := []string{"exec", "prompt"}
 
-	cmd, err := PrepareCommand(context.Background(), args, okProbe())
+	cmd, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestPrepareCommandProbesTheCodexExecutable(t *testing.T) {
 		return "codex-cli 0.144.6", nil
 	}
 
-	if _, err := PrepareCommand(context.Background(), []string{"exec"}, probe); err != nil {
+	if _, err := PrepareCommand(context.Background(), []string{"exec"}, probe, Options{}); err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
 	if !equalArgs(probed, []string{"codex"}) {
@@ -218,7 +218,7 @@ func TestPrepareCommandReportsNormalizedVersion(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, err := PrepareCommand(context.Background(), []string{"exec"}, stubProbe(tc.output))
+			cmd, err := PrepareCommand(context.Background(), []string{"exec"}, stubProbe(tc.output), Options{})
 			if err != nil {
 				t.Fatalf("PrepareCommand(%q) error: %v", tc.output, err)
 			}
@@ -235,7 +235,7 @@ func TestPrepareCommandFailsWhenProbeFails(t *testing.T) {
 	notInstalled := errors.New(`exec: "codex": executable file not found in $PATH`)
 	probe := func(context.Context, string) (string, error) { return "", notInstalled }
 
-	cmd, err := PrepareCommand(context.Background(), []string{"exec", "prompt"}, probe)
+	cmd, err := PrepareCommand(context.Background(), []string{"exec", "prompt"}, probe, Options{})
 	if err == nil {
 		t.Fatalf("PrepareCommand() = %+v, nil error; want probe failure", cmd)
 	}
@@ -259,7 +259,7 @@ func TestPrepareCommandRejectsUnreadableVersion(t *testing.T) {
 		"codex-cli unknown",
 		"codex-cli v.x.y",
 	} {
-		cmd, err := PrepareCommand(context.Background(), []string{"exec"}, stubProbe(output))
+		cmd, err := PrepareCommand(context.Background(), []string{"exec"}, stubProbe(output), Options{})
 		if err == nil {
 			t.Fatalf("PrepareCommand(%q) = %+v, nil error; want malformed-version error", output, cmd)
 		}
@@ -278,7 +278,7 @@ func TestPrepareCommandRejectsVersionsOlderThanMinimum(t *testing.T) {
 		{"codex-cli 0.99.99", "0.99.99"},
 		{"codex-cli 0.0.1", "0.0.1"},
 	} {
-		cmd, err := PrepareCommand(context.Background(), []string{"exec"}, stubProbe(tc.output))
+		cmd, err := PrepareCommand(context.Background(), []string{"exec"}, stubProbe(tc.output), Options{})
 		if err == nil {
 			t.Fatalf("PrepareCommand(%q) = %+v, nil error; want too-old error", tc.output, cmd)
 		}
@@ -299,7 +299,7 @@ func TestPrepareCommandRejectsUnsupportedMajorVersions(t *testing.T) {
 		{"codex-cli 1.2.3", "1.2.3"},
 		{"codex-cli 2.0.0-beta.1", "2.0.0"},
 	} {
-		cmd, err := PrepareCommand(context.Background(), []string{"exec"}, stubProbe(tc.output))
+		cmd, err := PrepareCommand(context.Background(), []string{"exec"}, stubProbe(tc.output), Options{})
 		if err == nil {
 			t.Fatalf("PrepareCommand(%q) = %+v, nil error; want unsupported-major error", tc.output, cmd)
 		}
@@ -332,4 +332,28 @@ func equalArgs(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// The adapter carries the override through and stamps the command with what it
+// cost: a run recorded against a version this parser was not written for must
+// say so everywhere it is read, starting here.
+func TestPrepareCommandRecordsAnUnsupportedVersionOnlyWhenAllowed(t *testing.T) {
+	args := []string{"exec", "do the thing"}
+
+	if _, err := PrepareCommand(context.Background(), args, stubProbe("codex-cli 2.0.0"), Options{}); err == nil {
+		t.Fatal("PrepareCommand error = nil for an unsupported version, want the refusal")
+	}
+
+	cmd, err := PrepareCommand(context.Background(), args, stubProbe("codex-cli 2.0.0"), Options{AllowUnsupportedVersion: true})
+	if err != nil {
+		t.Fatalf("PrepareCommand error = %v, want the run prepared", err)
+	}
+	if cmd.Version != "2.0.0" || !cmd.VersionUnverified {
+		t.Errorf("PrepareCommand = (%q, unverified %v), want (\"2.0.0\", true)", cmd.Version, cmd.VersionUnverified)
+	}
+
+	cmd, err = PrepareCommand(context.Background(), args, okProbe(), Options{AllowUnsupportedVersion: true})
+	if err != nil || cmd.VersionUnverified {
+		t.Errorf("PrepareCommand on a supported version = (unverified %v, %v), want it not stamped", cmd.VersionUnverified, err)
+	}
 }

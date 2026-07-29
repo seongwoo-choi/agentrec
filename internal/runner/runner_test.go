@@ -61,6 +61,17 @@ func helperMain(mode string, args []string) int {
 		emit("evt-1")
 		code, _ := strconv.Atoi(args[0])
 		return code
+	case "chatty":
+		// An agent CLI that prints something other than its event stream on
+		// stdout: an update banner ahead of the events, a JSON array that is not
+		// one event object, and a secret in prose it should never have printed.
+		// None of these is an event, and none of them is a reason to lose the run.
+		fmt.Println("Update available: 9.9.9 -> run `npm i -g the-agent`")
+		emit("evt-1")
+		fmt.Println(`[{"not":"an event object"}]`)
+		fmt.Printf("note: exported API_TOKEN=%s\n", chattySecret)
+		emit("evt-2")
+		return 0
 	case "overlong":
 		// One line past what the recorder can store whole, then far more than a
 		// pipe buffer's worth of further output. A supervisor that stops reading
@@ -123,6 +134,11 @@ const helperSecret = `-----BEGIN RSA PRIVATE KEY-----
 MIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu
 KUpRKfFLfRYC9AIKjbJTWit+CqvjWYzvQwECAwEAAQJAIJLixBy2qpFoS4DSmoEm
 -----END RSA PRIVATE KEY-----`
+
+// chattySecret is a credential printed on stdout in prose rather than in an
+// event, which is exactly the line the recorder now keeps: keeping it is only
+// safe because it goes through the same redactor the events do.
+const chattySecret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
 
 // emit prints one provider event line.
 func emit(id string) {
@@ -191,6 +207,37 @@ func newBundle(t *testing.T) *storage.Bundle {
 // however many warnings the test wants the manifest to carry. When gate is set
 // it is created as soon as the first event has been parsed, which is what makes
 // streaming observable from the provider side.
+// tolerantJSONLParser mirrors what the real provider parsers do with a line
+// they cannot read as an event: count it and carry on. jsonlParser above stops
+// at one instead, which is what the parse-error path is exercised with — the
+// two stubs are different on purpose, and this is the one that stands for a
+// production run.
+func tolerantJSONLParser() Parser {
+	return func(r io.Reader) (ParseResult, error) {
+		var res ParseResult
+		sc := bufio.NewScanner(r)
+		for sc.Scan() {
+			line := bytes.TrimSpace(sc.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			var ev struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(line, &ev); err != nil {
+				res.WarningCount++
+				continue
+			}
+			res.Actions = append(res.Actions, action.Action{
+				ID:        ev.ID,
+				Type:      action.TypeToolCall,
+				Assurance: action.AssuranceProviderReported,
+			})
+		}
+		return res, sc.Err()
+	}
+}
+
 func jsonlParser(gate string, warnings int) Parser {
 	return func(r io.Reader) (ParseResult, error) {
 		res := ParseResult{WarningCount: warnings}
@@ -743,6 +790,93 @@ func TestRunFinalizesWhenStorageFails(t *testing.T) {
 	}
 	if m := readManifest(t, b.Dir()); m.ExitReason != ReasonStorageError {
 		t.Errorf("manifest exitReason = %q, want %q", m.ExitReason, ReasonStorageError)
+	}
+}
+
+// A line that is not a provider event is not a failure of the run. Agent CLIs
+// print update banners and warnings beside their event streams, and a recorder
+// that threw a completed run away over one of them would be destroying the
+// evidence it exists to keep. The line is kept apart from the events, counted,
+// and — because it is provider output like any other — redacted on the way in.
+func TestRunKeepsNonEventStdoutLinesWithoutFailingTheRun(t *testing.T) {
+	b := newBundle(t)
+
+	res, err := Run(context.Background(), Request{
+		Command: helperCommand("chatty"),
+		Bundle:  b,
+		Parser:  tolerantJSONLParser(),
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Run error = %v, want a recorded run", err)
+	}
+	if res.ExitReason != ReasonCompleted {
+		t.Errorf("ExitReason = %q, want %q", res.ExitReason, ReasonCompleted)
+	}
+	if res.UnparsedLines != 3 {
+		t.Errorf("UnparsedLines = %d, want 3", res.UnparsedLines)
+	}
+	// One banner is one thing that happened. The parser raises its own warning
+	// for a line it cannot read, so the count must not also carry the event
+	// writer's refusal of that same line.
+	if res.WarningCount != 3 {
+		t.Errorf("WarningCount = %d, want 3 — one per unreadable line, not two", res.WarningCount)
+	}
+
+	m := readManifest(t, b.Dir())
+	if m.ExitReason != ReasonCompleted || m.UnparsedLines != 3 {
+		t.Errorf("manifest exitReason = %q, unparsedLines = %d; want %q and 3", m.ExitReason, m.UnparsedLines, ReasonCompleted)
+	}
+
+	// The event stream holds only the events: a line that was not one must never
+	// be filed among them, or the timeline is built from something else.
+	events := readLines(t, filepath.Join(b.Dir(), "provider-events.sanitized.jsonl"))
+	if len(events) != 2 {
+		t.Errorf("provider events = %d, want the 2 real events", len(events))
+	}
+	for _, line := range events {
+		if !strings.HasPrefix(line, `{"id":"evt-`) {
+			t.Errorf("provider event %q is not one of the emitted events", line)
+		}
+	}
+
+	unparsed := readLines(t, filepath.Join(b.Dir(), "provider-stdout.unparsed.log"))
+	if len(unparsed) != 3 {
+		t.Fatalf("unparsed lines = %d (%q), want 3", len(unparsed), unparsed)
+	}
+	if !strings.Contains(unparsed[0], "Update available") {
+		t.Errorf("unparsed[0] = %q, want the banner the provider printed", unparsed[0])
+	}
+	// Kept, but not verbatim: prose on stdout is redacted by the same rules and
+	// under the same run-local markers as everything else in the bundle.
+	joined := strings.Join(unparsed, "\n")
+	if strings.Contains(joined, chattySecret) {
+		t.Errorf("unparsed lines = %q, want the credential redacted", joined)
+	}
+	if !strings.Contains(joined, "[REDACTED:") {
+		t.Errorf("unparsed lines = %q, want a redaction marker where the credential was", joined)
+	}
+}
+
+// A run whose provider only ever emitted events leaves no unparsed stream at
+// all: an empty file would read as a run that had lines to keep and kept none.
+func TestRunWritesNoUnparsedStreamWhenEveryLineWasAnEvent(t *testing.T) {
+	b := newBundle(t)
+
+	res, err := Run(context.Background(), Request{
+		Command: helperCommand("exit", "0"),
+		Bundle:  b,
+		Parser:  jsonlParser("", 0),
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if res.UnparsedLines != 0 {
+		t.Errorf("UnparsedLines = %d, want 0", res.UnparsedLines)
+	}
+	if _, err := os.Stat(filepath.Join(b.Dir(), "provider-stdout.unparsed.log")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stat unparsed stream = %v, want it never created", err)
 	}
 }
 

@@ -79,6 +79,20 @@ var tokenRules = []*regexp.Regexp{
 	regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`),
 	// JWTs: three base64url segments, the first carrying a JSON header.
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
+	// Slack bot, user, app, refresh, workflow and legacy tokens.
+	regexp.MustCompile(`\bxox[abeoprs]-[A-Za-z0-9-]{10,}`),
+	// Slack webhook URLs, whose path is the credential. All three delivery
+	// endpoints are matched: a workflow or trigger URL is as much a credential
+	// as the incoming-webhook one it is usually confused with.
+	regexp.MustCompile(`\bhttps://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9/+_-]{20,}`),
+	// GitLab personal, project, group and runner tokens.
+	regexp.MustCompile(`\bgl(?:pat|rt|soat|ptt)-[A-Za-z0-9_-]{20,}`),
+	// npm automation and publish tokens.
+	regexp.MustCompile(`\bnpm_[A-Za-z0-9]{36}\b`),
+	// Hugging Face user access tokens.
+	regexp.MustCompile(`\bhf_[A-Za-z0-9]{30,}`),
+	// PyPI upload tokens, whose prefix encodes "pypi.org".
+	regexp.MustCompile(`\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}`),
 }
 
 // bearerRule captures only the credential so the scheme name survives. It runs

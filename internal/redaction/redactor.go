@@ -16,14 +16,20 @@ import (
 
 // RuleVersion identifies the redaction rule set that produced a marker, so a
 // recorded run can be interpreted against the rules in force when it was made.
-const RuleVersion = "1"
+// It is bumped whenever a rule is added or changed: two bundles stamped with
+// different versions were judged by different rules, and a reader comparing
+// their redaction counts has to know that.
+const RuleVersion = "2"
 
 // secretSuffixes are the canonicalized field-name endings whose string values
-// are treated as secret material.
+// are treated as secret material. Matching on the ending rather than on a
+// substring is what keeps `PUBLIC_KEY`, `PRIMARY_KEY` and `TOKEN_ID` out: a
+// name that merely mentions a secret is not one.
 var secretSuffixes = []string{
 	"TOKEN", "SECRET", "PASSWORD", "APIKEY", "ACCESSKEY", "PRIVATEKEY",
 	"SECRETKEY", "SIGNINGKEY", "PASSWD", "AUTHORIZATION", "CREDENTIAL",
-	"CREDENTIALS", "COOKIE",
+	"CREDENTIALS", "COOKIE", "PASSPHRASE", "SESSIONKEY", "AUTHKEY",
+	"ENCRYPTIONKEY",
 }
 
 // nameCanonicalizer folds the spellings one secret name arrives under —
@@ -50,6 +56,14 @@ const maxEncodedJSONDepth = 8
 // secret-looking name are almost always placeholders or enum-like flags.
 const minSecretLen = 8
 
+// ErrNotJSONObject reports that the input was not exactly one JSON object. It
+// is a statement about the shape of the input and not about this package
+// failing: redaction cannot say which part of such a value was the secret, so
+// it refuses the value whole. A caller holding provider output can tell this
+// refusal apart from a real failure and decide where the line belongs instead —
+// what it must never do is persist the value as it arrived.
+var ErrNotJSONObject = errors.New("redaction: not exactly one JSON object")
+
 // Redactor holds the marker assignments for one run, so the same secret gets
 // the same marker across every event without ever revealing the secret.
 type Redactor struct {
@@ -64,14 +78,16 @@ func New() *Redactor {
 // RedactJSON returns v with every secret-named string value replaced by its
 // run-local marker.
 func (r *Redactor) RedactJSON(raw []byte) ([]byte, error) {
+	// Redaction fails closed: anything that is not exactly one JSON object is
+	// input this package cannot vouch for, so it is never passed through. Both
+	// ways of not being one are reported under ErrNotJSONObject, so a caller can
+	// tell "this is not an event" from "this package could not do its work".
 	v, err := decodeOne(raw)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrNotJSONObject, err)
 	}
-	// Redaction fails closed: anything that is not exactly one JSON object is
-	// input this package cannot vouch for, so it is never passed through.
 	if _, ok := v.(map[string]any); !ok {
-		return nil, fmt.Errorf("redaction: want a JSON object")
+		return nil, fmt.Errorf("%w: want a JSON object", ErrNotJSONObject)
 	}
 
 	out, err := json.Marshal(r.redactValue(v, "", 0))

@@ -570,3 +570,162 @@ func TestFixtureRedactsEverySyntheticSecretThroughSmallReads(t *testing.T) {
 		}
 	}
 }
+
+// Shapes added in rule version 2. Every one of them is matched on a distinctive
+// vendor prefix, so a rule can only fire on text that announces itself as that
+// vendor's credential — an expansion that widens what is caught without
+// widening what is destroyed. The negative cases are the point: readable
+// evidence that merely resembles a credential must survive.
+func TestRedactJSONRedactsVendorTokenShapesAddedInRuleVersionTwo(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "slack bot token",
+			raw:  `{"note":"posted with xoxb-000000000000-synthetic0000 to #ops"}`,
+			want: `{"note":"posted with [REDACTED:1] to #ops"}`,
+		},
+		{
+			name: "slack user token",
+			raw:  `{"note":"xoxp-000000000000-synthetic0001 belongs to the app"}`,
+			want: `{"note":"[REDACTED:1] belongs to the app"}`,
+		},
+		{
+			name: "slack incoming webhook url",
+			raw:  `{"cmd":"curl -X POST https://hooks.slack.com/services/T00000000/B00000000/synthetic00000000"}`,
+			want: `{"cmd":"curl -X POST [REDACTED:1]"}`,
+		},
+		{
+			name: "gitlab personal access token",
+			raw:  `{"cmd":"git push https://oauth2:glpat-synthetic0000000000000@gitlab.invalid/x"}`,
+			want: `{"cmd":"git push https://oauth2:[REDACTED:1]@gitlab.invalid/x"}`,
+		},
+		{
+			name: "gitlab runner token",
+			raw:  `{"note":"registered with glrt-synthetic0000000000001 last week"}`,
+			want: `{"note":"registered with [REDACTED:1] last week"}`,
+		},
+		{
+			// Deliberately not spelled as `_authToken=...`: that name is
+			// secret-bearing on its own, so an assignment fixture would pass
+			// without the shape rule existing at all.
+			name: "npm token",
+			raw:  `{"note":"published using npm_synthetic000000000000000000000000000 today"}`,
+			want: `{"note":"published using [REDACTED:1] today"}`,
+		},
+		{
+			name: "slack workflow webhook url",
+			raw:  `{"cmd":"curl -X POST https://hooks.slack.com/workflows/T00000000/A00000000/synthetic00000000"}`,
+			want: `{"cmd":"curl -X POST [REDACTED:1]"}`,
+		},
+		{
+			name: "hugging face token",
+			raw:  `{"note":"pulled the model with hf_synthetic00000000000000000000000000 today"}`,
+			want: `{"note":"pulled the model with [REDACTED:1] today"}`,
+		},
+		{
+			// The body has to reach the fifty characters the rule requires, which
+			// is what keeps the distinctive prefix from firing on a truncated
+			// mention of one.
+			name: "pypi upload token",
+			raw:  `{"note":"twine used pypi-AgEIcHlwaS5vcmcsynthetic00000000000000000000000000000000000000000 to upload"}`,
+			want: `{"note":"twine used [REDACTED:1] to upload"}`,
+		},
+		{
+			name: "a pypi prefix with too short a body stays",
+			raw:  `{"note":"pypi-AgEIcHlwaS5vcmcshort is not a token"}`,
+			want: `{"note":"pypi-AgEIcHlwaS5vcmcshort is not a token"}`,
+		},
+		{
+			name: "a slack channel name is not a token",
+			raw:  `{"note":"see #xoxb-notes for the runbook"}`,
+			want: `{"note":"see #xoxb-notes for the runbook"}`,
+		},
+		{
+			name: "an npm package name is not a token",
+			raw:  `{"cmd":"npm install npm_check_updates"}`,
+			want: `{"cmd":"npm install npm_check_updates"}`,
+		},
+		{
+			name: "a gitlab prefix without a token body stays",
+			raw:  `{"note":"glpat-short is not one"}`,
+			want: `{"note":"glpat-short is not one"}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := New().RedactJSON([]byte(tc.raw))
+			if err != nil {
+				t.Fatalf("RedactJSON(%s): %v", tc.raw, err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("RedactJSON(%s) =\n%s\nwant\n%s", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// Field-name suffixes added in rule version 2, and the names next to them that
+// must keep working: matching on the ending is what keeps a public key, a
+// primary key and a sort key readable while a passphrase is not.
+func TestRedactJSONRedactsFieldNameSuffixesAddedInRuleVersionTwo(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "passphrase",
+			raw:  `{"passphrase":"synthetic-passphrase-value"}`,
+			want: `{"passphrase":"[REDACTED:1]"}`,
+		},
+		{
+			name: "ssh key passphrase",
+			raw:  `{"SSH_KEY_PASSPHRASE":"synthetic-passphrase-value"}`,
+			want: `{"SSH_KEY_PASSPHRASE":"[REDACTED:1]"}`,
+		},
+		{
+			name: "session key",
+			raw:  `{"sessionKey":"synthetic-session-value"}`,
+			want: `{"sessionKey":"[REDACTED:1]"}`,
+		},
+		{
+			name: "auth key",
+			raw:  `{"auth-key":"synthetic-auth-value"}`,
+			want: `{"auth-key":"[REDACTED:1]"}`,
+		},
+		{
+			name: "encryption key",
+			raw:  `{"ENCRYPTION_KEY":"synthetic-encryption-value"}`,
+			want: `{"ENCRYPTION_KEY":"[REDACTED:1]"}`,
+		},
+		{
+			name: "a public key is not a secret name",
+			raw:  `{"PUBLIC_KEY":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 user@host"}`,
+			want: `{"PUBLIC_KEY":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 user@host"}`,
+		},
+		{
+			name: "a primary key is not a secret name",
+			raw:  `{"primaryKey":"orders_pkey_on_id_column"}`,
+			want: `{"primaryKey":"orders_pkey_on_id_column"}`,
+		},
+		{
+			name: "a keyboard shortcut is not a secret name",
+			raw:  `{"shortcutKey":"ctrl+shift+p opens the palette"}`,
+			want: `{"shortcutKey":"ctrl+shift+p opens the palette"}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := New().RedactJSON([]byte(tc.raw))
+			if err != nil {
+				t.Fatalf("RedactJSON(%s): %v", tc.raw, err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("RedactJSON(%s) =\n%s\nwant\n%s", tc.raw, got, tc.want)
+			}
+		})
+	}
+}

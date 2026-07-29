@@ -3238,3 +3238,113 @@ func TestClaudePromptRecordsOnlyAnUnambiguousPrompt(t *testing.T) {
 		})
 	}
 }
+
+// Options agentrec takes for itself are spelled exactly and given at most once.
+// An operator who asked for something must never be told a run was recorded the
+// way they asked for, so an unknown or repeated option is a usage refusal —
+// before any provider is probed, any bundle exists or any lock is taken.
+func TestTraceRejectsUnknownAndRepeatedOwnOptions(t *testing.T) {
+	home(t)
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"unknown option", []string{"trace", "claude", "--allow-unsupported", "--", "-p", "x"}},
+		{"repeated verify", []string{"trace", "claude", "--verify", "--verify", "--", "-p", "x"}},
+		{"repeated override", []string{"trace", "claude", allowUnsupportedVersionFlag, allowUnsupportedVersionFlag, "--", "-p", "x"}},
+		{"provider option before the delimiter", []string{"trace", "claude", "-p", "--", "x"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			code, stdout, stderr := run(t, tt.args...)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2", code)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+			if stderr != traceUsage {
+				t.Errorf("stderr = %q, want the trace usage", stderr)
+			}
+		})
+	}
+}
+
+// The two options agentrec takes for itself are independent and may be given in
+// either order: neither is the other's prerequisite, and an operator who spelled
+// both correctly must not be refused over how they arranged them.
+func TestTraceAcceptsItsOwnOptionsInEitherOrder(t *testing.T) {
+	home(t)
+	for _, args := range [][]string{
+		{"trace", "claude", verifyFlag, allowUnsupportedVersionFlag, "--", "-p", "x"},
+		{"trace", "claude", allowUnsupportedVersionFlag, verifyFlag, "--", "-p", "x"},
+	} {
+		code, _, stderr := run(t, args...)
+		// These runs get as far as probing for a `claude` that is not installed
+		// here, which is a recording failure and not a usage one. What matters is
+		// that the arrangement itself was accepted.
+		if code == 2 || stderr == traceUsage {
+			t.Errorf("run(%q) = %d, %q; want the options accepted", args, code, stderr)
+		}
+	}
+}
+
+// A run recorded against a version this parser was not written for, and a run
+// whose provider printed lines that were not events, both leave a bundle that
+// says so. Neither may render as an ordinary run: what the timeline shows in
+// each case is less than it appears to be, and the report is where a reader
+// finds that out.
+func TestShowStatesAnUnverifiedVersionAndUnparsedStdoutLines(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-x", storage.Manifest{
+		Provider:          "claude",
+		ProviderVersion:   "4.0.0",
+		VersionUnverified: true,
+		Argv:              []string{"claude", "-p", "hello"},
+		CWD:               "/tmp",
+		StartedAt:         late,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := b.WriteAction(readAction(late)); err != nil {
+		t.Fatalf("write action: %v", err)
+	}
+	if err := b.Finalize(storage.Finalization{
+		EndedAt:       late.Add(time.Second),
+		ExitReason:    "completed",
+		WarningCount:  2,
+		UnparsedLines: 2,
+	}); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-x")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "Version      4.0.0  (unsupported; timeline may be incomplete)") {
+		t.Errorf("stdout =\n%s\nwant the version shown as unsupported", stdout)
+	}
+	if !strings.Contains(stdout, "Unparsed     2 stdout line(s) kept in provider-stdout.unparsed.log") {
+		t.Errorf("stdout =\n%s\nwant the unparsed lines named with the file holding them", stdout)
+	}
+}
+
+// A run with nothing unusual to report says nothing unusual: an ordinary run
+// gets no Unparsed line and no qualifier on its version, because a zero a reader
+// has to scan past is noise in evidence that is meant to be read.
+func TestShowOmitsTheUnparsedLineWhenThereWereNone(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-y", "claude", late, "completed")
+
+	code, stdout, stderr := run(t, "show", "run-y")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if strings.Contains(stdout, "Unparsed") {
+		t.Errorf("stdout =\n%s\nwant no unparsed line for a run that had none", stdout)
+	}
+	if strings.Contains(stdout, "unsupported") {
+		t.Errorf("stdout =\n%s\nwant no version qualifier on an ordinary run", stdout)
+	}
+}

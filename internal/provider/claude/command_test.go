@@ -25,7 +25,7 @@ func TestPrepareCommandRejectsMissingPrintFlag(t *testing.T) {
 		{"--printer"},
 		{"-pq"},
 	} {
-		_, err := PrepareCommand(context.Background(), args, okProbe())
+		_, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 		if err == nil {
 			t.Fatalf("PrepareCommand(%q) = nil error, want error", args)
 		}
@@ -38,7 +38,7 @@ func TestPrepareCommandRejectsMissingPrintFlag(t *testing.T) {
 func TestPrepareCommandInjectsRequiredOptionsBeforeUserArgs(t *testing.T) {
 	args := []string{"-p", "summarize the repo", "--", "extra"}
 
-	cmd, err := PrepareCommand(context.Background(), args, okProbe())
+	cmd, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestPrepareCommandKeepsExistingStreamJSONAndAddsNoDuplicates(t *testing.T) 
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, err := PrepareCommand(context.Background(), tc.args, okProbe())
+			cmd, err := PrepareCommand(context.Background(), tc.args, okProbe(), Options{})
 			if err != nil {
 				t.Fatalf("PrepareCommand error: %v", err)
 			}
@@ -107,7 +107,7 @@ func TestPrepareCommandRejectsConflictingOutputFormat(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := PrepareCommand(context.Background(), tc.args, okProbe())
+			_, err := PrepareCommand(context.Background(), tc.args, okProbe(), Options{})
 			if err == nil {
 				t.Fatalf("PrepareCommand(%q) = nil error, want error", tc.args)
 			}
@@ -122,7 +122,7 @@ func TestPrepareCommandRejectsConflictingOutputFormat(t *testing.T) {
 }
 
 func TestPrepareCommandNeverInjectsPermissionBypass(t *testing.T) {
-	cmd, err := PrepareCommand(context.Background(), []string{"-p", "audit"}, okProbe())
+	cmd, err := PrepareCommand(context.Background(), []string{"-p", "audit"}, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestPrepareCommandPreservesUserArgsIncludingBypass(t *testing.T) {
 		"--verbose",
 	}
 
-	cmd, err := PrepareCommand(context.Background(), args, okProbe())
+	cmd, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestPrepareCommandDoesNotMutateCallerArgs(t *testing.T) {
 	args = append(args, "-p", "prompt")
 	snapshot := []string{"-p", "prompt"}
 
-	cmd, err := PrepareCommand(context.Background(), args, okProbe())
+	cmd, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 	if err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestPrepareCommandProbesTheClaudeExecutableOnce(t *testing.T) {
 		return "2.1.220 (Claude Code)", nil
 	}
 
-	if _, err := PrepareCommand(context.Background(), []string{"-p", "prompt"}, probe); err != nil {
+	if _, err := PrepareCommand(context.Background(), []string{"-p", "prompt"}, probe, Options{}); err != nil {
 		t.Fatalf("PrepareCommand error: %v", err)
 	}
 	if calls != 1 {
@@ -223,7 +223,7 @@ func TestPrepareCommandNormalizesProbedVersion(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, err := PrepareCommand(context.Background(), []string{"-p"}, stubProbe(tc.raw))
+			cmd, err := PrepareCommand(context.Background(), []string{"-p"}, stubProbe(tc.raw), Options{})
 			if err != nil {
 				t.Fatalf("PrepareCommand error: %v", err)
 			}
@@ -254,7 +254,7 @@ func TestPrepareCommandRejectsUnusableVersions(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := PrepareCommand(context.Background(), []string{"-p"}, tc.probe)
+			_, err := PrepareCommand(context.Background(), []string{"-p"}, tc.probe, Options{})
 			if err == nil {
 				t.Fatalf("PrepareCommand() = nil error, want error")
 			}
@@ -279,12 +279,36 @@ func TestPrepareCommandAcceptsPrintFlag(t *testing.T) {
 		{"-p"},
 		{"--print"},
 	} {
-		cmd, err := PrepareCommand(context.Background(), args, okProbe())
+		cmd, err := PrepareCommand(context.Background(), args, okProbe(), Options{})
 		if err != nil {
 			t.Fatalf("PrepareCommand(%q) error: %v", args, err)
 		}
 		if cmd.Executable != "claude" {
 			t.Errorf("PrepareCommand(%q).Executable = %q, want %q", args, cmd.Executable, "claude")
 		}
+	}
+}
+
+// The adapter carries the override through and stamps the command with what it
+// cost: a run recorded against a version this parser was not written for must
+// say so everywhere it is read, starting here.
+func TestPrepareCommandRecordsAnUnsupportedVersionOnlyWhenAllowed(t *testing.T) {
+	args := []string{"-p", "do the thing"}
+
+	if _, err := PrepareCommand(context.Background(), args, stubProbe("claude 4.0.0"), Options{}); err == nil {
+		t.Fatal("PrepareCommand error = nil for an unsupported version, want the refusal")
+	}
+
+	cmd, err := PrepareCommand(context.Background(), args, stubProbe("claude 4.0.0"), Options{AllowUnsupportedVersion: true})
+	if err != nil {
+		t.Fatalf("PrepareCommand error = %v, want the run prepared", err)
+	}
+	if cmd.Version != "4.0.0" || !cmd.VersionUnverified {
+		t.Errorf("PrepareCommand = (%q, unverified %v), want (\"4.0.0\", true)", cmd.Version, cmd.VersionUnverified)
+	}
+
+	cmd, err = PrepareCommand(context.Background(), args, okProbe(), Options{AllowUnsupportedVersion: true})
+	if err != nil || cmd.VersionUnverified {
+		t.Errorf("PrepareCommand on a supported version = (unverified %v, %v), want it not stamped", cmd.VersionUnverified, err)
 	}
 }

@@ -24,6 +24,10 @@ type Command = provider.Command
 // VersionProbe reports the raw `--version` output of the named executable.
 type VersionProbe = provider.VersionProbe
 
+// Options are the caller's decisions about how strictly the command is
+// prepared. The zero value refuses an unsupported version.
+type Options = provider.Options
+
 // supported is the Codex range agentrec's parser was written against: the exec
 // JSONL events of 0.144.0. A major release may reshape them, so anything from
 // 1.0.0 up is refused rather than recorded on the assumption it still fits.
@@ -36,12 +40,12 @@ var supported = provider.VersionSpec{
 // PrepareCommand validates caller arguments and returns the full Codex
 // invocation agentrec should run. A nil probe runs `codex --version`. The
 // caller's slice is never mutated.
-func PrepareCommand(ctx context.Context, args []string, probe VersionProbe) (Command, error) {
+func PrepareCommand(ctx context.Context, args []string, probe VersionProbe, opts Options) (Command, error) {
 	if len(args) == 0 || args[0] != execMode {
 		return Command{}, fmt.Errorf("codex: agentrec can only record non-interactive runs; %s must be the first argument", execMode)
 	}
 
-	version, err := provider.ResolveVersion(ctx, executable, probe, supported)
+	version, unverified, err := provider.ResolveVersionFor(ctx, executable, probe, supported, opts)
 	if err != nil {
 		return Command{}, err
 	}
@@ -55,7 +59,7 @@ func PrepareCommand(ctx context.Context, args []string, probe VersionProbe) (Com
 	}
 	prepared = append(prepared, args[1:]...)
 
-	return Command{Executable: executable, Args: prepared, Version: version}, nil
+	return Command{Executable: executable, Args: prepared, Version: version, VersionUnverified: unverified}, nil
 }
 
 // optionArgs returns the leading arguments Codex parses as options, stopping

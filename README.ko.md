@@ -35,12 +35,24 @@ agentrec은 비대화형 Claude Code 또는 Codex 실행 하나를 번들로 기
 제공자 진행 상황, 협업 대기, 할 일 목록 수명 주기만 담은 이벤트는 스트림
 메타데이터다. 이들은 어떤 액션도 지칭하지 않으며, 경고 수를 부풀리지 않는다.
 
+애초에 제공자 이벤트가 아닌 stdout 한 줄 — 업데이트 배너, 지원 중단 경고, 에이전트
+CLI가 이벤트 스트림 옆에 출력하는 무엇이든 — 은 `provider-stdout.unparsed.log`에
+보관되고, 다른 모든 것과 동일하게 가려지며, 매니페스트에 `unparsedLines`로 세어지고,
+리포트에 명시된다. 이벤트들 사이에 끼워 넣지 않으며, 실행을 실패시키지도 않는다.
+산문 한 줄을 출력한 제공자도 실행된 것이고, 그 기록을 버리는 것은 agentrec이
+지키려고 존재하는 증거를 파괴하는 일이기 때문이다.
+
 ## 빠른 시작
 
 **사전 요구 사항.** 소스에서 빌드하려면 Go 1.26 이상이 필요하다. 지원되는 제공자
 CLI가 이미 `PATH`에 있어야 한다. agentrec은 그것을 실행할 뿐, 설치하지 않는다.
 지원 범위를 벗어난 버전은 이벤트 스트림이 여전히 맞을 것이라는 가정 아래
-기록되지 않고, 거부된다.
+기록되지 않고, 거부된다. `agentrec trace --allow-unsupported-version`은 그 거부를
+무시한다. 실행은 기록되고, 매니페스트에 `versionUnverified`가 찍히며, 모든 리포트가
+그 사실을 말한다 — 타임라인은 그 버전의 스트림을 이해한다고 주장하지 않는 파서가
+읽은 것이고, 나머지 세 증거 계층은 파서에 전혀 의존하지 않는다. `agentrec shadow
+run`에는 이 우회가 없다. 제대로 읽힌 타임라인과 그렇지 않은 타임라인 사이의 비교는
+비교가 아니기 때문이다.
 
 | 제공자 | 실행 파일 | 지원 범위 | 비고 |
 |---|---|---|---|
@@ -97,6 +109,9 @@ agentrec trace claude --verify -- -p "add a regression test for the parser"
 
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
+
+# 이 파서가 대상으로 쓰이지 않은 제공자 버전에 대해 기록한다
+agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 
 # Record the same task with both agents, from one commit
 agentrec shadow run task.md --runner claude --runner codex
@@ -188,6 +203,7 @@ SHADOW COMPARISON
 
 claude
   Run ID       20260729T101500.000000000Z-1a2b3c4d
+  Order        1
   Verification PASS
   Config SHA-256 e20695bb3ebee3381b54da6fc46b6b1efa1adc9b87a5eb99b45505b5dbdfae3f
   Exit Reason  completed
@@ -199,7 +215,15 @@ claude
 
 codex
   ...
+
+The legs ran in the Order shown, one after another. Provider authentication,
+caches, rate limits and any network service both agents use are not reset
+between them, so a later leg may observe what an earlier one left.
 ```
+
+`Order`는 각 레그가 실제로 실행된 순서이며, 블록이 출력되는 순서가 아니다. 러너
+블록은 두 운영자가 같은 비교를 읽도록 항상 `claude` 다음 `codex`로 렌더링되는데,
+바로 그 고정된 순서가 어느 에이전트가 먼저 갔는지를 가리기 때문이다.
 
 이 명령이 주는 것과 주지 않는 것:
 
@@ -223,6 +247,8 @@ codex
   대해 검증되고 하나가 끝난 뒤 다른 하나가 실행된다. 검사는 겹치지 않지만 변경 가능한
   인증, 캐시, 네트워크 서비스와 그 밖의 외부 상태는 레그 사이에 초기화되지 않는다.
   따라서 입력한 러너 순서가 두 번째 제공자가 관찰하는 상태에 영향을 줄 수 있다.
+  비교는 각 레그의 `Order`를 보여주고 이 사실을 명시하므로, 두 결과가 동일한 조건에서
+  나온 것처럼 읽히는 일은 없다.
 - **연결된 워크트리는 보안 경계가 아니다.** 공통 Git 디렉터리와 레퍼런스를 공유하며,
   제공자는 소스 체크아웃에 명시적으로 접근할 수 있다. 잠금은 agentrec 프로세스끼리만
   조정한다. agentrec은 각 owned worktree를 제거한 뒤 소스 `HEAD`, 상태, 인덱스,
@@ -257,6 +283,8 @@ POSIX 시그널 전달과 프로세스 시작은 하나의 atomic 연산이 아�
 `manifest.json`, `prompt.txt`, 살균된 이벤트 스트림과 stderr, `actions.jsonl`,
 `process/result.json`, `git/`(베이스라인, 결과, 추적되지 않는 파일 본문),
 `verification/results.json`, `report.md`를 담는다.
+`provider-stdout.unparsed.log`는 제공자가 stdout에 이벤트가 아닌 무언가를 출력했을
+때만 함께 놓인다. 이벤트만 내보낸 실행은 그렇지 않은 척하는 빈 파일을 남기지 않는다.
 
 ## 상태와 종료 코드
 
@@ -291,11 +319,15 @@ Ctrl-C는 프로세스를 그 자리에서 끝낸다.
 
 ## 보안
 
-- **영속화 전 구조적 가림 처리.** 제공자 이벤트와 stderr는 기록되기 전에 가려진다.
-  정규화된 형태가 13개의 비밀 접미사(`TOKEN`, `SECRET`, `PASSWORD`, `APIKEY`,
-  `AUTHORIZATION`, `COOKIE`, …) 중 하나로 끝나는 필드 이름 아래의 값, 그리고
-  `NAME=VALUE` 할당과 토큰 형태는 `[REDACTED:n]`이 된다. 규칙 버전은 매니페스트마다
-  기록된다.
+- **영속화 전 구조적 가림 처리.** 제공자 이벤트, stderr, 그리고 이벤트가 아닌 stdout
+  라인은 기록되기 전에 가려진다. 정규화된 형태가 17개의 비밀 접미사(`TOKEN`,
+  `SECRET`, `PASSWORD`, `APIKEY`, `PASSPHRASE`, `AUTHORIZATION`, `COOKIE`, …) 중
+  하나로 끝나는 필드 이름 아래의 값, 그리고 `NAME=VALUE` 할당과 13개의 벤더 토큰
+  형태(GitHub, OpenAI, AWS, Google, Stripe, JWT, Slack 토큰·웹훅, GitLab, npm,
+  Hugging Face, PyPI)는 `[REDACTED:n]`이 된다. 부분 문자열이 아니라 접미사로
+  판단하는 것이 `PUBLIC_KEY`, `primaryKey`, `token_id`를 읽을 수 있게 남기는
+  이유다. 규칙 버전은 매니페스트마다 기록된다 — `1`과 `2`가 찍힌 번들은 서로 다른
+  규칙으로 판단된 것이므로, 그 가림 처리 횟수는 비교 대상이 아니다.
 - **추적되지 않는 파일의 본문은 저장된다.** 위치는 `git/untracked/` 아래이고,
   해시는 살균된 텍스트에 대해 계산된다 — 원본 텍스트의 해시는 짧은 비밀을 추측으로
   되돌려줄 수 있기 때문이다.
