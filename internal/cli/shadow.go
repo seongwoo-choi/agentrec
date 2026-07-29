@@ -97,7 +97,13 @@ func runShadow(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitFailure
 	}
-	workspaces, err := shadowWorkspaces(pre.dataRoot, group)
+	groupDir, err := shadowGroupDir(pre.dataRoot, group)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+	defer groupDir.root.Close()
+	workspaces, err := shadowWorkspaces(groupDir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailure
@@ -110,7 +116,7 @@ func runShadow(args []string, stdout, stderr io.Writer) int {
 	signals := holdCommandSignals()
 	interrupt := signals.Interrupt()
 
-	legs, failed, interrupted := shadowLegs(pre, inv, workspaces, interrupt, signals.Start, stderr)
+	legs, failed, interrupted, sourceDrift := shadowLegs(pre, inv, groupDir, workspaces, interrupt, signals.Start, stderr)
 
 	// Rendered once the checkouts are gone, and read back off disk: what the two
 	// runs are compared on is what was persisted about them, not what this
@@ -134,6 +140,22 @@ func runShadow(args []string, stdout, stderr io.Writer) int {
 	// this aggregate command, so latch a signal that arrived after the legs had
 	// already returned before deciding the exit.
 	interrupted = signals.Stop() || interrupted
+
+	outcome := "completed"
+	if sourceDrift {
+		outcome = "source_drift"
+	} else if interrupted {
+		outcome = "interrupted"
+	} else if failed {
+		outcome = "failed"
+	}
+	if err := groupDir.pathUnchanged(); err != nil {
+		fmt.Fprintln(stderr, err)
+		failed = true
+	} else if err := writeShadowGroup(groupDir.root, shadowGroupFrom(pre, legs, outcome)); err != nil {
+		fmt.Fprintln(stderr, err)
+		failed = true
+	}
 
 	switch {
 	case interrupted:
@@ -262,26 +284,12 @@ const shadowDirMode os.FileMode = 0o700
 // shadowWorkspaces prepares the private directory this comparison's checkouts
 // are created in, under the agentrec data root and never inside the repository
 // being recorded.
-func shadowWorkspaces(dataRoot, group string) (string, error) {
-	root := filepath.Join(dataRoot, shadowDirName)
-	if err := os.Mkdir(root, shadowDirMode); err != nil && !errors.Is(err, os.ErrExist) {
-		return "", fmt.Errorf("cli: create the shadow workspace root %s: %w", strconv.Quote(root), err)
-	}
-	info, err := os.Lstat(root)
-	if err != nil {
-		return "", fmt.Errorf("cli: inspect the shadow workspace root %s: %w", strconv.Quote(root), err)
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("cli: shadow workspace root %s is not a directory owned by agentrec", strconv.Quote(root))
-	}
-	if err := os.Chmod(root, shadowDirMode); err != nil {
-		return "", fmt.Errorf("cli: restrict %s: %w", strconv.Quote(root), err)
-	}
-	dir := filepath.Join(root, group)
-	if err := os.Mkdir(dir, shadowDirMode); err != nil {
+func shadowWorkspaces(group *shadowGroupDirectory) (string, error) {
+	dir := filepath.Join(group.path, shadowWorkspaceName)
+	if err := group.root.Mkdir(shadowWorkspaceName, shadowDirMode); err != nil {
 		return "", fmt.Errorf("cli: create the shadow workspace %s: %w", strconv.Quote(dir), err)
 	}
-	if err := os.Chmod(dir, shadowDirMode); err != nil {
+	if err := group.root.Chmod(shadowWorkspaceName, shadowDirMode); err != nil {
 		return "", fmt.Errorf("cli: restrict %s: %w", strconv.Quote(dir), err)
 	}
 	return dir, nil
@@ -307,9 +315,14 @@ type leg struct {
 // another so that neither verification nor any external state either run
 // touches is shared with a run happening at the same time. Every checkout it
 // prepares is removed before it returns, whatever happened in it.
-func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrupt <-chan os.Signal, startGate runner.StartGate, stderr io.Writer) (legs []leg, failed, interrupted bool) {
+func shadowLegs(pre *prepared, inv shadowInvocation, group *shadowGroupDirectory, workspaces string, interrupt <-chan os.Signal, startGate runner.StartGate, stderr io.Writer) (legs []leg, failed, interrupted, sourceDrift bool) {
 	var trees []*worktree.Worktree
 	defer func() {
+		if err := group.pathUnchanged(); err != nil {
+			fmt.Fprintln(stderr, err)
+			failed = true
+			return
+		}
 		if err := removeWorkspaces(trees, workspaces); err != nil {
 			fmt.Fprintln(stderr, err)
 			failed = true
@@ -320,7 +333,7 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 		// Asked before every leg, so an interrupt that arrived while the last one
 		// was being finished or this one prepared never launches another agent.
 		if pending(interrupt) {
-			return legs, failed, true
+			return legs, failed, true, false
 		}
 
 		versionCtx, cancelVersion := context.WithTimeout(context.Background(), versionTimeout)
@@ -328,7 +341,7 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 		cancelVersion()
 		if err != nil {
 			fmt.Fprintln(stderr, err)
-			return legs, true, false
+			return legs, true, false, false
 		}
 
 		gitCtx, cancelGit := context.WithTimeout(context.Background(), gitTimeout)
@@ -336,7 +349,7 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 		cancelGit()
 		if err != nil {
 			fmt.Fprintln(stderr, err)
-			return legs, true, false
+			return legs, true, false, false
 		}
 		trees = append(trees, tree)
 		// A linked worktree holds the whole committed repository, which may be a
@@ -345,13 +358,13 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 		// agentrec writes is.
 		if err := os.Chmod(tree.Path(), shadowDirMode); err != nil {
 			fmt.Fprintf(stderr, "cli: restrict %s: %v\n", strconv.Quote(tree.Path()), err)
-			return legs, true, false
+			return legs, true, false, false
 		}
 
 		runID, err := newRunID()
 		if err != nil {
 			fmt.Fprintln(stderr, err)
-			return legs, true, false
+			return legs, true, false, false
 		}
 		// Asked again here, with nothing left to prepare: preparing this leg asked
 		// the provider its version and checked a worktree out, and an interrupt
@@ -359,7 +372,7 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 		// loop could not have seen. The checkout is taken back out on the way past
 		// this by the cleanup already deferred.
 		if pending(interrupt) {
-			return legs, failed, true
+			return legs, failed, true, false
 		}
 
 		out := record(recordRequest{
@@ -384,34 +397,38 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 		// A run that never reached its provider left a finalized bundle saying so
 		// and nothing to compare, so the comparison stops there.
 		if !out.Recorded {
-			return legs, true, false
+			return legs, true, false, false
 		}
 		legs = append(legs, leg{runner: name, runID: runID, order: position + 1})
+		if err := group.pathUnchanged(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return legs, true, false, false
+		}
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), gitTimeout)
 		cleanupErr := tree.Remove(cleanupCtx)
 		cancelCleanup()
 		if cleanupErr != nil {
 			fmt.Fprintln(stderr, cleanupErr)
-			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted
+			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted, false
 		}
 		stateCtx, cancelState := context.WithTimeout(context.Background(), gitTimeout)
 		state, stateErr := readRepositoryState(stateCtx, pre.repo.Root())
 		cancelState()
 		if stateErr != nil {
 			fmt.Fprintln(stderr, stateErr)
-			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted
+			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted, false
 		}
 		if changed := changedRepositoryFields(pre.source, state); len(changed) > 0 {
 			fmt.Fprintf(stderr, "cli: source repository changed during shadow run (%s); refusing to launch another provider; changes were not restored\n", strings.Join(changed, ", "))
-			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted
+			return legs, true, out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted, true
 		}
 		switch {
 		case out.Interrupted || out.Result.ExitReason == runner.ReasonInterrupted:
-			return legs, failed, true
+			return legs, failed, true, false
 		case out.Incomplete:
 			// The evidence this leg was to be compared on is short, and the next
 			// leg would be compared against a gap.
-			return legs, true, false
+			return legs, true, false, false
 		}
 		// How the agent's own run ended is evidence and not a reason to abandon
 		// the other one: a failed run is exactly the run worth comparing. It does
@@ -421,7 +438,7 @@ func shadowLegs(pre *prepared, inv shadowInvocation, workspaces string, interrup
 			failed = true
 		}
 	}
-	return legs, failed, false
+	return legs, failed, false, false
 }
 
 // removeWorkspaces takes the checkouts back out in the reverse of the order they

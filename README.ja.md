@@ -225,11 +225,19 @@ agentrec shadow run task.md --runner claude --runner codex
 ```
 
 各レグは、ソースリポジトリの `HEAD` から作成する使い捨ての**デタッチド Git
-ワークツリー**内で記録されます。場所は `$AGENTREC_HOME/shadow/<group>/<runner>`、
-モードは `0700` で、そのレグの証拠を確定した時点で削除されます。両方のレグは通常の
-実行バンドルを残すため、チェックアウトが消えた後も `agentrec list` と
+ワークツリー**内で記録されます。場所は
+`$AGENTREC_HOME/shadow/<group>/workspaces/<runner>`、モードは `0700` で、そのレグの
+証拠を確定した時点で削除されます。その後、private な
+`$AGENTREC_HOME/shadow/<group>/group.json` には baseline、記録されたレグの実行順、
+run ID、終了 outcome だけが残り、raw task body は保存しません。両方のレグは通常の実行
+バンドルを残すため、チェックアウトが消えた後も `agentrec list` と
 `agentrec show <run-id>` で読み返せます。比較そのものは標準出力に表示され、各レグの
-永続的な `report.md` はそれぞれのバンドルに残ります。
+永続的な `report.md` はそれぞれのバンドルに残ります。後から同じ evidence-only comparison
+を再表示するには、次を実行します。
+
+```bash
+agentrec shadow show <group-id>
+```
 
 比較はランナーごとに 1 ブロックを、常にこの順序およびフィールド順で出力します。実行 ID、
 チェックの終了状況と固定内容、プロセスの終了状況、実行が自身のチェックアウトに残した

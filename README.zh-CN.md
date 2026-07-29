@@ -169,7 +169,11 @@ VERIFICATION-OBSERVED RESULT
 agentrec shadow run task.md --runner claude --runner codex
 ```
 
-每个执行分支都会在一次性的**分离 Git 工作树**中记录。该工作树从源仓库的 `HEAD` 创建，位于 `$AGENTREC_HOME/shadow/<group>/<runner>`，权限为 `0700`，并会在该分支的证据收集完成后移除。两个分支都会留下普通运行证据包，因此检出目录被删除后，仍可通过 `agentrec list` 和 `agentrec show <run-id>` 查阅。比较结果本身输出到 stdout；每个分支持久化的 `report.md` 则保留在各自的证据包中。
+每个执行分支都会在一次性的**分离 Git 工作树**中记录。该工作树从源仓库的 `HEAD` 创建，位于 `$AGENTREC_HOME/shadow/<group>/workspaces/<runner>`，权限为 `0700`，并会在该分支的证据收集完成后移除。之后，private 的 `$AGENTREC_HOME/shadow/<group>/group.json` 只保留 baseline、已记录分支的执行顺序、run ID 和终止 outcome，不保存 raw task body。两个分支都会留下普通运行证据包，因此检出目录被删除后，仍可通过 `agentrec list` 和 `agentrec show <run-id>` 查阅。比较结果本身输出到 stdout；每个分支持久化的 `report.md` 则保留在各自的证据包中。要在之后重新输出相同的 evidence-only comparison，请运行：
+
+```bash
+agentrec shadow show <group-id>
+```
 
 比较会为每个 runner 输出一个区块，且区块和字段的顺序始终固定：运行 ID、检查如何结束及其固定依据、进程如何结束、运行在其检出中留下了什么，以及它执行了多少操作：
 

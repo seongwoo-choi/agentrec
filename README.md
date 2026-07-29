@@ -213,11 +213,18 @@ agentrec shadow run task.md --runner claude --runner codex
 ```
 
 Each leg is recorded in a disposable **detached Git worktree** created from the
-source repository's `HEAD`, under `$AGENTREC_HOME/shadow/<group>/<runner>` with
-mode `0700`, and removed once that leg's evidence has been closed. Both legs
-leave ordinary run bundles, so `agentrec list` and `agentrec show <run-id>` read
-them back after the checkouts are gone. The comparison itself is printed to
-stdout; each leg's durable `report.md` stays in its own bundle.
+source repository's `HEAD`, under `$AGENTREC_HOME/shadow/<group>/workspaces/<runner>`
+with mode `0700`, and removed once that leg's evidence has been closed. The
+private `$AGENTREC_HOME/shadow/<group>/group.json` then keeps the baseline, the
+recorded leg order, run IDs, and terminal outcome, but never the raw task body.
+Both legs leave ordinary run bundles, so `agentrec list` and `agentrec show <run-id>`
+read them back after the checkouts are gone. The comparison itself is printed to
+stdout; each leg's durable `report.md` stays in its own bundle. Re-render the
+same evidence-only comparison later with:
+
+```bash
+agentrec shadow show <group-id>
+```
 
 The comparison prints one block per runner, always in this order and with these
 fields in this order — a run ID, how the checks ended and what they were pinned

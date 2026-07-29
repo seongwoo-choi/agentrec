@@ -232,10 +232,17 @@ agentrec shadow run task.md --runner claude --runner codex
 ```
 
 각 leg는 소스 저장소의 `HEAD`에서 만든 일회용 **분리된 Git worktree**에서 기록됩니다.
-위치는 `$AGENTREC_HOME/shadow/<group>/<runner>`이고 모드는 `0700`입니다. 해당 leg의
-증거 기록을 마치면 제거합니다. 두 leg 모두 일반 실행 번들을 남기므로 체크아웃이
-사라진 뒤에도 `agentrec list`와 `agentrec show <run-id>`로 다시 읽을 수 있습니다.
-비교 결과는 stdout으로 출력하며, 각 leg의 영속적인 `report.md`는 자체 bundle에 남습니다.
+위치는 `$AGENTREC_HOME/shadow/<group>/workspaces/<runner>`이고 모드는 `0700`입니다.
+해당 leg의 증거 기록을 마치면 제거합니다. 이후 private
+`$AGENTREC_HOME/shadow/<group>/group.json`에는 baseline, 기록된 leg 실행 순서, run ID,
+종료 outcome만 남으며 raw task body는 저장하지 않습니다. 두 leg 모두 일반 실행 번들을
+남기므로 체크아웃이 사라진 뒤에도 `agentrec list`와 `agentrec show <run-id>`로 다시 읽을 수
+있습니다. 비교 결과는 stdout으로 출력하며, 각 leg의 영속적인 `report.md`는 자체 bundle에
+남습니다. 나중에 동일한 evidence-only comparison을 다시 출력하려면 다음을 사용합니다.
+
+```bash
+agentrec shadow show <group-id>
+```
 
 비교는 runner별로 한 블록씩 출력합니다. 블록과 필드는 항상 다음 순서입니다. 실행 ID,
 검사가 어떻게 끝났고 무엇에 고정됐는지, 프로세스가 어떻게 끝났는지, 실행이 자신의

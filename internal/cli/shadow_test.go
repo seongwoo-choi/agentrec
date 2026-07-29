@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -206,7 +207,9 @@ func TestShadowRecordsBothRunnersFromOneBaseline(t *testing.T) {
 	}
 
 	// Nothing agentrec prepared outlives the run, and the directory the
-	// checkouts were made in is private too.
+	// checkouts were made in is private too. The durable group records only the
+	// comparison identity and its legs: its task body belongs only in the
+	// ordinary per-run bundles, not in the shared group index.
 	shadow := filepath.Join(data, shadowDirName)
 	info, err := os.Stat(shadow)
 	if err != nil {
@@ -215,8 +218,161 @@ func TestShadowRecordsBothRunnersFromOneBaseline(t *testing.T) {
 	if info.Mode().Perm() != shadowDirMode {
 		t.Errorf("%s mode = %v, want %v", shadow, info.Mode().Perm(), shadowDirMode)
 	}
-	wantNoWorkspace(t, root)
+	entries, err := os.ReadDir(shadow)
+	if err != nil {
+		t.Fatalf("read shadow root: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("shadow groups = %d, want one", len(entries))
+	}
+	groupID := entries[0].Name()
+	groupPath := filepath.Join(shadow, groupID)
+	groupInfo, err := os.Stat(groupPath)
+	if err != nil {
+		t.Fatalf("stat group: %v", err)
+	}
+	if groupInfo.Mode().Perm() != shadowDirMode {
+		t.Errorf("group mode = %v, want %v", groupInfo.Mode().Perm(), shadowDirMode)
+	}
+	groupFile := filepath.Join(groupPath, "group.json")
+	groupFileInfo, err := os.Stat(groupFile)
+	if err != nil {
+		t.Fatalf("stat group file: %v", err)
+	}
+	if groupFileInfo.Mode().Perm() != 0o600 {
+		t.Errorf("group file mode = %v, want 0600", groupFileInfo.Mode().Perm())
+	}
+	rawGroup, err := os.ReadFile(groupFile)
+	if err != nil {
+		t.Fatalf("read group file: %v", err)
+	}
+	if strings.Contains(string(rawGroup), body) {
+		t.Errorf("group file = %s, want no raw task body", rawGroup)
+	}
+	var group struct {
+		Schema   int    `json:"schema"`
+		Baseline string `json:"baseline"`
+		Outcome  string `json:"outcome"`
+		Legs     []struct {
+			Runner string `json:"runner"`
+			RunID  string `json:"runId"`
+			Order  int    `json:"order"`
+		} `json:"legs"`
+	}
+	if err := json.Unmarshal(rawGroup, &group); err != nil {
+		t.Fatalf("decode group file: %v", err)
+	}
+	if group.Schema != 1 || group.Baseline != baseline || group.Outcome != "completed" {
+		t.Errorf("group = %+v, want schema 1, baseline %q, completed outcome", group, baseline)
+	}
+	if len(group.Legs) != 2 || group.Legs[0].Runner != "claude" || group.Legs[0].RunID != bundles["claude"] || group.Legs[0].Order != 1 || group.Legs[1].Runner != "codex" || group.Legs[1].RunID != bundles["codex"] || group.Legs[1].Order != 2 {
+		t.Errorf("group legs = %+v, want ordered recorded bundle IDs", group.Legs)
+	}
+	if _, err := os.Stat(filepath.Join(groupPath, "workspaces")); !os.IsNotExist(err) {
+		t.Errorf("group workspaces = %v, want removed", err)
+	}
+	if code, shown, stderr := run(t, "shadow", "show", groupID); code != 0 {
+		t.Errorf("shadow show exit code = %d, want 0 (stderr %q)", code, stderr)
+	} else if shown != stdout {
+		t.Errorf("shadow show =\n%s\nwant original comparison\n%s", shown, stdout)
+	}
 	wantSourceUnchanged(t, repo, before)
+}
+
+// A group document is operator-facing durable evidence. Shadow show must refuse
+// a planted link or bytes it cannot validate before it ever looks up the runs
+// named by the group.
+func TestShadowShowRefusesUnsafeGroupDocument(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		write func(t *testing.T, path string)
+	}{
+		{
+			name: "symlink",
+			write: func(t *testing.T, path string) {
+				target := filepath.Join(t.TempDir(), "outside.json")
+				if err := os.WriteFile(target, []byte(`{"schema":1}`), shadowFileMode); err != nil {
+					t.Fatalf("write symlink target: %v", err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatalf("create group symlink: %v", err)
+				}
+			},
+		},
+		{
+			name: "malformed",
+			write: func(t *testing.T, path string) {
+				if err := os.WriteFile(path, []byte(`{"schema":1}`), shadowFileMode); err != nil {
+					t.Fatalf("write malformed group: %v", err)
+				}
+			},
+		},
+		{
+			name: "oversize",
+			write: func(t *testing.T, path string) {
+				if err := os.WriteFile(path, make([]byte, maxShadowGroupBytes+1), shadowFileMode); err != nil {
+					t.Fatalf("write oversize group: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := home(t)
+			const groupID = "shadow-group"
+			groupDir := filepath.Join(dataRoot(root), shadowDirName, groupID)
+			if err := os.MkdirAll(groupDir, shadowDirMode); err != nil {
+				t.Fatalf("create group directory: %v", err)
+			}
+			tc.write(t, filepath.Join(groupDir, shadowGroupFile))
+
+			code, stdout, stderr := run(t, "shadow", "show", groupID)
+
+			if code != exitFailure {
+				t.Errorf("exit code = %d, want %d (stderr %q)", code, exitFailure, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+			if !strings.Contains(stderr, "shadow group") {
+				t.Errorf("stderr = %q, want shadow group rejection", stderr)
+			}
+		})
+	}
+}
+
+// A root is an ownership handle, not merely a convenient way to spell a path.
+// If an untrusted provider replaces the name while a shadow run is active, the
+// group artifact must either land in the directory agentrec created or fail —
+// never in the replacement.
+func TestWriteShadowGroupStaysInHeldDirectoryAfterPathReplacement(t *testing.T) {
+	parent := t.TempDir()
+	groupDir := filepath.Join(parent, "group")
+	if err := os.Mkdir(groupDir, shadowDirMode); err != nil {
+		t.Fatalf("create group directory: %v", err)
+	}
+	root, err := os.OpenRoot(groupDir)
+	if err != nil {
+		t.Fatalf("hold group directory: %v", err)
+	}
+	t.Cleanup(func() { root.Close() })
+	moved := filepath.Join(parent, "moved")
+	if err := os.Rename(groupDir, moved); err != nil {
+		t.Fatalf("move held directory: %v", err)
+	}
+	if err := os.Mkdir(groupDir, shadowDirMode); err != nil {
+		t.Fatalf("replace group directory: %v", err)
+	}
+	group := shadowGroup{Schema: 1, Baseline: strings.Repeat("a", 40), Outcome: "failed"}
+
+	if err := writeShadowGroup(root, group); err != nil {
+		t.Fatalf("write held group: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, shadowGroupFile)); err != nil {
+		t.Errorf("held directory group file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(groupDir, shadowGroupFile)); !os.IsNotExist(err) {
+		t.Errorf("replacement directory group file: %v, want absent", err)
+	}
 }
 
 // A linked worktree is not a sandbox: a provider can name the source checkout
@@ -272,6 +428,13 @@ func TestShadowStopsWhenAProviderMutatesTheSourceRepository(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(os.Getenv(probeEnv), "codex.json")); !os.IsNotExist(err) {
 				t.Errorf("second provider probe error = %v, want it not launched", err)
 			}
+			if entries, err := os.ReadDir(filepath.Join(dataRoot(root), shadowDirName)); err != nil || len(entries) != 1 {
+				t.Errorf("shadow groups = %v, %v; want one persisted group", entries, err)
+			} else if group, err := readShadowGroup(dataRoot(root), entries[0].Name()); err != nil {
+				t.Errorf("read persisted group: %v", err)
+			} else if group.Outcome != "source_drift" {
+				t.Errorf("group outcome = %q, want source_drift", group.Outcome)
+			}
 			wantNoWorkspace(t, root)
 		})
 	}
@@ -304,13 +467,24 @@ func TestGitIndexDigestTracksFlagsInMainAndLinkedWorktrees(t *testing.T) {
 // shadow puts the workspaces it prepares.
 func dataRoot(runsRoot string) string { return filepath.Dir(runsRoot) }
 
-// wantNoWorkspace fails when a refused command nevertheless prepared somewhere
-// for a run to happen.
+// wantNoWorkspace fails when a refused command nevertheless left a disposable
+// linked-worktree directory behind. Durable groups are expected to remain.
 func wantNoWorkspace(t *testing.T, runsRoot string) {
 	t.Helper()
 	shadow := filepath.Join(dataRoot(runsRoot), shadowDirName)
-	if entries, err := os.ReadDir(shadow); err == nil && len(entries) > 0 {
-		t.Errorf("%s holds %d entries, want no prepared workspace", shadow, len(entries))
+	groups, err := os.ReadDir(shadow)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("read shadow root: %v", err)
+	}
+	for _, group := range groups {
+		if _, err := os.Stat(filepath.Join(shadow, group.Name(), shadowWorkspaceName)); err == nil {
+			t.Errorf("shadow group %s retains a workspace", group.Name())
+		} else if !os.IsNotExist(err) {
+			t.Errorf("stat shadow group %s workspace: %v", group.Name(), err)
+		}
 	}
 }
 
