@@ -31,6 +31,11 @@ jobs:
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
 
+      - name: Check localized README contracts
+        run: |
+          python3 scripts/check-readme-localizations.py
+          sh scripts/check-readme-localizations_test.sh
+
       - name: Test
         run: go test ./... -count=1 -timeout=420s
 

@@ -37,10 +37,26 @@ agentrec は、非対話モードで実行した Claude Code または Codex の
 - **勝者をでっち上げずにエージェントを比較する。** `shadow run` は、単一の baseline から Claude と Codex に別々の worktree と evidence bundle を与えます。記録された事実を提示するだけで、action 数・diff・チェック結果を根拠のない score には変換しません。
 - **プロバイダーのアップグレードを慎重に扱う。** サポート対象外の provider version はデフォルトで拒否します。明示的な override を使うと manifest と report に `versionUnverified` が残るため、parser リスクを抱える timeline を、完全に理解された証拠と後から誤認することを防げます。
 
-agentrec は、対話的な transcript UI でも cloud telemetry service でもありません。また、
-エージェントが観測されたすべてのファイル変更を引き起こしたことを証明するものでも
-ありません。これは、1 回の非対話実行を囲む local evidence boundary です。誰が何を
-観測したか、何を確定できないかの両方を明示するからこそ役に立ちます。
+agentrec は、対話型の実行記録 UI やクラウドテレメトリサービスではありません。また、
+エージェントが観測されたすべてのファイル変更を引き起こしたことの証明でもありません。1 回の
+非対話的な実行を対象に、誰が何を観測したかと、何を確定できないかを残すためのローカルな
+証拠の境界です。
+
+## 翻訳版の保守
+
+`README.md` は事実関係の基準となる文書です。各言語の README は逐語訳ではなく、その言語の
+読者に自然な技術文書として書きます。ただし、コマンド、リンク、サポート対象バージョンの範囲、
+帰属と安全性に関する注意事項は必ず維持します。
+
+自然な文章かどうかは、その言語を読める人がレビューする必要があります。
+`scripts/check-readme-localizations.py` が検査するのは、自動化で証明できる契約だけです。
+見出しの構造、実行可能なコードブロックの内容、外部リンク先は確認できますが、意味が保たれて
+いることまでは保証しません。
+
+```bash
+python3 scripts/check-readme-localizations.py
+sh scripts/check-readme-localizations_test.sh
+```
 
 ## 4 つの証拠レイヤー
 

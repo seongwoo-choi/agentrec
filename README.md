@@ -35,6 +35,17 @@ Use agentrec when an agent run must be more than a transient terminal session â€
 
 agentrec is not an interactive transcript UI, a cloud telemetry service, or proof that an agent caused every observed file change. It is a local evidence boundary around one non-interactive run: useful precisely because it states what was observed, by whom, and what it cannot establish.
 
+## Maintaining translations
+
+`README.md` is the factual canonical document. A localized README should be written for its readers, not translated word for word, but it must preserve commands, links, supported-version ranges, and every attribution or safety caveat.
+
+Natural prose still needs native-language review. `scripts/check-readme-localizations.py` checks only the contracts automation can prove: heading structure, executable code-block payloads, and external link destinations. It cannot certify that a translation preserves meaning.
+
+```bash
+python3 scripts/check-readme-localizations.py
+sh scripts/check-readme-localizations_test.sh
+```
+
 ## Four evidence layers
 
 | Layer | Observer | What it means | Attribution recorded |

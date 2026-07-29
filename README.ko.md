@@ -47,10 +47,25 @@ agentrec은 비대화형 Claude Code 또는 Codex 실행 한 번을 번들로 �
   `versionUnverified` 표시가 남으므로, parser 위험이 있는 timeline이 나중에 완전히
   이해된 증거로 오인되지 않습니다.
 
-agentrec은 대화형 transcript UI도, cloud telemetry service도, 에이전트가 관찰된 모든
-파일 변경을 일으켰다는 증명도 아닙니다. 비대화형 실행 한 번을 둘러싼 local evidence
-boundary입니다. 누가 무엇을 관찰했는지와 무엇을 확정할 수 없는지를 함께 밝히기에
-유용합니다.
+agentrec은 대화형 실행 기록 UI나 클라우드 텔레메트리 서비스가 아닙니다. 또한 에이전트가
+관찰된 모든 파일 변경을 일으켰다는 증명도 아닙니다. 비대화형 실행 한 번을 둘러싼 로컬
+증거 경계로서, 누가 무엇을 관찰했는지와 무엇을 확정할 수 없는지를 함께 남깁니다.
+
+## 번역본 관리
+
+`README.md`는 사실관계의 기준 문서입니다. 각 언어 README는 단어 단위로 옮기지 말고
+독자에게 자연스러운 기술 문서로 다시 써야 합니다. 다만 명령, 링크, 지원 버전 범위와
+모든 귀속·안전 관련 주의사항은 반드시 보존해야 합니다.
+
+자연스러운 문장인지는 해당 언어를 아는 사람이 검토해야 합니다.
+`scripts/check-readme-localizations.py`는 자동으로 증명할 수 있는 계약만 검사합니다.
+제목 구조, 실행 가능한 코드 블록의 내용, 외부 링크 대상을 확인하지만 번역의 의미가
+보존됐는지까지 보장하지는 않습니다.
+
+```bash
+python3 scripts/check-readme-localizations.py
+sh scripts/check-readme-localizations_test.sh
+```
 
 ## 네 가지 증거 계층
 
