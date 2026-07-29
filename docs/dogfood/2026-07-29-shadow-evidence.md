@@ -86,6 +86,41 @@ while both run bundle directories remained readable.
 index tree and worktree status were unchanged, both linked-worktree registrations
 were removed, and evidence survived cleanup.
 
+## Durable group and replay — 2026-07-30
+
+This second real-provider run exercised the durable Shadow group path from
+agentrec commit `762d22e`. It used an isolated committed repository at baseline
+`9f2b07803f988c6c397d3904ff5aedd3a03c5ba7`, a task outside that repository,
+and a private temporary `AGENTREC_HOME`. The task instructed both providers to
+inspect the repository without changing files. The committed verification ran
+`git diff --check` for each leg.
+
+**Observed.** `agentrec shadow run` exited `0`:
+
+| Provider | Run | Process | Verification | Repository | Actions |
+|---|---|---|---|---|---:|
+| Claude | `20260729T155520.942938000Z-ed7b744e` | completed, exit 0, 23.545s | PASS: repository-clean | AVAILABLE, 0 files, +0/-0 | 4 |
+| Codex | `20260729T155545.271163000Z-fe102c7b` | completed, exit 0, 27.770s | PASS: repository-clean | AVAILABLE, 0 files, +0/-0 | 5 |
+
+The run created private
+`$AGENTREC_HOME/shadow/20260729T155520.217860000Z-fd6e3e1a/group.json` with
+mode `0600`. Its recorded document contained schema `1`, the committed baseline,
+the two run IDs in Claude-then-Codex execution order, and outcome `completed`.
+It did not contain the task text. The group's `workspaces/` child was absent
+after completion, and the source repository remained clean.
+
+`agentrec shadow show 20260729T155520.217860000Z-fd6e3e1a` exited `0` and
+re-rendered the evidence-only comparison from the ordinary bundles after the
+workspaces had been removed.
+
+**Conclusion.** This run establishes one successful macOS vertical path for
+persisting and replaying a Shadow comparison: private group metadata references
+ordinary finalized bundles, does not retain the raw task body, and survives
+worktree cleanup. It does not establish real-provider failure, interruption,
+source-drift, parent-directory replacement, or Linux behavior. Those lifecycle
+and containment paths remain controlled-test coverage, not observations from
+this run.
+
 ## Action-layer discrepancy
 
 **Observed.** The action-type distributions were:
