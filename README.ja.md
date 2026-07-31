@@ -79,9 +79,8 @@ CLI がイベントストリームと並行して出力するものは、`provid
 
 ## クイックスタート
 
-**前提条件。** ソースからビルドするには Go 1.26 以降が必要です。サポート対象の
-プロバイダー CLI が `PATH` 上にあらかじめ存在している必要があります。agentrec は
-起動するだけで、インストールは行いません。サポート対象外のバージョンは、イベント
+**前提条件。** ソースからビルドするには Go 1.26 以降が必要です。`agentrec shadow run` は `git worktree list --porcelain -z` を使うため Git 2.36 以降も必要ですが、`trace` にこの Git 下限はありません。サポート対象の
+provider CLI はすでに `PATH` 上にある必要があります。agentrec は起動するだけで、インストールは行いません。サポート対象外のバージョンは、イベント
 ストリームがなお適合すると仮定して記録することはせず、拒否します。
 `agentrec trace --allow-unsupported-version` はこの拒否を上書きします。実行は記録され、
 manifest には `versionUnverified` が刻まれ、すべての report にその旨が記載されます。
@@ -349,9 +348,7 @@ Ctrl-C と SIGTERM は、届いた場所ですぐに処理するのではなく�
 - **リポジトリ差分は因果的な帰属ではない。** 変更が実行中に起きたことと、エージェントがその変更を行ったことは同じではありません。チェックアウトを編集する別の要因も同じ差分に現れ得ます。すべての report でもこの点を明記します。同様に、検証が通ったことは、その実行が残したツリー上で固定済みチェックが通ったことだけを示します。
 - **対話セッションは記録しない。** また、ポリシーエンジン、sandbox、リモートアップロードも提供しません。agentrec は観測し、ローカルへ書き込むだけです。
 
-**サポート対象: macOS と Linux。** プロセスグループの監督は `darwin || linux` 向けにのみ
-実装されており（`internal/runner/process_unix.go`）、Windows はビルドも検証もされて
-いません。
+**サポート対象: macOS と Linux。** Windows はビルドも検証もされていません。port にはプロセスグループの監督（`internal/runner/process_unix.go`）だけでなく、verification process control（`internal/evidence/verification.go`）と repository locking（`internal/lock/repository.go`）も必要です。
 
 ## 証拠
 

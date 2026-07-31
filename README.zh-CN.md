@@ -56,7 +56,7 @@ sh scripts/check-readme-localizations_test.sh
 
 ## 快速开始
 
-**前置条件。** 从源码构建需要 Go 1.26 或更高版本。受支持的提供方 CLI 必须已在 `PATH` 中；agentrec 只负责启动它，不会安装它。超出支持范围的版本会被拒绝，而不是假定其事件流仍然兼容就继续记录。`agentrec trace --allow-unsupported-version` 可以覆盖这一拒绝：运行仍会被记录，manifest 会标记为 `versionUnverified`，每份报告也会说明这一点。时间线由并不声称理解该版本事件流的解析器读取，但其他三层证据完全不依赖该解析器。`agentrec shadow run` 没有这样的覆盖选项，因为无法正确读取的一条时间线不能与正确读取的另一条时间线进行比较。
+**前置条件。** 从源码构建需要 Go 1.26 或更高版本。`agentrec shadow run` 使用 `git worktree list --porcelain -z`，还需要 Git 2.36 或更高版本；`trace` 没有这一 Git 版本下限。受支持的提供方 CLI 必须已在 `PATH` 中；agentrec 只负责启动它，不会安装它。超出支持范围的版本会被拒绝，而不是假定其事件流仍然兼容就继续记录。`agentrec trace --allow-unsupported-version` 可以覆盖这一拒绝：运行仍会被记录，manifest 会标记为 `versionUnverified`，每份报告也会说明这一点。时间线由并不声称理解该版本事件流的解析器读取，但其他三层证据完全不依赖该解析器。`agentrec shadow run` 没有这样的覆盖选项，因为无法正确读取的一条时间线不能与正确读取的另一条时间线进行比较。
 
 | 提供方 | 可执行文件 | 支持范围 | 说明 |
 |---|---|---|---|
@@ -248,7 +248,7 @@ between them, so a later leg may observe what an earlier one left.
 - **仓库差异不是因果归属。** 变更发生在运行期间，并不等于由智能体造成。任何其他进程对检出的编辑都会落在同一份差异中，每份报告都会注明这一点。同样，通过验证只说明固定检查在运行留下的工作树上通过。
 - **不记录交互式会话**，也不提供策略引擎、沙箱或远程上传；agentrec 只在本地观测和写入。
 
-**支持范围：macOS 和 Linux。** 进程组监管仅为 `darwin || linux` 编写（`internal/runner/process_unix.go`），因此 Windows 未构建也未验证。
+**支持范围：macOS 和 Linux。** Windows 尚未构建或验证；移植不仅需要进程组监管（`internal/runner/process_unix.go`），还需要 verification process control（`internal/evidence/verification.go`）和 repository locking（`internal/lock/repository.go`）。
 
 ## 证据
 

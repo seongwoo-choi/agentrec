@@ -68,7 +68,7 @@ evidence agentrec exists to keep.
 
 ## Quick start
 
-**Prerequisites.** Building from source requires Go 1.26 or newer. A supported
+**Prerequisites.** Building from source requires Go 1.26 or newer. `agentrec shadow run` also requires Git 2.36 or newer for `git worktree list --porcelain -z`; `trace` does not have that Git floor. A supported
 provider CLI must already be on `PATH`; agentrec launches it, never installs it.
 A version outside the range is refused, not recorded on the assumption its event
 stream still fits. `agentrec trace --allow-unsupported-version` overrides that
@@ -397,9 +397,7 @@ no exit code, and neither field is inferred from the other.
 - **Interactive sessions are not recorded**, and there is no policy engine, no
   sandbox and no remote upload — agentrec observes and writes locally.
 
-**Supported scope: macOS and Linux.** Process-group supervision is built for
-`darwin || linux` only (`internal/runner/process_unix.go`), so Windows is unbuilt
-and unverified.
+**Supported scope: macOS and Linux.** Windows is unbuilt and unverified: the port needs process-group supervision (`internal/runner/process_unix.go`), verification process control (`internal/evidence/verification.go`), and repository locking (`internal/lock/repository.go`) rather than only one platform file.
 
 ## Evidence
 

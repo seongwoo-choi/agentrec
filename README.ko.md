@@ -88,8 +88,8 @@ agentrec이 보존하려는 증거를 훼손하게 되기 때문입니다.
 
 ## 빠른 시작
 
-**사전 요구 사항.** 소스에서 빌드하려면 Go 1.26 이상이 필요합니다. 지원되는 제공자
-CLI가 이미 `PATH`에 있어야 합니다. agentrec은 이를 실행할 뿐 설치하지 않습니다.
+**사전 요구 사항.** 소스에서 빌드하려면 Go 1.26 이상이 필요합니다. `agentrec shadow run`은 `git worktree list --porcelain -z`를 사용하므로 Git 2.36 이상도 필요하지만, `trace`에는 이 Git 하한이 없습니다. 지원되는 제공자
+CLI는 이미 `PATH`에 있어야 합니다. agentrec은 실행만 하며 설치하지 않습니다.
 지원 범위를 벗어난 버전은 이벤트 스트림이 여전히 맞을 것이라는 가정으로 기록하지
 않고 거부합니다. `agentrec trace --allow-unsupported-version`은 이 거부를 무시합니다.
 실행은 기록되고 manifest에는 `versionUnverified`가 표시되며, 모든 report가 그 사실을
@@ -405,9 +405,7 @@ Ctrl-C와 SIGTERM은 전달된 지점에서 즉시 따르지 않고 전체 기�
 - **대화형 세션은 기록하지 않습니다.** policy engine, sandbox, remote upload도 없습니다.
   agentrec은 관찰하고 로컬에 기록합니다.
 
-**지원 범위: macOS와 Linux.** 프로세스 그룹 감독은 `darwin || linux` 전용으로
-구현돼 있으므로(`internal/runner/process_unix.go`) Windows에서는 빌드하거나 검증하지
-않았습니다.
+**지원 범위: macOS와 Linux.** Windows는 빌드·검증하지 않았습니다. port에는 프로세스 그룹 감독(`internal/runner/process_unix.go`)뿐 아니라 verification process control(`internal/evidence/verification.go`)과 repository locking(`internal/lock/repository.go`)도 필요합니다.
 
 ## 증거
 
