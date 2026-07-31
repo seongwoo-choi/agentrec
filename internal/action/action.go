@@ -11,13 +11,8 @@ import (
 // was merely reported by the provider or independently observed.
 type Assurance string
 
-// Assurance levels identify each evidence source without implying an ordering.
-const (
-	AssuranceProviderReported     Assurance = "provider_reported"
-	AssuranceSupervisorObserved   Assurance = "supervisor_observed"
-	AssuranceRepositoryObserved   Assurance = "repository_observed"
-	AssuranceVerificationObserved Assurance = "verification_observed"
-)
+// Assurance levels identify the source that recorded normalized actions.
+const AssuranceProviderReported Assurance = "provider_reported"
 
 // Action types observed across providers. Type stays a plain string so
 // providers may emit types not listed here.
@@ -32,7 +27,6 @@ const (
 	TypeMCPCall       = "mcp.call"
 	TypeSubagentSpawn = "subagent.spawn"
 	TypeToolCall      = "tool.call"
-	TypeRunResult     = "run.result"
 	TypeProviderError = "provider.error"
 )
 

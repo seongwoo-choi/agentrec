@@ -570,7 +570,7 @@ claude
   Exit Code    0
   Duration     1.5s
   Repository   AVAILABLE  3 files (2 tracked, 1 untracked)  +32/-8, 0 binary
-  Actions      1
+  Recorded Actions 1
   Warnings     0
   Unparsed     0
 
@@ -583,7 +583,7 @@ codex
   Exit Code    0
   Duration     1.5s
   Repository   AVAILABLE  3 files (2 tracked, 1 untracked)  +32/-8, 0 binary
-  Actions      1
+  Recorded Actions 1
   Warnings     0
   Unparsed     0
 
@@ -717,7 +717,7 @@ claude
   Exit Reason  unknown
   Duration     unknown
   Repository   (none)
-  Actions      1
+  Recorded Actions 1
   Warnings     0
   Unparsed     0
 

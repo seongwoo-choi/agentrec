@@ -54,6 +54,10 @@ func Acquire(ctx context.Context, locksRoot, cwd string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
+	if insideRepository(locksRoot, root) {
+		return nil, fmt.Errorf("lock: the agentrec data directory %s is inside the repository %s being recorded: set AGENTREC_HOME to a directory outside it",
+			strconv.Quote(filepath.Dir(locksRoot)), strconv.Quote(root))
+	}
 	if err := privateDir(locksRoot); err != nil {
 		return nil, err
 	}
@@ -114,6 +118,28 @@ func verifyLockFile(file *os.File) error {
 		return fmt.Errorf("restrict lock file: %w", err)
 	}
 	return nil
+}
+
+// insideRepository reports whether path is the repository root or inside it.
+// Existing symlinks are resolved so a future lock cannot write into the subject
+// repository through an alias.
+func insideRepository(path, root string) bool {
+	rel, err := filepath.Rel(resolved(root), resolved(path))
+	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
+}
+
+func resolved(path string) string {
+	rest := ""
+	for dir := filepath.Clean(path); ; dir = filepath.Dir(dir) {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(real, rest)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return filepath.Clean(path)
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+	}
 }
 
 // privateDir makes sure locksRoot is a directory this user alone can reach. A

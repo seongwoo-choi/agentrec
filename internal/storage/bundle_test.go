@@ -113,7 +113,7 @@ func TestWriteActionAppendsOneLinePerActionWhileTheRunIsOpen(t *testing.T) {
 	// written, so a run interrupted mid-flight keeps everything it recorded.
 	for i, a := range []action.Action{
 		{ID: "a1", Type: action.TypeFileRead, Assurance: action.AssuranceProviderReported},
-		{ID: "a2", Type: action.TypeShellExec, Assurance: action.AssuranceSupervisorObserved},
+		{ID: "a2", Type: action.TypeShellExec, Assurance: action.Assurance("supervisor_observed")},
 	} {
 		if err := b.WriteAction(a); err != nil {
 			t.Fatalf("WriteAction %s: %v", a.ID, err)
@@ -476,7 +476,7 @@ func TestFinalizeCompletesAnInterruptedRun(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		if err := b.WriteAction(action.Action{ID: "a1", Type: action.TypeShellExec, Assurance: action.AssuranceSupervisorObserved}); err != nil {
+		if err := b.WriteAction(action.Action{ID: "a1", Type: action.TypeShellExec, Assurance: action.Assurance("supervisor_observed")}); err != nil {
 			t.Fatalf("WriteAction: %v", err)
 		}
 		ended := time.Date(2026, 7, 27, 10, 1, 0, 0, time.UTC)

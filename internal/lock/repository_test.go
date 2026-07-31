@@ -254,6 +254,23 @@ func TestAcquireRefusesALockRootItDoesNotOwn(t *testing.T) {
 	})
 }
 
+func TestAcquireRefusesALockRootInsideRepositoryBeforeWriting(t *testing.T) {
+	root := gitRepo(t)
+	locks := filepath.Join(root, ".agentrec", "locks")
+
+	held, err := Acquire(context.Background(), locks, root)
+	if err == nil {
+		held.Release()
+		t.Fatal("acquire succeeded, want refusal before creating a lock")
+	}
+	if !strings.Contains(err.Error(), "data directory") || !strings.Contains(err.Error(), root) {
+		t.Errorf("error = %q, want data-directory refusal naming %q", err, root)
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".agentrec")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("agentrec directory = %v, want it absent", err)
+	}
+}
+
 // The lock file is the lock: deleting it would let a later run take a lock
 // nobody else can see, so releasing leaves it exactly where it was.
 func TestReleaseKeepsTheLockFileAndIsIdempotent(t *testing.T) {

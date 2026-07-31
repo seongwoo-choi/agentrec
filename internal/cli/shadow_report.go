@@ -149,7 +149,7 @@ func comparisonFields(runsRoot string, l leg) ([]field, error) {
 	return append(fields,
 		field{"Duration", runDuration(manifest, result)},
 		field{"Repository", repositorySummary(git)},
-		field{"Actions", strconv.Itoa(len(actions))},
+		field{"Recorded Actions", strconv.Itoa(len(actions))},
 		field{"Warnings", strconv.Itoa(manifest.WarningCount)},
 		field{"Unparsed", strconv.Itoa(manifest.UnparsedLines)},
 	), nil

@@ -16,7 +16,7 @@ func TestActionJSONRoundTrip(t *testing.T) {
 		ParentID:   "a0",
 		Type:       TypeShellExec,
 		Provider:   "claude-code",
-		Assurance:  AssuranceSupervisorObserved,
+		Assurance:  AssuranceProviderReported,
 		StartedAt:  started,
 		FinishedAt: started.Add(time.Second),
 		Status:     "ok",
@@ -85,8 +85,8 @@ func TestWriterStreamsOneJSONLineForEachAction(t *testing.T) {
 	second := Action{
 		ID:        "a2",
 		ParentID:  "a1",
-		Type:      TypeRunResult,
-		Assurance: AssuranceVerificationObserved,
+		Type:      TypeToolCall,
+		Assurance: AssuranceProviderReported,
 		Result:    json.RawMessage(`{"passed":true}`),
 	}
 	if err := w.Write(second); err != nil {
