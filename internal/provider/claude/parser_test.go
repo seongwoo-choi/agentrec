@@ -198,12 +198,8 @@ func TestParseCountsWarningsAndKeepsParsing(t *testing.T) {
 	}
 }
 
-func TestParseKnownIgnoredEventsProduceNoWarnings(t *testing.T) {
-	stream := `{"type":"system","subtype":"hook_started","hook_id":"hook_a","timestamp":"2026-01-01T00:00:01.000Z"}
-{"type":"rate_limit_event","timestamp":"2026-01-01T00:00:02.000Z"}
-{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"hello"}]},"timestamp":"2026-01-01T00:00:03.000Z"}
-{"type":"result","subtype":"success","timestamp":"2026-01-01T00:00:04.000Z"}
-`
+func TestParseAssistantTextProducesProviderReportedMessage(t *testing.T) {
+	stream := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"hello"}]},"timestamp":"2026-01-01T00:00:03.000Z"}` + "\n"
 	res, err := Parse(strings.NewReader(stream))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -211,8 +207,48 @@ func TestParseKnownIgnoredEventsProduceNoWarnings(t *testing.T) {
 	if res.WarningCount != 0 {
 		t.Errorf("WarningCount = %d, want 0", res.WarningCount)
 	}
-	if len(res.Actions) != 0 {
-		t.Errorf("actions = %+v, want none", res.Actions)
+	if len(res.Actions) != 1 {
+		t.Fatalf("action count = %d, want 1", len(res.Actions))
+	}
+	got := res.Actions[0]
+	if got.Type != action.TypeAgentMessage || got.Provider != providerName || got.Assurance != action.AssuranceProviderReported {
+		t.Errorf("action = %+v, want provider-reported agent message", got)
+	}
+	var input struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(got.Input, &input); err != nil {
+		t.Fatalf("unmarshal Input: %v", err)
+	}
+	if input.Text != "hello" {
+		t.Errorf("Input.text = %q, want hello", input.Text)
+	}
+}
+
+func TestParseAssistantContentPreservesTextAndToolUseOrder(t *testing.T) {
+	stream := `{"type":"assistant","message":{"content":[{"type":"text","text":"inspect"},{"type":"tool_use","id":"toolu_order_01","name":"Read","input":{"file_path":"README.md"}},{"type":"text","text":"done"}]},"timestamp":"2026-01-01T00:00:03.000Z"}` + "\n"
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(res.Actions) != 3 {
+		t.Fatalf("action count = %d, want 3", len(res.Actions))
+	}
+	want := []string{action.TypeAgentMessage, action.TypeFileRead, action.TypeAgentMessage}
+	for i, typ := range want {
+		if res.Actions[i].Type != typ {
+			t.Errorf("action[%d].Type = %q, want %q", i, res.Actions[i].Type, typ)
+		}
+	}
+}
+
+func TestParseAssistantEmptyTextProducesNoAction(t *testing.T) {
+	res, err := Parse(strings.NewReader(`{"type":"assistant","message":{"content":[{"type":"text","text":""},{"type":"thinking","thinking":"hmm"}]}}` + "\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(res.Actions) != 0 || res.WarningCount != 0 {
+		t.Errorf("actions/warnings = %d/%d, want 0/0", len(res.Actions), res.WarningCount)
 	}
 }
 

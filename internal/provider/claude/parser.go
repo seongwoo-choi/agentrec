@@ -79,6 +79,7 @@ type contentBlock struct {
 	Input     json.RawMessage `json:"input"`
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
+	Text      string          `json:"text"`
 	IsError   bool            `json:"is_error"`
 }
 
@@ -96,6 +97,7 @@ type resultPayload struct {
 func Parse(r io.Reader) (ParseResult, error) {
 	var res ParseResult
 	index := make(map[string]int)
+	messageSequence := 0
 	// Tool durations reported by PostToolUse hooks, which may arrive either
 	// side of the tool_result they describe.
 	durations := make(map[string]int64)
@@ -115,6 +117,23 @@ func Parse(r io.Reader) (ParseResult, error) {
 		switch ev.Type {
 		case "assistant":
 			for _, block := range ev.Message.Content {
+				if block.Type == "text" && block.Text != "" {
+					messageSequence++
+					input, _ := json.Marshal(struct {
+						Text string `json:"text"`
+					}{Text: block.Text})
+					res.Actions = append(res.Actions, action.Action{
+						ID:        fmt.Sprintf("assistant-message-%d", messageSequence),
+						ParentID:  ev.ParentToolUseID,
+						Type:      action.TypeAgentMessage,
+						Provider:  providerName,
+						Assurance: action.AssuranceProviderReported,
+						StartedAt: parseTime(ev.Timestamp),
+						Status:    statusCompleted,
+						Input:     input,
+					})
+					continue
+				}
 				if block.Type != "tool_use" {
 					continue
 				}

@@ -571,6 +571,7 @@ claude
   Duration     1.5s
   Repository   AVAILABLE  3 files (2 tracked, 1 untracked)  +32/-8, 0 binary
   Recorded Actions 1
+  Action Types file.read=1
   Warnings     0
   Unparsed     0
 
@@ -584,6 +585,7 @@ codex
   Duration     1.5s
   Repository   AVAILABLE  3 files (2 tracked, 1 untracked)  +32/-8, 0 binary
   Recorded Actions 1
+  Action Types file.read=1
   Warnings     0
   Unparsed     0
 
@@ -718,6 +720,7 @@ claude
   Duration     unknown
   Repository   (none)
   Recorded Actions 1
+  Action Types file.read=1
   Warnings     0
   Unparsed     0
 

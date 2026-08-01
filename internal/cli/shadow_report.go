@@ -3,8 +3,11 @@ package cli
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/seongwoo-choi/agentrec/internal/action"
 )
 
 // comparisonHeader opens the comparison, so what follows is never read as one
@@ -150,9 +153,27 @@ func comparisonFields(runsRoot string, l leg) ([]field, error) {
 		field{"Duration", runDuration(manifest, result)},
 		field{"Repository", repositorySummary(git)},
 		field{"Recorded Actions", strconv.Itoa(len(actions))},
+		field{"Action Types", actionTypes(actions)},
 		field{"Warnings", strconv.Itoa(manifest.WarningCount)},
 		field{"Unparsed", strconv.Itoa(manifest.UnparsedLines)},
 	), nil
+}
+
+func actionTypes(actions []action.Action) string {
+	counts := make(map[string]int)
+	for _, a := range actions {
+		counts[a.Type]++
+	}
+	types := make([]string, 0, len(counts))
+	for typ := range counts {
+		types = append(types, typ)
+	}
+	sort.Strings(types)
+	parts := make([]string, 0, len(types))
+	for _, typ := range types {
+		parts = append(parts, typ+"="+strconv.Itoa(counts[typ]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // none states a document the run never wrote, so an absence is never read as a
