@@ -21,6 +21,7 @@ import (
 	"github.com/seongwoo-choi/agentrec/internal/action"
 	"github.com/seongwoo-choi/agentrec/internal/provider"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
+	"github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // Exit reasons record why a run ended. They are the vocabulary of both
@@ -63,6 +64,7 @@ var (
 // ParseResult is what a provider parser recovered from an event stream.
 type ParseResult struct {
 	Actions      []action.Action
+	Usage        *usage.Report
 	WarningCount int
 }
 
@@ -499,6 +501,11 @@ func writeEvidence(b *storage.Bundle, stderrText string, parse parseOutcome) err
 	}
 	for _, a := range parse.out.Actions {
 		if werr := b.WriteAction(a); werr != nil && err == nil {
+			err = werr
+		}
+	}
+	if parse.out.Usage != nil {
+		if werr := b.WriteUsage(*parse.out.Usage); werr != nil && err == nil {
 			err = werr
 		}
 	}

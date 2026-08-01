@@ -399,12 +399,12 @@ func newRunID() (string, error) {
 // the runner streams into.
 func claudeParser(r io.Reader) (runner.ParseResult, error) {
 	out, err := claude.Parse(r)
-	return runner.ParseResult{Actions: out.Actions, WarningCount: out.WarningCount}, err
+	return runner.ParseResult{Actions: out.Actions, WarningCount: out.WarningCount, Usage: out.Usage}, err
 }
 
 func codexParser(r io.Reader) (runner.ParseResult, error) {
 	out, err := codex.Parse(r)
-	return runner.ParseResult{Actions: out.Actions, WarningCount: out.WarningCount}, err
+	return runner.ParseResult{Actions: out.Actions, WarningCount: out.WarningCount, Usage: out.Usage}, err
 }
 
 // claudePrompt is what the operator asked Claude Code to do: the positional

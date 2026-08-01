@@ -28,20 +28,22 @@ type Field struct {
 // the order they were recorded, plus the summary fields observed by each of the
 // other evidence sources.
 type Report struct {
-	Actions      []action.Action
-	Supervisor   []Field
-	Repository   []Field
-	Verification []Field
+	Actions       []action.Action
+	ProviderUsage []Field
+	Supervisor    []Field
+	Repository    []Field
+	Verification  []Field
 }
 
 // Section titles, kept identical between renderers so a terminal timeline and a
 // Markdown one describe the same evidence sources.
 const (
-	titleTimeline     = "ACTION TIMELINE"
-	titleProvider     = "PROVIDER-REPORTED ACTIONS"
-	titleSupervisor   = "SUPERVISOR-OBSERVED RESULT"
-	titleRepository   = "REPOSITORY-OBSERVED CHANGES"
-	titleVerification = "VERIFICATION-OBSERVED RESULT"
+	titleTimeline      = "ACTION TIMELINE"
+	titleProvider      = "PROVIDER-REPORTED ACTIONS"
+	titleProviderUsage = "PROVIDER-REPORTED USAGE"
+	titleSupervisor    = "SUPERVISOR-OBSERVED RESULT"
+	titleRepository    = "REPOSITORY-OBSERVED CHANGES"
+	titleVerification  = "VERIFICATION-OBSERVED RESULT"
 )
 
 // none marks a section with nothing to report, so an empty section is stated
@@ -146,11 +148,15 @@ type section struct {
 }
 
 func sections(report Report) []section {
-	return []section{
-		{titleSupervisor, report.Supervisor},
-		{titleRepository, report.Repository},
-		{titleVerification, report.Verification},
+	sections := make([]section, 0, 4)
+	if report.ProviderUsage != nil {
+		sections = append(sections, section{titleProviderUsage, report.ProviderUsage})
 	}
+	return append(sections,
+		section{titleSupervisor, report.Supervisor},
+		section{titleRepository, report.Repository},
+		section{titleVerification, report.Verification},
+	)
 }
 
 // actionView is the rendered shape of one action: everything both renderers

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // providerName labels every action recovered from a Codex event stream.
@@ -42,6 +43,7 @@ var metadataEvents = map[string]bool{
 // the number of events that could not be interpreted.
 type ParseResult struct {
 	Actions      []action.Action
+	Usage        *usage.Report
 	WarningCount int
 }
 
@@ -52,6 +54,11 @@ type event struct {
 	// Timestamp is absent on some Codex transports, so it stays optional.
 	Timestamp string `json:"timestamp"`
 	Item      item   `json:"item"`
+	Usage     struct {
+		InputTokens       *int64 `json:"input_tokens"`
+		CachedInputTokens *int64 `json:"cached_input_tokens"`
+		OutputTokens      *int64 `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 // item is a Codex work item: the discriminator plus the fields each kind needs.
@@ -270,6 +277,23 @@ func Parse(r io.Reader) (ParseResult, error) {
 				Status:     commandStatus(ev.Item),
 				Input:      payload,
 			})
+		case ev.Type == "turn.completed":
+			reported := &usage.Report{
+				Schema: 1, Attribution: usage.AttributionProviderReported,
+				Provider: providerName, Scope: usage.ScopeSession,
+				InputTokens:       ev.Usage.InputTokens,
+				CachedInputTokens: ev.Usage.CachedInputTokens,
+				OutputTokens:      ev.Usage.OutputTokens,
+			}
+			if err := reported.Validate(); err != nil {
+				res.WarningCount++
+			} else if res.Usage != nil && !cumulativeUsageAtLeast(reported, res.Usage) {
+				res.WarningCount++
+			} else {
+				// Codex reports cumulative session totals. Each later completion
+				// replaces the earlier snapshot; the values are never summed.
+				res.Usage = reported
+			}
 		case metadataEvents[ev.Type]:
 			// Known stream bookkeeping that carries no action of its own.
 		default:
@@ -282,6 +306,19 @@ func Parse(r io.Reader) (ParseResult, error) {
 		return res, fmt.Errorf("read codex event stream: %w", err)
 	}
 	return res, nil
+}
+
+func cumulativeUsageAtLeast(next, previous *usage.Report) bool {
+	return cumulativeValueAtLeast(next.InputTokens, previous.InputTokens) &&
+		cumulativeValueAtLeast(next.CachedInputTokens, previous.CachedInputTokens) &&
+		cumulativeValueAtLeast(next.OutputTokens, previous.OutputTokens)
+}
+
+func cumulativeValueAtLeast(next, previous *int64) bool {
+	if previous == nil {
+		return true
+	}
+	return next != nil && *next >= *previous
 }
 
 // canClaimID reports whether id can identify a new action: an empty ID cannot

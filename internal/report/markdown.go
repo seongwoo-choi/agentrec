@@ -8,11 +8,12 @@ import (
 
 // Markdown section headings mirror the terminal titles in title case.
 const (
-	mdTimeline     = "# Action Timeline"
-	mdProvider     = "## Provider-Reported Actions"
-	mdSupervisor   = "## Supervisor-Observed Result"
-	mdRepository   = "## Repository-Observed Changes"
-	mdVerification = "## Verification-Observed Result"
+	mdTimeline      = "# Action Timeline"
+	mdProvider      = "## Provider-Reported Actions"
+	mdProviderUsage = "## Provider-Reported Usage"
+	mdSupervisor    = "## Supervisor-Observed Result"
+	mdRepository    = "## Repository-Observed Changes"
+	mdVerification  = "## Verification-Observed Result"
 )
 
 // RenderMarkdown writes the report as Markdown headings and bullets. Every
@@ -77,11 +78,15 @@ func markdownAction(number int, v actionView) []string {
 }
 
 func markdownSections(report Report) []section {
-	return []section{
-		{mdSupervisor, report.Supervisor},
-		{mdRepository, report.Repository},
-		{mdVerification, report.Verification},
+	sections := make([]section, 0, 4)
+	if report.ProviderUsage != nil {
+		sections = append(sections, section{mdProviderUsage, report.ProviderUsage})
 	}
+	return append(sections,
+		section{mdSupervisor, report.Supervisor},
+		section{mdRepository, report.Repository},
+		section{mdVerification, report.Verification},
+	)
 }
 
 func bullet(name, value string) string {

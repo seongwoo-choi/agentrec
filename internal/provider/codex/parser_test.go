@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	usagepkg "github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // fixturePath resolves a Codex fixture relative to this package's source
@@ -37,6 +38,49 @@ func parseFixture(t *testing.T, name string) ParseResult {
 		t.Fatalf("Parse: %v", err)
 	}
 	return res
+}
+
+func TestParseCodexTurnCompletedKeepsLatestSessionCumulativeUsageNotAnAction(t *testing.T) {
+	stream := `{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}
+{"type":"turn.completed","usage":{"input_tokens":180,"cached_input_tokens":50,"output_tokens":25}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(res.Actions) != 0 {
+		t.Fatalf("actions = %+v, want none", res.Actions)
+	}
+	if res.WarningCount != 0 {
+		t.Errorf("WarningCount = %d, want 0", res.WarningCount)
+	}
+	if res.Usage == nil {
+		t.Fatal("Usage is nil")
+	}
+	got := res.Usage
+	if got.Schema != 1 || got.Attribution != usagepkg.AttributionProviderReported || got.Provider != providerName || got.Scope != usagepkg.ScopeSession {
+		t.Errorf("identity = %+v, want Codex provider_reported session usage", got)
+	}
+	if got.InputTokens == nil || *got.InputTokens != 180 || got.CachedInputTokens == nil || *got.CachedInputTokens != 50 || got.OutputTokens == nil || *got.OutputTokens != 25 {
+		t.Errorf("usage = %+v, want latest cumulative values", got)
+	}
+}
+
+func TestParseCodexRejectsInvalidOrDecreasingCumulativeUsage(t *testing.T) {
+	stream := `{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}
+{"type":"turn.completed","usage":{"input_tokens":-1}}
+{"type":"turn.completed","usage":{"input_tokens":90,"cached_input_tokens":20,"output_tokens":10}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.Usage == nil || res.Usage.InputTokens == nil || *res.Usage.InputTokens != 100 {
+		t.Fatalf("Usage = %+v, want original cumulative snapshot", res.Usage)
+	}
+	if res.WarningCount != 2 {
+		t.Fatalf("WarningCount = %d, want 2", res.WarningCount)
+	}
 }
 
 func TestParseCommandExecutionYieldsOneShellExecAction(t *testing.T) {

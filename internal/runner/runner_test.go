@@ -22,7 +22,27 @@ import (
 	"github.com/seongwoo-choi/agentrec/internal/action"
 	"github.com/seongwoo-choi/agentrec/internal/provider"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
+	"github.com/seongwoo-choi/agentrec/internal/usage"
 )
+
+func TestWriteEvidencePersistsUsageSeparatelyFromActions(t *testing.T) {
+	b, err := storage.Create(t.TempDir(), "run-1", storage.Manifest{Provider: "claude", Argv: []string{"agentrec"}, CWD: t.TempDir(), StartedAt: time.Now()})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	input := int64(10)
+	reported := &usage.Report{Schema: 1, Attribution: usage.AttributionProviderReported, Provider: "claude", Scope: usage.ScopeRun, InputTokens: &input}
+	if err := writeEvidence(b, "", parseOutcome{out: ParseResult{Usage: reported}}); err != nil {
+		t.Fatalf("writeEvidence: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(b.Dir(), "provider-usage.json")); err != nil {
+		t.Fatalf("usage artifact: %v", err)
+	}
+	lines := readLines(t, filepath.Join(b.Dir(), "actions.jsonl"))
+	if len(lines) != 0 {
+		t.Errorf("actions = %q, want none", lines)
+	}
+}
 
 // The provider process under supervision is this test binary re-executed in a
 // helper mode, so the supervisor is exercised against a real process group

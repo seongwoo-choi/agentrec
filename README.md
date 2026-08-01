@@ -266,8 +266,9 @@ What the command does and does not give you:
   repository delta is still recorded as `observed during run, not causal proof`.
 - **No score, no winner, no recommendation.** The comparison shows recorded
   fields and nothing derived from them. Which run to prefer is the reader's
-  judgement. Provider-reported cost and token fields are not in the recorded
-  evidence today, so the comparison does not show them.
+  judgement. Provider-reported usage is shown independently for each leg with
+  its provider and `run` or `session` scope; values are never combined or treated
+  as equivalent across providers.
 - **A Git checkout, not a byte-hermetic sandbox.** Untracked `.env` files and
   local credentials are not copied into a leg. Tracked files are checked out by
   the operator's Git, so configured attributes, filters and hooks still apply.

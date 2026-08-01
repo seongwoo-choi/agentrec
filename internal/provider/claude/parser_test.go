@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	usagepkg "github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // fixturePath resolves a Claude fixture relative to this package's source
@@ -37,6 +38,57 @@ func parseFixture(t *testing.T, name string) ParseResult {
 		t.Fatalf("Parse: %v", err)
 	}
 	return res
+}
+
+func TestParseClaudeResultUsageIsRunScopedAndNotAnAction(t *testing.T) {
+	stream := `{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}
+{"type":"result","total_cost_usd":0.0421,"usage":{"input_tokens":1200,"cache_creation_input_tokens":80,"cache_read_input_tokens":9000,"output_tokens":340}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(res.Actions) != 1 {
+		t.Fatalf("action count = %d, want the message only", len(res.Actions))
+	}
+	if res.Usage == nil {
+		t.Fatal("Usage is nil")
+	}
+	got := res.Usage
+	if got.Schema != 1 || got.Attribution != usagepkg.AttributionProviderReported || got.Provider != providerName || got.Scope != usagepkg.ScopeRun {
+		t.Errorf("identity = %+v, want Claude provider_reported run usage", got)
+	}
+	if got.InputTokens == nil || *got.InputTokens != 1200 || got.CachedInputTokens == nil || *got.CachedInputTokens != 9000 ||
+		got.CacheCreationInputTokens == nil || *got.CacheCreationInputTokens != 80 || got.OutputTokens == nil || *got.OutputTokens != 340 ||
+		got.CostUSD == nil || *got.CostUSD != 0.0421 {
+		t.Errorf("usage = %+v", got)
+	}
+}
+
+func TestParseClaudeDuplicateResultUsageKeepsFirst(t *testing.T) {
+	stream := `{"type":"result","total_cost_usd":1,"usage":{"input_tokens":10}}
+{"type":"result","total_cost_usd":2,"usage":{"input_tokens":20}}
+`
+	res, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.Usage == nil || res.Usage.CostUSD == nil || *res.Usage.CostUSD != 1 {
+		t.Fatalf("Usage = %+v, want first result", res.Usage)
+	}
+	if res.WarningCount != 1 {
+		t.Errorf("WarningCount = %d, want duplicate warning", res.WarningCount)
+	}
+}
+
+func TestParseClaudeInvalidResultUsageWarns(t *testing.T) {
+	res, err := Parse(strings.NewReader(`{"type":"result","usage":{"input_tokens":-1}}` + "\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if res.Usage != nil || res.WarningCount != 1 {
+		t.Fatalf("Usage/WarningCount = %+v/%d, want nil/1", res.Usage, res.WarningCount)
+	}
 }
 
 func TestParseReadAndBashYieldsTwoActionsInOrder(t *testing.T) {

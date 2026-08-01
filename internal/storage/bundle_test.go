@@ -16,6 +16,7 @@ import (
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
 	"github.com/seongwoo-choi/agentrec/internal/redaction"
+	"github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // testManifest is a representative manifest holding nothing sensitive.
@@ -36,6 +37,97 @@ func statMode(t *testing.T, path string) os.FileMode {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	return info.Mode().Perm()
+}
+
+func TestWriteUsagePersistsOnePrivateCanonicalArtifact(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	input := int64(1200)
+	cost := 0.0421
+	reported := usage.Report{Schema: 1, Attribution: usage.AttributionProviderReported, Provider: "claude", Scope: usage.ScopeRun, InputTokens: &input, CostUSD: &cost}
+	if err := b.WriteUsage(reported); err != nil {
+		t.Fatalf("WriteUsage: %v", err)
+	}
+	path := filepath.Join(b.Dir(), usageFile)
+	if got := statMode(t, path); got != fileMode {
+		t.Errorf("mode = %04o, want %04o", got, fileMode)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got usage.Report
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode usage: %v", err)
+	}
+	if err := got.Validate(); err != nil || got.InputTokens == nil || *got.InputTokens != input {
+		t.Errorf("persisted usage = %+v, validation %v", got, err)
+	}
+}
+
+func TestWriteUsageRefusesDuplicateOrSymlinkArtifact(t *testing.T) {
+	input := int64(1)
+	reported := usage.Report{Schema: 1, Attribution: usage.AttributionProviderReported, Provider: "claude", Scope: usage.ScopeRun, InputTokens: &input}
+	for _, tc := range []struct {
+		name  string
+		plant func(t *testing.T, path string)
+	}{
+		{"duplicate", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("existing\n"), fileMode); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"symlink", func(t *testing.T, path string) {
+			target := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(target, []byte("outside\n"), fileMode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := Create(t.TempDir(), "run-1", testManifest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(b.Dir(), usageFile)
+			tc.plant(t, path)
+			if err := b.WriteUsage(reported); err == nil {
+				t.Fatal("WriteUsage succeeded, want refusal")
+			}
+		})
+	}
+}
+
+func TestWriteUsageStaysInOriginalRunDirectoryAfterAncestorReplacement(t *testing.T) {
+	root := t.TempDir()
+	b, err := Create(root, "run-1", testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(root, "original")
+	if err := os.Rename(b.Dir(), original); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, b.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	input := int64(1)
+	reported := usage.Report{Schema: 1, Attribution: usage.AttributionProviderReported, Provider: "claude", Scope: usage.ScopeRun, InputTokens: &input}
+	if err := b.WriteUsage(reported); err != nil {
+		t.Fatalf("WriteUsage: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(original, usageFile)); err != nil {
+		t.Fatalf("usage missing from original directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, usageFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside usage artifact: %v", err)
+	}
 }
 
 func TestCreateRejectsUnsafeRunIDs(t *testing.T) {

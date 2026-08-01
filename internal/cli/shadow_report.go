@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	usageartifact "github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // comparisonHeader opens the comparison, so what follows is never read as one
@@ -111,6 +112,10 @@ func comparisonFields(runsRoot string, l leg) ([]field, error) {
 	if err != nil {
 		return nil, err
 	}
+	reportedUsage, err := readProviderUsage(dir, manifest.Provider)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateUnparsedStream(dir, manifest.UnparsedLines); err != nil {
 		return nil, err
 	}
@@ -134,6 +139,7 @@ func comparisonFields(runsRoot string, l leg) ([]field, error) {
 	// Second, right under the run it identifies: what conditions a leg ran under
 	// is the first thing a reader needs before comparing anything else about it.
 	fields := []field{{"Run ID", runID}, {"Order", strconv.Itoa(l.order)}}
+	fields = append(fields, comparisonUsageFields(reportedUsage)...)
 	if verification == nil {
 		fields = append(fields, field{"Verification", none})
 	} else {
@@ -157,6 +163,30 @@ func comparisonFields(runsRoot string, l leg) ([]field, error) {
 		field{"Warnings", strconv.Itoa(manifest.WarningCount)},
 		field{"Unparsed", strconv.Itoa(manifest.UnparsedLines)},
 	), nil
+}
+
+func comparisonUsageFields(reported *usageartifact.Report) []field {
+	if reported == nil {
+		return nil
+	}
+	fields := []field{
+		{"Usage Attribution", reported.Attribution},
+		{"Usage Provider", reported.Provider},
+		{"Usage Scope", reported.Scope},
+	}
+	appendTokens := func(name string, value *int64) {
+		if value != nil {
+			fields = append(fields, field{name, strconv.FormatInt(*value, 10)})
+		}
+	}
+	appendTokens("Input Tokens", reported.InputTokens)
+	appendTokens("Cached Input Tokens", reported.CachedInputTokens)
+	appendTokens("Cache Creation Input Tokens", reported.CacheCreationInputTokens)
+	appendTokens("Output Tokens", reported.OutputTokens)
+	if reported.CostUSD != nil {
+		fields = append(fields, field{"Cost USD", strconv.FormatFloat(*reported.CostUSD, 'f', -1, 64)})
+	}
+	return fields
 }
 
 func actionTypes(actions []action.Action) string {

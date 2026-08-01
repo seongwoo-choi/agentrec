@@ -282,8 +282,8 @@ between them, so a later leg may observe what an earlier one left.
   `observed during run, not causal proof`로 기록됩니다.
 - **점수, 승자, 추천은 없습니다.** 비교는 기록된 필드만 보여 주며, 그로부터 파생한
   결과는 보여 주지 않습니다. 어느 실행을 선호할지는 읽는 사람의 판단입니다. 제공자가
-  보고하는 비용과 토큰 필드는 현재 기록된 증거에 포함하지 않으므로 비교에도 나오지
-  않습니다.
+  보고한 사용량은 각 leg의 provider 및 `run` 또는 `session` 범위와 함께 독립적으로
+  표시하며, provider 간 값을 합치거나 동등한 수치로 취급하지 않습니다.
 - **바이트 단위로 hermetic한 sandbox가 아니라 Git 체크아웃입니다.** 추적되지 않는
   `.env` 파일과 로컬 자격 증명은 leg로 복사하지 않습니다. 추적 파일은 사용자의 Git이
   체크아웃하므로 설정된 attribute, filter, hook은 계속 적용됩니다. agentrec은 자격

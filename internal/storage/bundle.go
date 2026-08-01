@@ -16,6 +16,7 @@ import (
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
 	"github.com/seongwoo-choi/agentrec/internal/redaction"
+	"github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // Bundle files. Later phases add process, git and verification material
@@ -31,6 +32,7 @@ const (
 	// are not events, and kept rather than dropped because a line the recorder
 	// could not read is still something the provider said.
 	unparsedFile = "provider-stdout.unparsed.log"
+	usageFile    = "provider-usage.json"
 )
 
 // Process artifacts describe the provider process itself and are written once,
@@ -100,6 +102,7 @@ type Bundle struct {
 	dir      string
 	red      *redaction.Redactor
 	manifest Manifest
+	dirRoot  *os.Root
 	actions  *os.File
 	events   *os.File
 	// unparsed is opened on the first line that was not an event, so a run whose
@@ -130,7 +133,12 @@ func Create(root, runID string, manifest Manifest) (*Bundle, error) {
 	}
 
 	manifest.RedactionRuleVersion = redaction.RuleVersion
-	b := &Bundle{dir: dir, red: redaction.New(), manifest: manifest}
+	dirRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		os.Remove(dir)
+		return nil, fmt.Errorf("storage: open run directory: %w", err)
+	}
+	b := &Bundle{dir: dir, dirRoot: dirRoot, red: redaction.New(), manifest: manifest}
 	if err := b.start(); err != nil {
 		b.discard()
 		return nil, err
@@ -284,6 +292,28 @@ func (b *Bundle) WriteProcessResult(rawJSON []byte) error {
 	return nil
 }
 
+// WriteUsage stores one normalized provider-reported resource summary. It is a
+// separate artifact, never an action, and cannot replace any existing entry.
+func (b *Bundle) WriteUsage(reported usage.Report) error {
+	if err := b.writable(); err != nil {
+		return err
+	}
+	if err := reported.Validate(); err != nil {
+		return fmt.Errorf("storage: validate provider usage: %w", err)
+	}
+	if reported.Provider != b.manifest.Provider {
+		return fmt.Errorf("storage: provider usage claims %q, want %q", reported.Provider, b.manifest.Provider)
+	}
+	raw, err := json.Marshal(reported)
+	if err != nil {
+		return fmt.Errorf("storage: encode provider usage: %w", err)
+	}
+	if err := installNewAt(b.dirRoot, usageFile, append(raw, '\n')); err != nil {
+		return b.fail(err)
+	}
+	return nil
+}
+
 // processDir returns the directory holding the process artifacts, creating it
 // on the first one. An entry that is already there is accepted only if it is a
 // real directory: a symlink standing in its place would put the run's evidence
@@ -418,10 +448,18 @@ func (b *Bundle) Finalize(f Finalization) error {
 	b.manifest.ExitReason = f.ExitReason
 	b.manifest.WarningCount = f.WarningCount
 	b.manifest.UnparsedLines = f.UnparsedLines
-	if err := b.writeManifest(); err != nil && streamErr == nil {
-		return err
+	manifestErr := b.writeManifest()
+	rootErr := b.dirRoot.Close()
+	if streamErr != nil {
+		return streamErr
 	}
-	return streamErr
+	if manifestErr != nil {
+		return manifestErr
+	}
+	if rootErr != nil {
+		return fmt.Errorf("storage: close run directory: %w", rootErr)
+	}
+	return nil
 }
 
 // syncClose flushes a stream to durable storage and closes it, reporting the
@@ -476,6 +514,9 @@ func (b *Bundle) discard() {
 	for _, name := range []string{unparsedFile, eventsFile, actionsFile, manifestFile} {
 		os.Remove(b.path(name))
 	}
+	if b.dirRoot != nil {
+		b.dirRoot.Close()
+	}
 	os.Remove(b.dir)
 }
 
@@ -521,6 +562,33 @@ func install(path string, data []byte) error {
 		return fmt.Errorf("storage: close %s: %w", name, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("storage: install %s: %w", name, err)
+	}
+	return nil
+}
+
+// installNew atomically installs a new artifact without replacing an existing
+// file or symlink. Linking the fully synced temporary file provides no-clobber
+// semantics at the final directory entry.
+func installNewAt(root *os.Root, name string, data []byte) error {
+	tmp := name + ".tmp"
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, fileMode)
+	if err != nil {
+		return fmt.Errorf("storage: create %s: %w", tmp, err)
+	}
+	defer root.Remove(tmp)
+	if err := f.Chmod(fileMode); err != nil {
+		f.Close()
+		return fmt.Errorf("storage: set mode of %s: %w", tmp, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("storage: write %s: %w", name, err)
+	}
+	if err := syncClose(f); err != nil {
+		return fmt.Errorf("storage: finish %s: %w", name, err)
+	}
+	if err := root.Link(tmp, name); err != nil {
 		return fmt.Errorf("storage: install %s: %w", name, err)
 	}
 	return nil

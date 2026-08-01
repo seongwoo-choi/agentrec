@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // providerName labels every action recovered from a Claude event stream.
@@ -44,6 +45,7 @@ const (
 // the number of events that could not be interpreted.
 type ParseResult struct {
 	Actions      []action.Action
+	Usage        *usage.Report
 	WarningCount int
 }
 
@@ -59,9 +61,16 @@ type event struct {
 	} `json:"message"`
 	ToolUseResult json.RawMessage `json:"tool_use_result"`
 	// Subtype, HookEvent and Output describe hook activity on "system" events.
-	Subtype   string `json:"subtype"`
-	HookEvent string `json:"hook_event"`
-	Output    string `json:"output"`
+	Subtype      string   `json:"subtype"`
+	HookEvent    string   `json:"hook_event"`
+	Output       string   `json:"output"`
+	TotalCostUSD *float64 `json:"total_cost_usd"`
+	Usage        struct {
+		InputTokens              *int64 `json:"input_tokens"`
+		CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
+		OutputTokens             *int64 `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 // hookOutput is the subset of a hook_response "output" payload the parser
@@ -186,7 +195,23 @@ func Parse(r io.Reader) (ParseResult, error) {
 			if ev.Subtype == hookResponseSubtype && ev.HookEvent == postToolUseHook {
 				applyHookDuration(res.Actions, index, durations, ev.Output)
 			}
-		case "result", "rate_limit_event", "tool_progress":
+		case "result":
+			reported := &usage.Report{
+				Schema: 1, Attribution: usage.AttributionProviderReported,
+				Provider: providerName, Scope: usage.ScopeRun,
+				InputTokens:              ev.Usage.InputTokens,
+				CachedInputTokens:        ev.Usage.CacheReadInputTokens,
+				CacheCreationInputTokens: ev.Usage.CacheCreationInputTokens,
+				OutputTokens:             ev.Usage.OutputTokens, CostUSD: ev.TotalCostUSD,
+			}
+			if err := reported.Validate(); err != nil {
+				res.WarningCount++
+			} else if res.Usage == nil {
+				res.Usage = reported
+			} else {
+				res.WarningCount++
+			}
+		case "rate_limit_event", "tool_progress":
 			// Known event types that carry no action of their own.
 		default:
 			res.WarningCount++

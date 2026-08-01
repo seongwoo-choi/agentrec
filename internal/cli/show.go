@@ -18,19 +18,21 @@ import (
 	"github.com/seongwoo-choi/agentrec/internal/evidence"
 	"github.com/seongwoo-choi/agentrec/internal/report"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
+	usageartifact "github.com/seongwoo-choi/agentrec/internal/usage"
 )
 
 // Bundle members this command reads. Provider events are never read: they are
 // raw provider material, and a report is built only from normalized actions and
 // the run's own bookkeeping.
 const (
-	manifestFile  = "manifest.json"
-	actionsFile   = "actions.jsonl"
-	processDir    = "process"
-	resultFile    = "result.json"
-	gitDir        = "git"
-	verifyDir     = "verification"
-	verifyResults = "results.json"
+	manifestFile      = "manifest.json"
+	actionsFile       = "actions.jsonl"
+	processDir        = "process"
+	resultFile        = "result.json"
+	gitDir            = "git"
+	verifyDir         = "verification"
+	verifyResults     = "results.json"
+	providerUsageFile = "provider-usage.json"
 	// unparsedFile is named in the report rather than read: the lines in it are
 	// provider material this command does not render, and pointing at the file is
 	// how a reader is told where to find them.
@@ -162,12 +164,41 @@ func readRun(root, runID string) (report.Report, error) {
 	if err != nil {
 		return report.Report{}, err
 	}
+	reportedUsage, err := readProviderUsage(dir, manifest.Provider)
+	if err != nil {
+		return report.Report{}, err
+	}
 	return report.Report{
-		Actions:      actions,
-		Supervisor:   supervisorFields(manifest, result),
-		Repository:   repositoryFields(git),
-		Verification: verificationFields(verification),
+		Actions:       actions,
+		ProviderUsage: providerUsageFields(reportedUsage),
+		Supervisor:    supervisorFields(manifest, result),
+		Repository:    repositoryFields(git),
+		Verification:  verificationFields(verification),
 	}, nil
+}
+
+func providerUsageFields(reported *usageartifact.Report) []report.Field {
+	if reported == nil {
+		return nil
+	}
+	fields := []report.Field{
+		{Name: "Attribution", Value: reported.Attribution},
+		{Name: "Provider", Value: reported.Provider},
+		{Name: "Scope", Value: reported.Scope},
+	}
+	appendTokens := func(name string, value *int64) {
+		if value != nil {
+			fields = append(fields, report.Field{Name: name, Value: strconv.FormatInt(*value, 10)})
+		}
+	}
+	appendTokens("Input Tokens", reported.InputTokens)
+	appendTokens("Cached Input Tokens", reported.CachedInputTokens)
+	appendTokens("Cache Creation Input Tokens", reported.CacheCreationInputTokens)
+	appendTokens("Output Tokens", reported.OutputTokens)
+	if reported.CostUSD != nil {
+		fields = append(fields, report.Field{Name: "Cost USD", Value: strconv.FormatFloat(*reported.CostUSD, 'f', -1, 64)})
+	}
+	return fields
 }
 
 // gitResult mirrors git/result.json: what the repository capture measured, and
@@ -437,6 +468,38 @@ func readProcessResult(dir string) (*processResult, error) {
 		return nil, fmt.Errorf("cli: read %s: %w", resultFile, err)
 	}
 	return &result, nil
+}
+
+// readProviderUsage reads the optional provider-reported usage artifact. Runs
+// recorded before the artifact existed legitimately have no such file.
+func readProviderUsage(dir, provider string) (*usageartifact.Report, error) {
+	raw, err := readDocument(dir, providerUsageFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var reported usageartifact.Report
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&reported); err != nil {
+		return nil, fmt.Errorf("cli: read %s: %w", providerUsageFile, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("more than one JSON value")
+		}
+		return nil, fmt.Errorf("cli: read %s: %w", providerUsageFile, err)
+	}
+	if err := reported.Validate(); err != nil {
+		return nil, fmt.Errorf("cli: read %s: %w", providerUsageFile, err)
+	}
+	if reported.Provider != provider {
+		return nil, fmt.Errorf("cli: read %s: provider %q does not match manifest provider %q", providerUsageFile, reported.Provider, provider)
+	}
+	return &reported, nil
 }
 
 // readDocument reads one whole bundle file, bounded. The size is taken from the
