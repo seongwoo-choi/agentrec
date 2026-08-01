@@ -113,6 +113,8 @@ agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
+agentrec events 20260728T093159.858622000Z-582ee874
+agentrec events latest --json
 
 # Report the build this binary came from
 agentrec version
@@ -121,6 +123,8 @@ agentrec version
 `agentrec list` 会按时间倒序列出运行记录，`PROJECT` 列取自 manifest 所记录工作目录的最后一段路径；若 manifest 中不是绝对路径，则显示 `unknown`，而不是猜测。
 
 `--cwd` 匹配的是**一个完全一致的目录**，而非路径前缀：给定路径会转换为绝对路径并清理；只有 manifest 中的工作目录也为绝对路径、以相同方式清理后与之完全相同，运行记录才会被保留。子目录是不同路径，通过符号链接进入的路径也是不同路径。
+
+`agentrec events <run-id>|latest` 读取可选的、已清理的提供方事件 JSONL 文件。面向人的输出只显示 `provider_reported` 归属、事件数量以及排序后的顶层 `type` 计数，不呈现嵌套的提供方 payload。`--json` 不输出说明文字，只输出稳定的包装结构 `{"schemaVersion":1,"runId":...,"attribution":"provider_reported","artifactPresent":...,"events":[...]}`。旧 bundle 若没有该文件，会以 `artifactPresent: false` 和空事件列表报告。两种模式都拒绝符号链接和非普通文件，限制文件大小、行长、事件数、JSON token 数和嵌套深度，并要求 JSONL 每行恰好是一个 JSON 对象。面向人的 type 名采用无碰撞且对终端安全的引用形式；JSON 模式则以有效 JSON 保留已验证、已清理的对象。事件不会被转换为 action，不会用于评分或比较提供方，也不会被当作因果证明。
 
 ## 报告长什么样
 

@@ -146,6 +146,8 @@ agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
+agentrec events 20260728T093159.858622000Z-582ee874
+agentrec events latest --json
 
 # Report the build this binary came from
 agentrec version
@@ -159,6 +161,19 @@ anything but an absolute path reports `unknown` rather than a guess.
 absolute and cleaned, and a run is kept only when the manifest's own working
 directory — itself absolute, cleaned the same way — is exactly it. A subdirectory
 is a different path, and so is another way in through a symlink.
+
+`agentrec events <run-id>|latest` reads the optional sanitized provider-event
+JSONL artifact. Human output reports only `provider_reported` attribution, the
+event count, and sorted top-level `type` counts; it does not render nested
+provider payloads. `--json` emits no prose and uses the stable wrapper
+`{"schemaVersion":1,"runId":...,"attribution":"provider_reported","artifactPresent":...,"events":[...]}`.
+An older bundle without the artifact is reported as `artifactPresent: false`
+with an empty event list. Both modes refuse symlinks and non-regular files,
+enforce file, line, event-count, JSON-token, and nesting bounds, and require
+exactly one JSON object per JSONL line. Human type names use collision-free
+terminal-safe quoting; JSON mode preserves the validated sanitized objects as
+valid JSON. Events are not converted to actions, scored, compared, or treated as
+causal proof.
 
 ## What a report looks like
 

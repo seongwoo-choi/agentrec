@@ -13,7 +13,8 @@ Usage:
   agentrec shadow run <task-file> --runner claude --runner codex
   agentrec shadow show <group-id>
   agentrec list [--cwd <path>]
-  agentrec show <run-id>
+  agentrec show <run-id>|latest
+  agentrec events <run-id>|latest [--json]
   agentrec version
 `
 
@@ -36,6 +37,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runList(args[1:], stdout, stderr)
 	case "show":
 		return runShow(args[1:], stdout, stderr)
+	case "events":
+		return runEvents(args[1:], stdout, stderr)
 	case "version", "--version":
 		return runVersion(args[1:], stdout, stderr)
 	}

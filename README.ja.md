@@ -157,10 +157,24 @@ agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
+agentrec events 20260728T093159.858622000Z-582ee874
+agentrec events latest --json
 
 # Report the build this binary came from
 agentrec version
 ```
+
+`agentrec events <run-id>|latest` は、任意のサニタイズ済みプロバイダーイベント JSONL
+artifact を読み取ります。人向け出力に含めるのは `provider_reported` という帰属、イベント数、
+ソート済みのトップレベル `type` 件数だけで、ネストしたプロバイダー payload は表示しません。
+`--json` は説明文を出さず、安定した wrapper
+`{"schemaVersion":1,"runId":...,"attribution":"provider_reported","artifactPresent":...,"events":[...]}`
+だけを出力します。artifact のない古い bundle は `artifactPresent: false` と空のイベント一覧で
+報告します。どちらのモードもシンボリックリンクと通常ファイルでないものを拒否し、ファイル
+サイズ、行長、イベント数、JSON token 数、ネスト深度に上限を設け、JSONL の各行が厳密に
+1 個の JSON object であることを要求します。人向けの type 名は衝突のない terminal-safe な
+引用形式で表示し、JSON モードは検証済みのサニタイズ済み object を valid JSON のまま保持します。
+イベントを action に変換したり、採点、プロバイダー比較、因果関係の証明に使ったりすることはありません。
 
 `agentrec list` は実行を新しい順に出力します。`PROJECT` 列は manifest に記録された
 作業ディレクトリの末尾要素から取得します。絶対パス以外を保持する manifest は、推測せず

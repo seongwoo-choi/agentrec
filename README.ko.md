@@ -165,6 +165,8 @@ agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
+agentrec events 20260728T093159.858622000Z-582ee874
+agentrec events latest --json
 
 # Report the build this binary came from
 agentrec version
@@ -178,6 +180,18 @@ agentrec version
 절대 경로로 만들고 정리하며, manifest의 작업 디렉터리도 절대 경로로 같은 방식으로
 정리한 뒤 정확히 일치할 때만 실행을 남깁니다. 하위 디렉터리는 다른 경로이고,
 심볼릭 링크를 통해 들어간 경로도 마찬가지입니다.
+
+`agentrec events <run-id>|latest`는 선택적인 sanitized provider-event JSONL
+artifact를 읽습니다. 사람용 출력은 `provider_reported` 귀속, 이벤트 수, 정렬된 최상위
+`type` 개수만 보여 주며 중첩된 provider payload는 렌더링하지 않습니다. `--json`은 설명
+문구 없이 안정적인 wrapper
+`{"schemaVersion":1,"runId":...,"attribution":"provider_reported","artifactPresent":...,"events":[...]}`만
+출력합니다. artifact가 없는 이전 bundle은 `artifactPresent: false`와 빈 이벤트 목록으로
+보고합니다. 두 모드 모두 심볼릭 링크와 일반 파일이 아닌 항목을 거부하고, 파일 크기·줄
+길이·이벤트 수·JSON token 수·중첩 깊이에 상한을 적용하며, JSONL의 각 줄이 정확히 하나의
+JSON object인지 검증합니다. 사람용 type 이름은 collision 없이 terminal-safe하게 quote하고,
+JSON 모드는 검증된 sanitized object를 valid JSON으로 보존합니다. 이벤트를 action으로
+변환하거나, 점수를 매기거나, provider를 비교하거나, 인과관계의 증거로 취급하지 않습니다.
 
 ## 리포트의 모습
 
