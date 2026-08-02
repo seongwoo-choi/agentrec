@@ -461,7 +461,7 @@ func TestListRejectsExtraArguments(t *testing.T) {
 	}
 }
 
-func TestListRejectsMissingOrExtraFilterArguments(t *testing.T) {
+func TestListRejectsInvalidFilterArguments(t *testing.T) {
 	home(t)
 	for _, tt := range []struct {
 		name string
@@ -472,6 +472,7 @@ func TestListRejectsMissingOrExtraFilterArguments(t *testing.T) {
 		{"extra argument", []string{"list", "--cwd", "path", "extra"}},
 		{"attached cwd", []string{"list", "--cwd=path"}},
 		{"attached exit reason", []string{"list", "--exit-reason=failed"}},
+		{"unknown option", []string{"list", "--provider", "claude"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			code, stdout, stderr := run(t, tt.args...)
