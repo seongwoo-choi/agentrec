@@ -134,6 +134,16 @@ func helperMain(mode string, args []string) int {
 		signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
 		time.Sleep(10 * time.Minute)
 		return 0
+	case "exiting-leader":
+		term := make(chan os.Signal, 1)
+		signal.Notify(term, syscall.SIGTERM)
+		spawn("helper:term-defiant-child", args[0])
+		<-term
+		return 0
+	case "term-defiant-child":
+		signal.Ignore(syscall.SIGTERM)
+		time.Sleep(10 * time.Minute)
+		return 0
 	case "defiant":
 		// Ignores SIGINT outright, as does the descendant it leaves behind: an
 		// interrupt alone never ends this tree, only a group SIGKILL does. One
@@ -760,6 +770,25 @@ func TestRunEscalatesToKillAfterTheCallersGrace(t *testing.T) {
 	if pr.ExitCode != nil || pr.Signal != "killed" {
 		t.Errorf("result.json = %+v, want a null exitCode and signal killed", pr)
 	}
+}
+
+func TestRunKillsDescendantWhenLeaderExitsDuringTimeoutGrace(t *testing.T) {
+	b := newBundle(t)
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+
+	res, err := Run(context.Background(), Request{
+		Command:   helperCommand("exiting-leader", pidFile),
+		Bundle:    b,
+		Parser:    jsonlParser("", 0),
+		Timeout:   200 * time.Millisecond,
+		KillGrace: 300 * time.Millisecond,
+	})
+	if !errors.Is(err, ErrTimedOut) || res.ExitReason != ReasonTimeout {
+		t.Fatalf("res = %+v, err = %v; want timed out run", res, err)
+	}
+	pid := waitForPID(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	requireGone(t, pid)
 }
 
 func TestDefaultKillGraceIsFiveSeconds(t *testing.T) {

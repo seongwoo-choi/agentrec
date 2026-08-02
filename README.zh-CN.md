@@ -98,6 +98,7 @@ verify:
 # Claude Code
 agentrec trace claude -- -p "add a regression test for the parser"
 agentrec trace claude --verify -- -p "add a regression test for the parser"
+agentrec trace claude --timeout 30m -- -p "add a regression test for the parser"
 
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
@@ -234,6 +235,13 @@ between them, so a later leg may observe what an earlier one left.
 - **配置污染**：`--verify` 会在提供方启动前固定 `.agentrec.yaml` 及其 SHA-256。若运行重写了该文件，验证将记录为 `TAINTED`，原因为 `config_changed`，**不会执行任何检查**，已固定的检查仍保持 `PENDING`。
 
 退出码：提供方完成且验证（如有）通过时为 `0`；`1`–`125` 表示透传提供方自身的退出码；记录、渲染或验证失败为 `1`；错误调用 agentrec 为 `2`；中断为 `130`。
+
+`--timeout <duration>` 接受 `30s`、`5m`、`2h` 等正数 Go duration，且只限制提供方
+进程。到达期限时，agentrec 会向提供方进程组发送 SIGTERM，等待固定的 5 秒终止宽限期；
+若进程组仍在运行，再发送 SIGKILL。证据包会以退出原因 `timeout` 完成，agentrec 以 `1`
+退出；期限前产生的提供方事件仍会保留。省略该选项时，提供方运行仍不设期限，由 Ctrl-C 或
+SIGTERM 控制。仓库测量、验证检查和报告写入各自使用独立限制，不属于这个提供方 timeout
+的范围。
 
 无论 Ctrl-C 还是 SIGTERM，agentrec 都会捕获而不是立即在收到信号的位置终止，并且这一行为覆盖整个记录过程，而不只是在提供方运行期间：agentrec 会停止提供方进程组、完成 manifest、测量仓库、执行固定检查、写入报告，最后以 `130` 退出。这样，无论在上述序列的哪一步被中断，运行记录都会说明它如何结束，而不是停在 `PENDING`。第一个信号是最后一个被捕获的信号：之后会恢复交由操作系统处理，因此第二次 Ctrl-C 会在当前位置结束进程。
 

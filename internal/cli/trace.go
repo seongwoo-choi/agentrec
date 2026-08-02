@@ -26,13 +26,17 @@ import (
 // including flags agentrec itself understands.
 const traceDelimiter = "--"
 
-const traceUsage = "usage: agentrec trace <claude|codex> [--verify] [--allow-unsupported-version] -- <provider args...>\n"
+const traceUsage = "usage: agentrec trace <claude|codex> [--verify] [--allow-unsupported-version] [--timeout <duration>] -- <provider args...>\n"
 
 // verifyFlag asks for the repository's own checks to be run against the work
 // once the provider has stopped. Options agentrec takes for itself are spelled
 // exactly: anything else before the delimiter is an invocation agentrec does
 // not understand rather than one it guesses at.
 const verifyFlag = "--verify"
+
+// timeoutFlag bounds the provider process itself. Omitting it preserves the
+// default operator-controlled run with no deadline.
+const timeoutFlag = "--timeout"
 
 // allowUnsupportedVersionFlag records a run against a provider version outside
 // the range agentrec's parser was written for, instead of refusing it. The
@@ -55,8 +59,8 @@ const verifyConfigFile = ".agentrec.yaml"
 const verifyPinTimeout = 10 * time.Second
 
 // versionTimeout bounds preparation alone — running the provider's `--version`
-// — and nothing else. The recorded run itself is bounded by the operator, not
-// by a clock here.
+// — and nothing else. The provider run remains unbounded unless the operator
+// supplies --timeout.
 const versionTimeout = 10 * time.Second
 
 // gitTimeout bounds the questions asked of the repository before the run — where
@@ -108,6 +112,7 @@ const (
 type traceOptions struct {
 	verify           bool
 	allowUnsupported bool
+	timeout          time.Duration
 }
 
 // parseTraceOptions reads the arguments between the provider and the delimiter,
@@ -123,12 +128,20 @@ type traceOptions struct {
 // machine where either differed.
 func parseTraceOptions(args []string) (traceOptions, bool) {
 	var opts traceOptions
-	for _, opt := range args {
+	for i := 0; i < len(args); i++ {
+		opt := args[i]
 		switch {
 		case opt == verifyFlag && !opts.verify:
 			opts.verify = true
 		case opt == allowUnsupportedVersionFlag && !opts.allowUnsupported:
 			opts.allowUnsupported = true
+		case opt == timeoutFlag && opts.timeout == 0 && i+1 < len(args):
+			timeout, err := time.ParseDuration(args[i+1])
+			if err != nil || timeout <= 0 {
+				return traceOptions{}, false
+			}
+			opts.timeout = timeout
+			i++
 		default:
 			return traceOptions{}, false
 		}
@@ -234,9 +247,8 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	// same reason and treated the same way: an operator types Ctrl-C, but a parent
 	// runner, a scheduler or a container asks a process to stop with SIGTERM, and
 	// a recorder that dies on the spot there leaves the same unfinished bundle
-	// with the provider's process group still running. The run itself has no
-	// timeout: how long an agent may work is the operator's decision, taken with
-	// that same Ctrl-C.
+	// with the provider's process group still running. Without --timeout the run
+	// remains operator-bounded by that same Ctrl-C.
 	signals := holdCommandSignals()
 	interrupt := signals.Interrupt()
 
@@ -250,6 +262,7 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 		RunsRoot:  root,
 		RunID:     runID,
 		Verify:    verify,
+		Timeout:   own.timeout,
 		Interrupt: interrupt,
 		StartGate: signals.Start,
 		Timeline:  stdout,

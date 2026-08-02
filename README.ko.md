@@ -150,6 +150,7 @@ Git 체크아웃이어야 합니다. 그래야 실행 자체가 만든 변경을
 # Claude Code
 agentrec trace claude -- -p "add a regression test for the parser"
 agentrec trace claude --verify -- -p "add a regression test for the parser"
+agentrec trace claude --timeout 30m -- -p "add a regression test for the parser"
 
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
@@ -370,6 +371,14 @@ agentrec이 즉시 종료되면, 예를 들어 `SIGKILL`을 받거나 머신이 
 종료 코드는 다음과 같습니다. `0`은 제공자가 완료됐고 검증이 있었다면 통과했음을,
 `1`–`125`는 제공자 자체의 종료 코드가 그대로 전달됐음을, `1`은 기록, 렌더링 또는
 검증 실패를, `2`는 agentrec을 잘못 호출했음을, `130`은 중단됐음을 뜻합니다.
+
+`--timeout <duration>`은 `30s`, `5m`, `2h` 같은 양의 Go duration을 받으며 제공자
+프로세스만 제한합니다. 기한이 지나면 제공자 프로세스 그룹에 SIGTERM을 보내고 고정된
+5초 grace를 기다린 뒤, 여전히 실행 중이면 SIGKILL을 보냅니다. 번들은 종료 사유
+`timeout`으로 마감되고 agentrec은 `1`로 종료하며, 기한 전에 나온 제공자 이벤트는 그대로
+보존됩니다. flag를 생략하면 기존처럼 Ctrl-C 또는 SIGTERM으로 제어하는 무제한 제공자
+실행입니다. 저장소 측정, 검증 검사, report 작성은 각각의 자체 제한을 사용하며 이 제공자
+timeout에 포함되지 않습니다.
 
 Ctrl-C와 SIGTERM은 전달된 지점에서 즉시 따르지 않고 전체 기록 과정에서 붙잡아 둡니다.
 제공자가 실행 중일 때만 해당하는 것이 아닙니다. agentrec은 제공자의 프로세스 그룹을

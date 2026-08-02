@@ -43,6 +43,7 @@ type recordRequest struct {
 	RunsRoot string
 	RunID    string
 	Verify   bool
+	Timeout  time.Duration
 
 	// Interrupt carries the operator's interrupt, for the length of the run and
 	// of the recorder's own work after it. A nil channel never fires.
@@ -183,6 +184,7 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 		CWD:       req.CWD,
 		Bundle:    bundle,
 		Parser:    req.Parser,
+		Timeout:   req.Timeout,
 		Interrupt: req.Interrupt,
 		StartGate: req.StartGate,
 	})

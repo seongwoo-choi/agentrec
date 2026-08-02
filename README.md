@@ -131,6 +131,7 @@ told apart. One run at a time per repository: a second is refused, not queued.
 # Claude Code
 agentrec trace claude -- -p "add a regression test for the parser"
 agentrec trace claude --verify -- -p "add a regression test for the parser"
+agentrec trace claude --timeout 30m -- -p "add a regression test for the parser"
 
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
@@ -363,6 +364,15 @@ A status is shown as it was recorded, never inferred:
 Exit codes: `0` provider completed and any verification passed; `1`–`125` the
 provider's own exit code passed through; `1` recording, rendering or verification
 failed; `2` agentrec was called wrongly; `130` interrupted.
+
+`--timeout <duration>` accepts a positive Go duration such as `30s`, `5m`, or
+`2h` and bounds only the provider process. At the deadline agentrec sends
+SIGTERM to the provider process group, waits the fixed five-second kill grace,
+then uses SIGKILL if the group is still running. It finalizes the bundle with
+exit reason `timeout` and exits `1`; provider events emitted before the deadline
+remain recorded. Omitting the flag preserves an unbounded provider run governed
+by Ctrl-C or SIGTERM. Repository measurement, verification checks, and report
+writing retain their own bounds and are not covered by this provider timeout.
 
 Ctrl-C and SIGTERM are both held rather than obeyed where they land, for the
 whole recording and not only while the provider runs: agentrec stops the

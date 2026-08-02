@@ -142,6 +142,7 @@ verify:
 # Claude Code
 agentrec trace claude -- -p "add a regression test for the parser"
 agentrec trace claude --verify -- -p "add a regression test for the parser"
+agentrec trace claude --timeout 30m -- -p "add a regression test for the parser"
 
 # Codex
 agentrec trace codex --verify -- exec "add a regression test for the parser"
@@ -336,6 +337,14 @@ stderr、`actions.jsonl`、`process/result.json`、`git/`（baseline、結果、
 終了コード: プロバイダーが完了し、検証を要求した場合はそれにも通れば `0`、`1`–`125` は
 プロバイダー自身の終了コードをそのまま渡したもの、`1` は記録・描画・検証の失敗、`2` は
 agentrec の誤った呼び出し方、`130` は中断を示します。
+
+`--timeout <duration>` は `30s`、`5m`、`2h` などの正の Go duration を受け取り、
+プロバイダープロセスだけを制限します。期限に達するとプロバイダーのプロセスグループへ
+SIGTERM を送り、固定の 5 秒間の猶予を待った後、まだ動作中であれば SIGKILL を送ります。
+bundle は終了理由 `timeout` で確定され、agentrec は `1` で終了します。期限前に出力された
+プロバイダーイベントはそのまま保存されます。フラグを省略した場合は従来どおり、Ctrl-C または
+SIGTERM で制御する無期限のプロバイダー実行です。リポジトリ測定、検証チェック、report の
+書き込みはそれぞれ固有の制限を使い、このプロバイダー timeout の対象にはなりません。
 
 Ctrl-C と SIGTERM は、届いた場所ですぐに処理するのではなく保留します。これはプロバイダーが
 動作中だけでなく、記録処理全体を通じて行われます。agentrec はプロバイダーのプロセス

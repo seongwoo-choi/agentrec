@@ -1597,6 +1597,7 @@ const agentrecName = "agentrec"
 // recorder is asked to stop. The wait is a backstop rather than a delay any
 // passing test sits through: the provider is signalled long before it elapses.
 const lingerEnv = "AGENTREC_TEST_PROVIDER_LINGER"
+const lingerDurationEnv = "AGENTREC_TEST_PROVIDER_LINGER_DURATION"
 
 const lingerLimit = 2 * time.Minute
 
@@ -2236,7 +2237,16 @@ func linger() {
 		fmt.Fprintln(os.Stderr, "helper:", err)
 		return
 	}
-	time.Sleep(lingerLimit)
+	duration := lingerLimit
+	if raw := os.Getenv(lingerDurationEnv); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			fmt.Fprintln(os.Stderr, "helper: invalid linger duration")
+			return
+		}
+		duration = parsed
+	}
+	time.Sleep(duration)
 }
 
 func codexHelper(args []string) int {
@@ -2996,6 +3006,35 @@ func TestTraceLaunchesTheProviderWithStructuredOutputAndNoInjectedPermissions(t 
 	}
 }
 
+func TestTraceTimesOutTheProviderAndPreservesTheBundle(t *testing.T) {
+	root := home(t)
+	cleanRepo(t)
+	stubProviders(t, "claude")
+	pidFile := filepath.Join(t.TempDir(), "provider.pid")
+	t.Setenv(lingerEnv, pidFile)
+	t.Setenv(lingerDurationEnv, "300ms")
+
+	code, stdout, stderr := run(t, "trace", "claude", timeoutFlag, "50ms", "--", "-p", "read the README")
+
+	if code != exitFailure {
+		t.Fatalf("exit code = %d, want %d (stderr %q)", code, exitFailure, stderr)
+	}
+	if !strings.Contains(stderr, "timed out") {
+		t.Errorf("stderr = %q, want timeout diagnostic", stderr)
+	}
+	id := traceRunID(t, stdout)
+	manifest, err := readManifest(filepath.Join(root, id))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if manifest.ExitReason != runner.ReasonTimeout || manifest.EndedAt == nil {
+		t.Errorf("manifest = reason %q, ended %v; want finalized timeout", manifest.ExitReason, manifest.EndedAt)
+	}
+	if !strings.Contains(stdout, "Exit Reason  timeout") {
+		t.Errorf("stdout =\n%s\nwant timeout exit reason", stdout)
+	}
+}
+
 // A token the operator passed on the command line reaches the prompt, the
 // manifest's argv and, through them, every artifact derived from either. None
 // of it may hold the secret itself.
@@ -3252,9 +3291,9 @@ func TestClaudePromptRecordsOnlyAnUnambiguousPrompt(t *testing.T) {
 
 // Options agentrec takes for itself are spelled exactly and given at most once.
 // An operator who asked for something must never be told a run was recorded the
-// way they asked for, so an unknown or repeated option is a usage refusal —
-// before any provider is probed, any bundle exists or any lock is taken.
-func TestTraceRejectsUnknownAndRepeatedOwnOptions(t *testing.T) {
+// way they asked for, so an unknown, repeated, or malformed option is a usage
+// refusal — before any provider is probed, any bundle exists or any lock is taken.
+func TestTraceRejectsInvalidOwnOptions(t *testing.T) {
 	home(t)
 	for _, tt := range []struct {
 		name string
@@ -3263,6 +3302,11 @@ func TestTraceRejectsUnknownAndRepeatedOwnOptions(t *testing.T) {
 		{"unknown option", []string{"trace", "claude", "--allow-unsupported", "--", "-p", "x"}},
 		{"repeated verify", []string{"trace", "claude", "--verify", "--verify", "--", "-p", "x"}},
 		{"repeated override", []string{"trace", "claude", allowUnsupportedVersionFlag, allowUnsupportedVersionFlag, "--", "-p", "x"}},
+		{"missing timeout", []string{"trace", "claude", timeoutFlag, "--", "-p", "x"}},
+		{"zero timeout", []string{"trace", "claude", timeoutFlag, "0s", "--", "-p", "x"}},
+		{"negative timeout", []string{"trace", "claude", timeoutFlag, "-1s", "--", "-p", "x"}},
+		{"invalid timeout", []string{"trace", "claude", timeoutFlag, "soon", "--", "-p", "x"}},
+		{"repeated timeout", []string{"trace", "claude", timeoutFlag, "1s", timeoutFlag, "2s", "--", "-p", "x"}},
 		{"provider option before the delimiter", []string{"trace", "claude", "-p", "--", "x"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3293,15 +3337,24 @@ func TestParseTraceOptions(t *testing.T) {
 		ok   bool
 	}{
 		{"none", nil, traceOptions{}, true},
+		{"timeout alone", []string{timeoutFlag, "2m"}, traceOptions{timeout: 2 * time.Minute}, true},
+		{"timeout then verify", []string{timeoutFlag, "2m", verifyFlag}, traceOptions{verify: true, timeout: 2 * time.Minute}, true},
+		{"verify then timeout", []string{verifyFlag, timeoutFlag, "2m"}, traceOptions{verify: true, timeout: 2 * time.Minute}, true},
 		{"verify alone", []string{verifyFlag}, traceOptions{verify: true}, true},
 		{"override alone", []string{allowUnsupportedVersionFlag}, traceOptions{allowUnsupported: true}, true},
 		// Neither option is the other's prerequisite, so an operator who spelled
 		// both correctly is never refused over how they arranged them.
-		{"both", []string{verifyFlag, allowUnsupportedVersionFlag}, traceOptions{true, true}, true},
-		{"both reversed", []string{allowUnsupportedVersionFlag, verifyFlag}, traceOptions{true, true}, true},
+		{"both", []string{verifyFlag, allowUnsupportedVersionFlag}, traceOptions{verify: true, allowUnsupported: true}, true},
+		{"both reversed", []string{allowUnsupportedVersionFlag, verifyFlag}, traceOptions{verify: true, allowUnsupported: true}, true},
 		{"unknown", []string{"--allow-unsupported"}, traceOptions{}, false},
 		{"repeated verify", []string{verifyFlag, verifyFlag}, traceOptions{}, false},
 		{"repeated override", []string{allowUnsupportedVersionFlag, allowUnsupportedVersionFlag}, traceOptions{}, false},
+		{"missing timeout", []string{timeoutFlag}, traceOptions{}, false},
+		{"zero timeout", []string{timeoutFlag, "0s"}, traceOptions{}, false},
+		{"negative timeout", []string{timeoutFlag, "-1s"}, traceOptions{}, false},
+		{"invalid timeout", []string{timeoutFlag, "soon"}, traceOptions{}, false},
+		{"repeated timeout", []string{timeoutFlag, "1s", timeoutFlag, "2s"}, traceOptions{}, false},
+		{"timeout value attached", []string{"--timeout=1s"}, traceOptions{}, false},
 		{"provider option", []string{"-p"}, traceOptions{}, false},
 		{"prefix of a known option", []string{"--verif"}, traceOptions{}, false},
 		{"known option with a value attached", []string{"--verify=true"}, traceOptions{}, false},

@@ -211,9 +211,9 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	parse := <-parsed
 	stderrOut := <-stderrDone
 
+	reason := watcher.stop()
 	waitErr := cmd.Wait()
 	signaller.stop()
-	reason := watcher.stop()
 
 	res.EndedAt = time.Now()
 	res.Duration = res.EndedAt.Sub(res.StartedAt)
@@ -426,8 +426,9 @@ type termination struct {
 }
 
 // stop ends the watch and reports the reason it fired, if it fired. It is
-// called once the provider has been waited for, and returns only after the
-// watcher has finished, so nothing can signal a pid that has since been reused.
+// called after the provider streams close but before the leader is reaped. That
+// keeps the process-group id safe to signal while the watcher removes any
+// descendant that outlived the leader.
 func (t *termination) stop() string {
 	close(t.done)
 	<-t.closed
@@ -471,14 +472,14 @@ func watch(ctx context.Context, req Request, grace time.Duration, signaller *gro
 		}
 		t.err = signaller.send(ask)
 
-		// The provider now has the grace to end itself. The watch stays alive
-		// through it: if the process exits, Run closes done and this returns
-		// having sent nothing further.
+		// The provider now has the grace to end itself. If Run observes closed
+		// streams first, done insists immediately while the leader is still
+		// unreaped: a descendant can close inherited streams, ignore the first
+		// signal, and otherwise survive with the same process-group id.
 		insist := time.NewTimer(grace)
 		defer insist.Stop()
 		select {
 		case <-t.done:
-			return
 		case <-req.Interrupt:
 		case <-insist.C:
 		}

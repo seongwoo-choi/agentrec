@@ -9,7 +9,7 @@ import (
 const usage = `agentrec records coding-agent execution as a replayable action timeline.
 
 Usage:
-  agentrec trace <provider> [--verify] -- <args...>
+  agentrec trace <provider> [--verify] [--allow-unsupported-version] [--timeout <duration>] -- <args...>
   agentrec shadow run <task-file> --runner claude --runner codex
   agentrec shadow show <group-id>
   agentrec list [--cwd <path>]
