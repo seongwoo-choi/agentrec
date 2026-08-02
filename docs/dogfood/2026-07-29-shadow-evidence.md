@@ -158,3 +158,44 @@ This is one successful-path run on macOS. It does not independently establish:
 Those lifecycle and failure paths are covered by repository tests using
 controlled stand-ins. This document does not turn those tests into real-provider
 observations.
+
+## Provider-event replay and generalized-Shadow gate — 2026-08-02
+
+This read-only run exercised `agentrec events` from commit `8258f65` against the
+installed Claude Code `2.1.220` and Codex CLI `0.145.0`. It used an isolated
+committed repository, a task file outside that repository, a private temporary
+`AGENTREC_HOME`, and a committed verification command that required `README.md`
+to remain identical to `HEAD`.
+
+The first attempt was refused before either provider ran because the isolated
+repository did not yet contain a committed `.agentrec.yaml`. After committing
+the verification boundary, Shadow created durable group
+`20260802T013605.071816000Z-26c61698` with these observations:
+
+| Provider | Run | Process | Verification | Repository | Events |
+|---|---|---|---|---|---:|
+| Claude | `20260802T013605.610543000Z-2e48f1cf` | nonzero, exit 1, 2.683s | PASS | AVAILABLE, 0 files, +0/-0 | 27 |
+| Codex | `20260802T013608.956078000Z-c6973731` | completed, exit 0, 31.697s | PASS | AVAILABLE, 0 files, +0/-0 | 8 |
+
+**Observed.** Both event artifacts replayed through human and JSON modes. Claude
+reported `assistant=1`, `result=1`, and `system=25`; Codex reported
+`item.completed=4`, `item.started=1`, `thread.started=1`, `turn.completed=1`, and
+`turn.started=1`. The human view exposed only attribution, count, and type
+counts. The JSON wrapper parsed without printing its nested provider payloads.
+The failed group outcome preserved the Claude nonzero leg rather than replacing
+it with the two passing verification results.
+
+The schema-1 group retained two ordered legs and no task body. Its workspaces
+were removed, and the source repository remained clean. Historical replay of
+the default evidence store covered 25 actual runs: 12 Claude runs with 6,282
+events and 13 Codex runs with 411 events. Every historical Claude run recorded
+version `2.1.220`; every historical Codex run recorded version `0.145.0`.
+
+**Conclusion.** The event reader adds useful independent evidence to the current
+two-provider Shadow workflow without requiring a wider durable group schema.
+The available runs contain no same-provider version diversity, no third
+provider, and no repeated single-leg isolation workflow. Single-leg disposable
+verification, same-provider version A/B, and N-provider comparison are three
+different product jobs; this evidence does not justify combining them into one
+generalized schema-v2 abstraction. Issue #8 should remain an open enhancement
+until one of those jobs recurs with a concrete identity and rendering contract.
