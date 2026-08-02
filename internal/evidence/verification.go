@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -621,6 +622,10 @@ type repoSnapshot struct {
 // reported as modified after it too: the summary is the same either side of a
 // change the checks made.
 func (p *PinnedVerification) snapshot(ctx context.Context) (repoSnapshot, error) {
+	return p.snapshotWithWorkers(ctx, snapshotFingerprintWorkers)
+}
+
+func (p *PinnedVerification) snapshotWithWorkers(ctx context.Context, fingerprintWorkers int) (repoSnapshot, error) {
 	snap := repoSnapshot{files: map[string]string{}}
 
 	head, err := gitAt(ctx, p.repoRoot, maxSmallBytes, "rev-parse", "--verify", "HEAD")
@@ -660,18 +665,75 @@ func (p *PinnedVerification) snapshot(ctx context.Context) (repoSnapshot, error)
 	}
 	defer root.Close()
 
+	paths := make([]string, 0)
+	seen := make(map[string]struct{})
 	for _, raw := range [][]byte{tracked, others} {
 		for _, name := range bytes.Split(raw, []byte{0}) {
 			if len(name) == 0 {
 				continue
 			}
 			path := string(name)
-			if _, seen := snap.files[path]; !seen {
-				snap.files[path] = fingerprint(root, path)
+			if _, exists := seen[path]; exists {
+				continue
 			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
 		}
 	}
+	snap.files, err = fingerprintPaths(ctx, root, paths, fingerprintWorkers, fingerprint)
+	if err != nil {
+		return repoSnapshot{}, fmt.Errorf("evidence: fingerprint repository files: %w", err)
+	}
 	return snap, nil
+}
+
+const snapshotFingerprintWorkers = 16
+
+type fingerprintFunc func(root *os.Root, path string) string
+
+func fingerprintPaths(ctx context.Context, root *os.Root, paths []string, workerCount int, fingerprintFn fingerprintFunc) (map[string]string, error) {
+	files := make(map[string]string, len(paths))
+	if len(paths) == 0 {
+		return files, nil
+	}
+	if workerCount <= 0 {
+		return nil, fmt.Errorf("invalid fingerprint worker count %d", workerCount)
+	}
+
+	workerCount = min(workerCount, len(paths))
+	jobs := make(chan string)
+	var workers sync.WaitGroup
+	var mu sync.Mutex
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for path := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
+				value := fingerprintFn(root, path)
+				mu.Lock()
+				files[path] = value
+				mu.Unlock()
+			}
+		}()
+	}
+
+sendPaths:
+	for _, path := range paths {
+		select {
+		case jobs <- path:
+		case <-ctx.Done():
+			break sendPaths
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // fingerprint identifies one path by what it is and what it holds. A symlink
