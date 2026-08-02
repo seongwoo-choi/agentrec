@@ -12,7 +12,7 @@ Usage:
   agentrec trace <provider> [--verify] [--allow-unsupported-version] [--timeout <duration>] -- <args...>
   agentrec shadow run <task-file> --runner claude --runner codex
   agentrec shadow show <group-id>
-  agentrec list [--cwd <path>]
+  agentrec list [--cwd <path>] [--exit-reason <reason>]
   agentrec show <run-id>|latest
   agentrec events <run-id>|latest [--json]
   agentrec version

@@ -139,6 +139,106 @@ func TestListReportsRunsNewestFirstWithStableTieBreak(t *testing.T) {
 	}
 }
 
+func TestListFiltersByExitReason(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	writeRun(t, root, "run-b", "codex", late, "failed")
+	writeRun(t, root, "run-c", "claude", late, "failed")
+
+	code, stdout, stderr := run(t, "list", "--exit-reason", "failed")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  failed",
+		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed",
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("stdout =\n%q\nwant\n%q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListFiltersByTheEscapedExitReasonShownInTheTable(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "failed\nreason")
+
+	code, stdout, stderr := run(t, "list", "--exit-reason", `failed\nreason`)
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
+		`run-a  claude  tmp  2026-07-27T09:00:00Z  failed\nreason`,
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("stdout =\n%q\nwant\n%q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListFiltersByExitReasonsThatLookLikeOptions(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-cwd", "claude", early, "--cwd")
+	writeRun(t, root, "run-exit", "codex", late, "--exit-reason")
+
+	for _, tt := range []struct {
+		reason string
+		wantID string
+	}{
+		{"--cwd", "run-cwd"},
+		{"--exit-reason", "run-exit"},
+	} {
+		code, stdout, stderr := run(t, "list", "--exit-reason", tt.reason)
+		if code != 0 {
+			t.Fatalf("reason %q exit code = %d, want 0 (stderr %q)", tt.reason, code, stderr)
+		}
+		if !strings.Contains(stdout, tt.wantID) {
+			t.Errorf("reason %q stdout = %q, want run %q", tt.reason, stdout, tt.wantID)
+		}
+		if stderr != "" {
+			t.Errorf("reason %q stderr = %q, want empty", tt.reason, stderr)
+		}
+	}
+}
+
+func TestListCombinesWorkingDirectoryAndExitReasonFiltersInEitherOrder(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	writeRun(t, root, "run-b", "codex", late, "failed")
+	writeRunIn(t, root, "other-cwd", "/var/tmp")
+
+	for _, args := range [][]string{
+		{"list", "--cwd", "/tmp", "--exit-reason", "failed"},
+		{"list", "--exit-reason", "failed", "--cwd", "/tmp"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 0 {
+			t.Fatalf("run(%q) exit code = %d, want 0 (stderr %q)", args, code, stderr)
+		}
+		want := strings.Join([]string{
+			"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
+			"run-b  codex  tmp  2026-07-27T10:00:00Z  failed",
+			"",
+		}, "\n")
+		if stdout != want {
+			t.Errorf("run(%q) stdout =\n%q\nwant\n%q", args, stdout, want)
+		}
+		if stderr != "" {
+			t.Errorf("run(%q) stderr = %q, want empty", args, stderr)
+		}
+	}
+}
+
 func TestListFiltersByCleanedWorkingDirectory(t *testing.T) {
 	root := home(t)
 	work := t.TempDir()
@@ -262,6 +362,24 @@ func junk(t *testing.T, root string) {
 	}
 }
 
+func TestListFilterWithoutMatchesReportsNoRunsAndUnreadableWarnings(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	junk(t, root)
+
+	code, stdout, stderr := run(t, "list", "--exit-reason", "nonzero")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if stdout != "No runs.\n" {
+		t.Errorf("stdout = %q, want %q", stdout, "No runs.\n")
+	}
+	if stderr != "Warnings: 2 unreadable run(s).\n" {
+		t.Errorf("stderr = %q, want unreadable runs preserved", stderr)
+	}
+}
+
 func TestListSkipsAndCountsUnreadableRuns(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-a", "claude", early, "completed")
@@ -308,6 +426,25 @@ func TestListEscapesControlCharactersInRecordedValues(t *testing.T) {
 	}
 }
 
+func TestListRejectsDuplicateFilters(t *testing.T) {
+	home(t)
+	for _, args := range [][]string{
+		{"list", "--cwd", "/tmp", "--cwd", "/var/tmp"},
+		{"list", "--exit-reason", "failed", "--exit-reason", "completed"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 2 {
+			t.Fatalf("run(%q) exit code = %d, want 2", args, code)
+		}
+		if stdout != "" {
+			t.Errorf("run(%q) stdout = %q, want empty", args, stdout)
+		}
+		if stderr != "usage: agentrec list [--cwd <path>] [--exit-reason <reason>]\n" {
+			t.Errorf("run(%q) stderr = %q, want the list usage", args, stderr)
+		}
+	}
+}
+
 func TestListRejectsExtraArguments(t *testing.T) {
 	home(t)
 
@@ -324,14 +461,17 @@ func TestListRejectsExtraArguments(t *testing.T) {
 	}
 }
 
-func TestListRejectsMissingOrExtraCWDArguments(t *testing.T) {
+func TestListRejectsMissingOrExtraFilterArguments(t *testing.T) {
 	home(t)
 	for _, tt := range []struct {
 		name string
 		args []string
 	}{
-		{"missing path", []string{"list", "--cwd"}},
+		{"missing cwd", []string{"list", "--cwd"}},
+		{"missing exit reason", []string{"list", "--exit-reason"}},
 		{"extra argument", []string{"list", "--cwd", "path", "extra"}},
+		{"attached cwd", []string{"list", "--cwd=path"}},
+		{"attached exit reason", []string{"list", "--exit-reason=failed"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			code, stdout, stderr := run(t, tt.args...)
@@ -341,7 +481,7 @@ func TestListRejectsMissingOrExtraCWDArguments(t *testing.T) {
 			if stdout != "" {
 				t.Errorf("stdout = %q, want empty", stdout)
 			}
-			if stderr != "usage: agentrec list [--cwd <path>]\n" {
+			if stderr != listUsage {
 				t.Errorf("stderr = %q, want the list usage", stderr)
 			}
 		})

@@ -164,6 +164,8 @@ agentrec shadow run task.md --runner claude --runner codex
 # Read runs back
 agentrec list
 agentrec list --cwd /Users/you/code/agentrec
+agentrec list --exit-reason nonzero
+agentrec list --cwd /Users/you/code/agentrec --exit-reason timeout
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
 agentrec events 20260728T093159.858622000Z-582ee874
@@ -181,6 +183,11 @@ agentrec version
 절대 경로로 만들고 정리하며, manifest의 작업 디렉터리도 절대 경로로 같은 방식으로
 정리한 뒤 정확히 일치할 때만 실행을 남깁니다. 하위 디렉터리는 다른 경로이고,
 심볼릭 링크를 통해 들어간 경로도 마찬가지입니다.
+
+`--exit-reason`은 `EXIT` 열에 표시되는 기록값과 정확히 일치하는 실행만 남깁니다.
+서로 다른 결과를 임의의 실패 범주로 묶지 않습니다. `--cwd`와 어느 순서로든 함께
+사용할 수 있습니다. 일치하는 실행이 없으면 `No runs.`를 출력하고 종료 코드 `0`을
+반환합니다.
 
 `agentrec events <run-id>|latest`는 선택적인 sanitized provider-event JSONL
 artifact를 읽습니다. 사람용 출력은 `provider_reported` 귀속, 이벤트 수, 정렬된 최상위

@@ -156,6 +156,8 @@ agentrec shadow run task.md --runner claude --runner codex
 # Read runs back
 agentrec list
 agentrec list --cwd /Users/you/code/agentrec
+agentrec list --exit-reason nonzero
+agentrec list --cwd /Users/you/code/agentrec --exit-reason timeout
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
 agentrec events 20260728T093159.858622000Z-582ee874
@@ -185,6 +187,10 @@ artifact を読み取ります。人向け出力に含めるのは `provider_rep
 指定したパスは絶対パス化・正規化され、manifest 自身の作業ディレクトリも絶対パス化・
 同じ方法で正規化されます。実行が残るのは両者が完全に一致するときだけです。
 サブディレクトリは別のパスであり、シンボリックリンク経由の別経路も同様です。
+
+`--exit-reason` は `EXIT` 列に表示される記録値と完全一致する実行だけを残します。
+異なる結果を独自の失敗カテゴリにまとめることはありません。`--cwd` とはどちらの順序でも
+併用できます。一致する実行がなければ `No runs.` を出力し、終了コード `0` を返します。
 
 ## レポートの見え方
 

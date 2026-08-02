@@ -15,8 +15,11 @@ import (
 // runsDirName holds the recorded runs inside the application data directory.
 const runsDirName = "runs"
 
-// listHeader names the columns of the run table.
-const listHeader = "RUN ID  PROVIDER  PROJECT  STARTED  EXIT"
+// listHeader names the columns; listUsage is the one accepted command shape.
+const (
+	listHeader = "RUN ID  PROVIDER  PROJECT  STARTED  EXIT"
+	listUsage  = "usage: agentrec list [--cwd <path>] [--exit-reason <reason>]\n"
+)
 
 // runSummary is one row of the run table.
 type runSummary struct {
@@ -30,17 +33,39 @@ type runSummary struct {
 // runList prints the recorded runs, newest first.
 func runList(args []string, stdout, stderr io.Writer) int {
 	cwd := ""
-	if len(args) != 0 {
-		if len(args) != 2 || args[0] != "--cwd" {
-			fmt.Fprint(stderr, "usage: agentrec list [--cwd <path>]\n")
+	cwdSet := false
+	exitReasonFilter := ""
+	exitReasonSet := false
+	for len(args) > 0 {
+		if len(args) < 2 {
+			fmt.Fprint(stderr, listUsage)
 			return 2
 		}
-		var err error
-		cwd, err = filepath.Abs(args[1])
-		if err != nil {
-			fmt.Fprintf(stderr, "cli: resolve working directory: %v\n", err)
-			return 1
+		switch args[0] {
+		case "--cwd":
+			if cwdSet {
+				fmt.Fprint(stderr, listUsage)
+				return 2
+			}
+			cwdSet = true
+			var err error
+			cwd, err = filepath.Abs(args[1])
+			if err != nil {
+				fmt.Fprintf(stderr, "cli: resolve working directory: %v\n", err)
+				return 1
+			}
+		case "--exit-reason":
+			if exitReasonSet {
+				fmt.Fprint(stderr, listUsage)
+				return 2
+			}
+			exitReasonSet = true
+			exitReasonFilter = args[1]
+		default:
+			fmt.Fprint(stderr, listUsage)
+			return 2
 		}
+		args = args[2:]
 	}
 	root, err := runsRoot()
 	if err != nil {
@@ -51,6 +76,11 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if exitReasonSet {
+		runs = slices.DeleteFunc(runs, func(run runSummary) bool {
+			return oneLine(run.Exit) != exitReasonFilter
+		})
 	}
 
 	if len(runs) == 0 {
