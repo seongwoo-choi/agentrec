@@ -17,17 +17,18 @@ const runsDirName = "runs"
 
 // listHeader names the columns; listUsage is the one accepted command shape.
 const (
-	listHeader = "RUN ID  PROVIDER  PROJECT  STARTED  EXIT"
-	listUsage  = "usage: agentrec list [--cwd <path>] [--exit-reason <reason>]\n"
+	listHeader = "RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION"
+	listUsage  = "usage: agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]\n"
 )
 
 // runSummary is one row of the run table.
 type runSummary struct {
-	ID        string
-	Provider  string
-	Project   string
-	StartedAt time.Time
-	Exit      string
+	ID           string
+	Provider     string
+	Project      string
+	StartedAt    time.Time
+	Exit         string
+	Verification string
 }
 
 // runList prints the recorded runs, newest first.
@@ -36,6 +37,8 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	cwdSet := false
 	exitReasonFilter := ""
 	exitReasonSet := false
+	verificationFilter := ""
+	verificationSet := false
 	for len(args) > 0 {
 		if len(args) < 2 {
 			fmt.Fprint(stderr, listUsage)
@@ -61,6 +64,13 @@ func runList(args []string, stdout, stderr io.Writer) int {
 			}
 			exitReasonSet = true
 			exitReasonFilter = args[1]
+		case "--verification-status":
+			if verificationSet {
+				fmt.Fprint(stderr, listUsage)
+				return 2
+			}
+			verificationSet = true
+			verificationFilter = args[1]
 		default:
 			fmt.Fprint(stderr, listUsage)
 			return 2
@@ -72,14 +82,14 @@ func runList(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	runs, unreadable, err := listRuns(root, cwd)
+	runs, unreadable, err := listRunsForTable(root, cwd, exitReasonSet, exitReasonFilter)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if exitReasonSet {
+	if verificationSet {
 		runs = slices.DeleteFunc(runs, func(run runSummary) bool {
-			return oneLine(run.Exit) != exitReasonFilter
+			return oneLine(run.Verification) != verificationFilter
 		})
 	}
 
@@ -94,6 +104,7 @@ func runList(args []string, stdout, stderr io.Writer) int {
 				oneLine(r.Project),
 				r.StartedAt.UTC().Format(time.RFC3339),
 				oneLine(r.Exit),
+				oneLine(r.Verification),
 			}, "  "))
 		}
 	}
@@ -107,6 +118,26 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// listRunsForTable reads the manifest and verification for a row through one
+// held run root. Exit filtering happens before verification is opened, so a
+// narrowed list does not inspect evidence for rows it will discard.
+func listRunsForTable(root, cwd string, exitReasonSet bool, exitReasonFilter string) ([]runSummary, int, error) {
+	return scanRuns(root, cwd, func(runRoot *os.Root, run *runSummary) (bool, error) {
+		if exitReasonSet && oneLine(run.Exit) != exitReasonFilter {
+			return false, nil
+		}
+		verification, err := readVerificationFromRoot(runRoot)
+		if err != nil {
+			return false, err
+		}
+		run.Verification = "UNAVAILABLE"
+		if verification != nil {
+			run.Verification = verdict(verification.Status)
+		}
+		return true, nil
+	})
+}
+
 // listRuns summarizes readable runs under root, newest first, and reports how
 // many run directories it could not read. When cwd is nonempty, it includes
 // only runs recorded there. An entry that never was a run —
@@ -115,6 +146,12 @@ func runList(args []string, stdout, stderr io.Writer) int {
 // runs directory that does not exist yet is a tool that has recorded nothing,
 // not a failure.
 func listRuns(root, cwd string) ([]runSummary, int, error) {
+	return scanRuns(root, cwd, nil)
+}
+
+type runEnricher func(*os.Root, *runSummary) (bool, error)
+
+func scanRuns(root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, 0, nil
@@ -129,25 +166,39 @@ func listRuns(root, cwd string) ([]runSummary, int, error) {
 		if err := validateRunID(entry.Name()); err != nil {
 			continue
 		}
-		dir, err := runDir(root, entry.Name())
+		runRoot, err := openRunRoot(root, entry.Name())
 		if err != nil {
 			continue
 		}
-		manifest, err := readManifest(dir)
+		manifest, err := readManifestFromRoot(runRoot)
 		if err != nil {
+			runRoot.Close()
 			unreadable++
 			continue
 		}
 		if cwd != "" && (!filepath.IsAbs(manifest.CWD) || filepath.Clean(manifest.CWD) != cwd) {
+			runRoot.Close()
 			continue
 		}
-		runs = append(runs, runSummary{
+		run := runSummary{
 			ID:        entry.Name(),
 			Provider:  manifest.Provider,
 			Project:   projectName(manifest.CWD),
 			StartedAt: manifest.StartedAt,
 			Exit:      exitReason(manifest, nil),
-		})
+		}
+		include := true
+		if enrich != nil {
+			include, err = enrich(runRoot, &run)
+		}
+		runRoot.Close()
+		if err != nil {
+			unreadable++
+			continue
+		}
+		if include {
+			runs = append(runs, run)
+		}
 	}
 
 	// Newest first, and runs that started in the same instant are ordered by

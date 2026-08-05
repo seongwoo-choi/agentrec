@@ -125,10 +125,10 @@ func TestListReportsRunsNewestFirstWithStableTieBreak(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
 	want := strings.Join([]string{
-		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
-		"run-c  claude  tmp  2026-07-27T10:00:00Z  unknown",
-		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed",
-		"run-a  claude  tmp  2026-07-27T09:00:00Z  completed",
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  unknown  UNAVAILABLE",
+		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  UNAVAILABLE",
+		"run-a  claude  tmp  2026-07-27T09:00:00Z  completed  UNAVAILABLE",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -151,9 +151,9 @@ func TestListFiltersByExitReason(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
 	want := strings.Join([]string{
-		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
-		"run-c  claude  tmp  2026-07-27T10:00:00Z  failed",
-		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed",
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  failed  UNAVAILABLE",
+		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  UNAVAILABLE",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -161,6 +161,193 @@ func TestListFiltersByExitReason(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListShowsAndFiltersByVerificationStatus(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	writeVerification(t, root, "run-a", passedVerification())
+	writeRun(t, root, "run-b", "codex", late, "completed")
+	writeVerification(t, root, "run-b", map[string]any{
+		"status":      "failed",
+		"attribution": evidence.VerificationAttribution,
+		"checks":      []any{},
+	})
+	writeRun(t, root, "run-c", "claude", late, "completed")
+
+	allCode, allStdout, allStderr := run(t, "list")
+	if allCode != 0 {
+		t.Fatalf("unfiltered exit code = %d, want 0 (stderr %q)", allCode, allStderr)
+	}
+	allWant := strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  completed  UNAVAILABLE",
+		"run-b  codex  tmp  2026-07-27T10:00:00Z  completed  FAIL",
+		"run-a  claude  tmp  2026-07-27T09:00:00Z  completed  PASS",
+		"",
+	}, "\n")
+	if allStdout != allWant {
+		t.Errorf("unfiltered stdout =\n%q\nwant\n%q", allStdout, allWant)
+	}
+	if allStderr != "" {
+		t.Errorf("unfiltered stderr = %q, want empty", allStderr)
+	}
+
+	code, stdout, stderr := run(t, "list", "--verification-status", "FAIL")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		"run-b  codex  tmp  2026-07-27T10:00:00Z  completed  FAIL",
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("stdout =\n%q\nwant\n%q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+
+	code, stdout, stderr = run(t, "list", "--verification-status", "UNAVAILABLE")
+	if code != 0 {
+		t.Fatalf("unavailable exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want = strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  completed  UNAVAILABLE",
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("unavailable stdout =\n%q\nwant\n%q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("unavailable stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListFiltersByEscapedFutureVerificationStatus(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	writeVerification(t, root, "run-a", map[string]any{
+		"status":      "future\nstatus",
+		"attribution": evidence.VerificationAttribution,
+		"checks":      []any{},
+	})
+
+	code, stdout, stderr := run(t, "list", "--verification-status", `FUTURE\nSTATUS`)
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		`run-a  claude  tmp  2026-07-27T09:00:00Z  completed  FUTURE\nSTATUS`,
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("stdout =\n%q\nwant\n%q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListCombinesAllFiltersInEveryOrder(t *testing.T) {
+	root := home(t)
+	failed := map[string]any{
+		"status":      "failed",
+		"attribution": evidence.VerificationAttribution,
+		"checks":      []any{},
+	}
+	writeRun(t, root, "match", "claude", late, "failed")
+	writeVerification(t, root, "match", failed)
+	writeRun(t, root, "only-verification", "codex", early, "failed")
+	writeVerification(t, root, "only-verification", passedVerification())
+	writeRun(t, root, "only-exit", "claude", early, "completed")
+	writeVerification(t, root, "only-exit", failed)
+	writeRun(t, root, "only-cwd", "codex", early, "failed")
+	writeVerification(t, root, "only-cwd", failed)
+	manifestPath := filepath.Join(root, "only-cwd", manifestFile)
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read only-cwd manifest: %v", err)
+	}
+	var manifest storage.Manifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode only-cwd manifest: %v", err)
+	}
+	manifest.CWD = "/var/tmp"
+	raw, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode only-cwd manifest: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, raw, 0o600); err != nil {
+		t.Fatalf("rewrite only-cwd manifest: %v", err)
+	}
+
+	for _, args := range [][]string{
+		{"list", "--cwd", "/tmp", "--exit-reason", "failed", "--verification-status", "FAIL"},
+		{"list", "--cwd", "/tmp", "--verification-status", "FAIL", "--exit-reason", "failed"},
+		{"list", "--exit-reason", "failed", "--cwd", "/tmp", "--verification-status", "FAIL"},
+		{"list", "--exit-reason", "failed", "--verification-status", "FAIL", "--cwd", "/tmp"},
+		{"list", "--verification-status", "FAIL", "--cwd", "/tmp", "--exit-reason", "failed"},
+		{"list", "--verification-status", "FAIL", "--exit-reason", "failed", "--cwd", "/tmp"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 0 {
+			t.Fatalf("run(%q) exit code = %d, want 0 (stderr %q)", args, code, stderr)
+		}
+		if !strings.Contains(stdout, "match  claude") || strings.Contains(stdout, "only-") {
+			t.Errorf("run(%q) stdout = %q, want only the conjunction match", args, stdout)
+		}
+		if stderr != "" {
+			t.Errorf("run(%q) stderr = %q, want empty", args, stderr)
+		}
+	}
+}
+
+func TestScanRunsUsesOneRunDirectoryIdentityForManifestAndVerification(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run", "claude", late, "failed")
+	writeVerification(t, root, "run", passedVerification())
+	writeRun(t, root, "zz-replacement", "codex", early, "completed")
+	writeVerification(t, root, "zz-replacement", map[string]any{
+		"status":      "failed",
+		"attribution": evidence.VerificationAttribution,
+		"checks":      []any{},
+	})
+
+	runs, unreadable, err := scanRuns(root, "", func(runRoot *os.Root, run *runSummary) (bool, error) {
+		if run.ID != "run" {
+			return true, nil
+		}
+		if err := os.Rename(filepath.Join(root, "run"), filepath.Join(root, "held-original")); err != nil {
+			return false, err
+		}
+		if err := os.Rename(filepath.Join(root, "zz-replacement"), filepath.Join(root, "run")); err != nil {
+			return false, err
+		}
+		verification, err := readVerificationFromRoot(runRoot)
+		if err != nil {
+			return false, err
+		}
+		run.Verification = verdict(verification.Status)
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("scan runs: %v", err)
+	}
+	if unreadable != 0 {
+		t.Fatalf("unreadable = %d, want 0", unreadable)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %#v, want one original run", runs)
+	}
+	if runs[0].Provider != "claude" || runs[0].Exit != "failed" || runs[0].Verification != "PASS" {
+		t.Errorf("run = %#v, want manifest and verification from held original", runs[0])
 	}
 }
 
@@ -174,8 +361,8 @@ func TestListFiltersByTheEscapedExitReasonShownInTheTable(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
 	want := strings.Join([]string{
-		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
-		`run-a  claude  tmp  2026-07-27T09:00:00Z  failed\nreason`,
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		`run-a  claude  tmp  2026-07-27T09:00:00Z  failed\nreason  UNAVAILABLE`,
 		"",
 	}, "\n")
 	if stdout != want {
@@ -226,8 +413,8 @@ func TestListCombinesWorkingDirectoryAndExitReasonFiltersInEitherOrder(t *testin
 			t.Fatalf("run(%q) exit code = %d, want 0 (stderr %q)", args, code, stderr)
 		}
 		want := strings.Join([]string{
-			"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
-			"run-b  codex  tmp  2026-07-27T10:00:00Z  failed",
+			"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+			"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  UNAVAILABLE",
 			"",
 		}, "\n")
 		if stdout != want {
@@ -271,8 +458,8 @@ func TestListFiltersByCleanedWorkingDirectory(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
 	want := strings.Join([]string{
-		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
-		"match  claude  project  2026-07-27T09:00:00Z  unknown",
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		"match  claude  project  2026-07-27T09:00:00Z  unknown  UNAVAILABLE",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -312,10 +499,10 @@ func TestListNamesProjectFromRecordedWorkingDirectory(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
 	want := strings.Join([]string{
-		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT",
-		"run-c  claude  unknown  2026-07-27T09:00:00Z  unknown",
-		"run-b  claude  unknown  2026-07-27T09:00:00Z  unknown",
-		"run-a  claude  agentrec  2026-07-27T09:00:00Z  unknown",
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		"run-c  claude  unknown  2026-07-27T09:00:00Z  unknown  UNAVAILABLE",
+		"run-b  claude  unknown  2026-07-27T09:00:00Z  unknown  UNAVAILABLE",
+		"run-a  claude  agentrec  2026-07-27T09:00:00Z  unknown  UNAVAILABLE",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -380,6 +567,45 @@ func TestListFilterWithoutMatchesReportsNoRunsAndUnreadableWarnings(t *testing.T
 	}
 }
 
+func TestListExitFilterDoesNotReadExcludedVerification(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "match", "claude", late, "nonzero")
+	writeRun(t, root, "excluded", "codex", early, "completed")
+	writeVerification(t, root, "excluded", []byte(`{"status":`))
+
+	code, stdout, stderr := run(t, "list", "--exit-reason", "nonzero")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "match  claude") || strings.Contains(stdout, "excluded") {
+		t.Errorf("stdout = %q, want only the exit-reason match", stdout)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want excluded verification left unread", stderr)
+	}
+}
+
+func TestListOmitsMalformedVerificationAndCountsTheRunUnreadable(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "good", "claude", late, "completed")
+	writeVerification(t, root, "good", passedVerification())
+	writeRun(t, root, "bad", "codex", early, "completed")
+	writeVerification(t, root, "bad", []byte(`{"status":`))
+
+	code, stdout, stderr := run(t, "list", "--verification-status", "PASS")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "good  claude") || strings.Contains(stdout, "bad  codex") {
+		t.Errorf("stdout = %q, want only the readable verification", stdout)
+	}
+	if stderr != "Warnings: 1 unreadable run(s).\n" {
+		t.Errorf("stderr = %q, want malformed verification counted", stderr)
+	}
+}
+
 func TestListSkipsAndCountsUnreadableRuns(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-a", "claude", early, "completed")
@@ -431,6 +657,7 @@ func TestListRejectsDuplicateFilters(t *testing.T) {
 	for _, args := range [][]string{
 		{"list", "--cwd", "/tmp", "--cwd", "/var/tmp"},
 		{"list", "--exit-reason", "failed", "--exit-reason", "completed"},
+		{"list", "--verification-status", "PASS", "--verification-status", "FAIL"},
 	} {
 		code, stdout, stderr := run(t, args...)
 		if code != 2 {
@@ -439,7 +666,7 @@ func TestListRejectsDuplicateFilters(t *testing.T) {
 		if stdout != "" {
 			t.Errorf("run(%q) stdout = %q, want empty", args, stdout)
 		}
-		if stderr != "usage: agentrec list [--cwd <path>] [--exit-reason <reason>]\n" {
+		if stderr != listUsage {
 			t.Errorf("run(%q) stderr = %q, want the list usage", args, stderr)
 		}
 	}
@@ -469,9 +696,11 @@ func TestListRejectsInvalidFilterArguments(t *testing.T) {
 	}{
 		{"missing cwd", []string{"list", "--cwd"}},
 		{"missing exit reason", []string{"list", "--exit-reason"}},
+		{"missing verification status", []string{"list", "--verification-status"}},
 		{"extra argument", []string{"list", "--cwd", "path", "extra"}},
 		{"attached cwd", []string{"list", "--cwd=path"}},
 		{"attached exit reason", []string{"list", "--exit-reason=failed"}},
+		{"attached verification status", []string{"list", "--verification-status=PASS"}},
 		{"unknown option", []string{"list", "--provider", "claude"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

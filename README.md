@@ -146,6 +146,7 @@ agentrec shadow run task.md --runner claude --runner codex
 agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec list --exit-reason nonzero
+agentrec list --verification-status FAIL
 agentrec list --cwd /Users/you/code/agentrec --exit-reason timeout
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
@@ -168,6 +169,11 @@ is a different path, and so is another way in through a symlink.
 `--exit-reason` exact-matches the recorded value shown in the `EXIT` column; it
 does not group different outcomes under a synthetic failure category. It can be
 combined with `--cwd` in either order. No match prints `No runs.` and exits zero.
+
+The `VERIFICATION` column shows `PASS`, `FAIL`, the uppercased recorded status,
+or `UNAVAILABLE` when the run has no verification artifact.
+`--verification-status` exact-matches that terminal-safe displayed value. All
+three filters compose in any order; no synthetic non-passing category is added.
 
 `agentrec events <run-id>|latest` reads the optional sanitized provider-event
 JSONL artifact. Human output reports only `provider_reported` attribution, the

@@ -157,6 +157,7 @@ agentrec shadow run task.md --runner claude --runner codex
 agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec list --exit-reason nonzero
+agentrec list --verification-status FAIL
 agentrec list --cwd /Users/you/code/agentrec --exit-reason timeout
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
@@ -191,6 +192,11 @@ artifact を読み取ります。人向け出力に含めるのは `provider_rep
 `--exit-reason` は `EXIT` 列に表示される記録値と完全一致する実行だけを残します。
 異なる結果を独自の失敗カテゴリにまとめることはありません。`--cwd` とはどちらの順序でも
 併用できます。一致する実行がなければ `No runs.` を出力し、終了コード `0` を返します。
+
+`VERIFICATION` 列には `PASS`、`FAIL`、大文字化した記録済みステータス、または
+verification artifact がない実行の `UNAVAILABLE` が表示されます。
+`--verification-status` は、この端末安全な表示値と完全一致します。3 つのフィルターは
+任意の順序で併用でき、独自の non-passing カテゴリは作りません。
 
 ## レポートの見え方
 

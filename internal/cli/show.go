@@ -276,6 +276,22 @@ func readVerification(dir string) (*evidence.VerificationResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeVerification(raw, name)
+}
+
+func readVerificationFromRoot(root *os.Root) (*evidence.VerificationResult, error) {
+	name := filepath.Join(verifyDir, verifyResults)
+	raw, err := readDocumentFromRoot(root, name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return decodeVerification(raw, name)
+}
+
+func decodeVerification(raw []byte, name string) (*evidence.VerificationResult, error) {
 	var res evidence.VerificationResult
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fmt.Errorf("cli: read %s: %w", name, err)
@@ -445,6 +461,18 @@ func readManifest(dir string) (storage.Manifest, error) {
 	if err != nil {
 		return storage.Manifest{}, err
 	}
+	return decodeManifest(raw)
+}
+
+func readManifestFromRoot(root *os.Root) (storage.Manifest, error) {
+	raw, err := readDocumentFromRoot(root, manifestFile)
+	if err != nil {
+		return storage.Manifest{}, err
+	}
+	return decodeManifest(raw)
+}
+
+func decodeManifest(raw []byte) (storage.Manifest, error) {
 	var manifest storage.Manifest
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return storage.Manifest{}, fmt.Errorf("cli: read %s: %w", manifestFile, err)
@@ -506,6 +534,23 @@ func readProviderUsage(dir, provider string) (*usageartifact.Report, error) {
 // open file itself, so what is read is what was measured.
 func readDocument(dir, name string) ([]byte, error) {
 	f, err := openRegular(dir, name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(f, maxDocumentBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("cli: read %s: %w", filepath.Base(name), err)
+	}
+	if len(raw) > maxDocumentBytes {
+		return nil, fmt.Errorf("cli: %s is larger than %d bytes", filepath.Base(name), maxDocumentBytes)
+	}
+	return raw, nil
+}
+
+func readDocumentFromRoot(root *os.Root, name string) ([]byte, error) {
+	f, err := openRegularFromRoot(root, name)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +669,11 @@ func openRegular(dir, name string) (*os.File, error) {
 		return nil, fmt.Errorf("cli: read %s: %w", base, err)
 	}
 	defer root.Close()
+	return openRegularFromRoot(root, name)
+}
 
+func openRegularFromRoot(root *os.Root, name string) (*os.File, error) {
+	base := filepath.Base(name)
 	checked, err := lstatConfined(root, name)
 	if err != nil {
 		return nil, err

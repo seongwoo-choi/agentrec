@@ -165,6 +165,7 @@ agentrec shadow run task.md --runner claude --runner codex
 agentrec list
 agentrec list --cwd /Users/you/code/agentrec
 agentrec list --exit-reason nonzero
+agentrec list --verification-status FAIL
 agentrec list --cwd /Users/you/code/agentrec --exit-reason timeout
 agentrec show 20260728T093159.858622000Z-582ee874
 agentrec show latest
@@ -188,6 +189,11 @@ agentrec version
 서로 다른 결과를 임의의 실패 범주로 묶지 않습니다. `--cwd`와 어느 순서로든 함께
 사용할 수 있습니다. 일치하는 실행이 없으면 `No runs.`를 출력하고 종료 코드 `0`을
 반환합니다.
+
+`VERIFICATION` 열은 `PASS`, `FAIL`, 대문자로 표시한 기록 상태, 또는 verification
+artifact가 없는 실행의 `UNAVAILABLE`을 보여 줍니다. `--verification-status`는 이
+터미널 안전 표시값과 정확히 일치합니다. 세 filter는 어느 순서로든 조합할 수 있으며,
+임의의 non-passing 범주는 만들지 않습니다.
 
 `agentrec events <run-id>|latest`는 선택적인 sanitized provider-event JSONL
 artifact를 읽습니다. 사람용 출력은 `provider_reported` 귀속, 이벤트 수, 정렬된 최상위
