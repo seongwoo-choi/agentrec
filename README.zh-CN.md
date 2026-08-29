@@ -28,7 +28,7 @@ agentrec 会将一次非交互式 Claude Code 或 Codex 运行记录为一个证
 - **比较智能体，但不武断评判高下。** `shadow run` 会基于同一基线，为 Claude 和 Codex 分别创建独立的工作树和证据包。它只呈现记录到的事实，不会把操作数量、diff 或检查结果加工成缺乏依据的评分。
 - **谨慎升级提供方。** 默认拒绝不受支持的提供方版本。显式覆盖后，manifest 和报告中会留下 `versionUnverified` 标记，避免日后将存在解析风险的时间线误认为是已被完全理解的证据。
 
-agentrec 不是交互式记录界面，也不是云端遥测服务，更不能证明智能体导致了每一处观察到的文件变更。它为一次非交互式运行建立本地证据边界，同时说明谁观察到了什么，以及它无法证明什么。
+agentrec 不是用于实时操控智能体的交互式 frontend，也不是云端遥测服务，更不能证明智能体导致了每一处观察到的文件变更。它为一次非交互式运行建立本地证据边界，同时说明谁观察到了什么，以及它无法证明什么。
 
 ## 维护翻译版本
 
@@ -120,6 +120,10 @@ agentrec show latest
 agentrec events 20260728T093159.858622000Z-582ee874
 agentrec events latest --json
 
+# Open the local read-only Action Timeline
+agentrec view latest
+agentrec view 20260728T093159.858622000Z-582ee874
+
 # Report the build this binary came from
 agentrec version
 ```
@@ -133,6 +137,20 @@ agentrec version
 `VERIFICATION` 列显示 `PASS`、`FAIL`、转为大写的已记录状态，或在运行没有 verification artifact 时显示 `UNAVAILABLE`。`--verification-status` 与这个对终端安全的显示值完全匹配。三个过滤条件可按任意顺序组合使用，且不会创建人为定义的 non-passing 类别。
 
 `agentrec events <run-id>|latest` 读取可选的、已清理的提供方事件 JSONL 文件。面向人的输出只显示 `provider_reported` 归属、事件数量以及排序后的顶层 `type` 计数，不呈现嵌套的提供方 payload。`--json` 不输出说明文字，只输出稳定的包装结构 `{"schemaVersion":1,"runId":...,"attribution":"provider_reported","artifactPresent":...,"events":[...]}`。旧 bundle 若没有该文件，会以 `artifactPresent: false` 和空事件列表报告。两种模式都拒绝符号链接和非普通文件，限制文件大小、行长、事件数、JSON token 数和嵌套深度，并要求 JSONL 每行恰好是一个 JSON 对象。面向人的 type 名采用无碰撞且对终端安全的引用形式；JSON 模式则以有效 JSON 保留已验证、已清理的对象。事件不会被转换为 action，不会用于评分或比较提供方，也不会被当作因果证明。
+
+`agentrec view [<run-id>|latest]` 会通过同一套带大小限制的证据包读取路径打开本地只读 Web UI。
+运行列表、已记录的请求、规范化操作时间线、已清理的提供方事件，以及保持独立归属的进程、
+仓库、用量和验证证据会同时显示在一个界面中。带有父操作 ID（`parentId`）的子智能体工作会
+通过缩进呈现，但不会把提供方报告的关系声称为 OS 观察到的因果关系。选中操作或事件后，可以
+文本形式检查已清理的 `input`/`result`，绝不会作为可执行 HTML 呈现。
+
+每个查看器快照都会固定一个运行目录，并为操作、事件流创建不可变字节副本；若创建期间任何展示范围内的 artifact
+发生变化，则拒绝该快照。API 每页最多返回 250 条记录，并以 1 MiB 为目标大小。单条正常记录可以
+超过该目标，但不会一次性传输或渲染达到大小上限的整个证据包。
+
+默认情况下，查看器绑定到 `127.0.0.1` 的随机端口并打开默认浏览器。使用 `--no-open` 可只输出
+URL 而不启动浏览器；使用 `--listen 127.0.0.1:<port>` 可指定固定的回环端口。非回环地址会被
+拒绝；查看器没有修改数据的接口，也不加载任何外部资源。
 
 ## 报告长什么样
 

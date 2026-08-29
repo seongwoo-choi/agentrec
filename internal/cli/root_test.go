@@ -16,7 +16,7 @@ func TestRunHelpListsCoreCommands(t *testing.T) {
 		if exitCode != 0 {
 			t.Fatalf("Run(%q) exit code = %d, want 0", args, exitCode)
 		}
-		for _, command := range []string{"trace", "list", "show"} {
+		for _, command := range []string{"trace", "list", "show", "events", "view"} {
 			if !strings.Contains(stdout.String(), command) {
 				t.Errorf("Run(%q) help output does not contain %q", args, command)
 			}

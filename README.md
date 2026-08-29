@@ -33,7 +33,7 @@ Use agentrec when an agent run must be more than a transient terminal session â€
 - **Compare agents without inventing a winner.** `shadow run` gives Claude and Codex separate worktrees and evidence bundles from one baseline. It presents the recorded facts; it does not turn action counts, diffs, or check results into an ungrounded score.
 - **Upgrade providers conservatively.** Unsupported provider versions are refused by default. An explicit override leaves a visible `versionUnverified` mark in the manifest and report, so a parser-risky timeline cannot later be mistaken for fully understood evidence.
 
-agentrec is not an interactive transcript UI, a cloud telemetry service, or proof that an agent caused every observed file change. It is a local evidence boundary around one non-interactive run: useful precisely because it states what was observed, by whom, and what it cannot establish.
+agentrec is not a live interactive agent frontend, a cloud telemetry service, or proof that an agent caused every observed file change. It is a local evidence boundary around one non-interactive run: useful precisely because it states what was observed, by whom, and what it cannot establish.
 
 ## Maintaining translations
 
@@ -153,6 +153,10 @@ agentrec show latest
 agentrec events 20260728T093159.858622000Z-582ee874
 agentrec events latest --json
 
+# Open the local read-only Action Timeline
+agentrec view latest
+agentrec view 20260728T093159.858622000Z-582ee874
+
 # Report the build this binary came from
 agentrec version
 ```
@@ -187,6 +191,25 @@ exactly one JSON object per JSONL line. Human type names use collision-free
 terminal-safe quoting; JSON mode preserves the validated sanitized objects as
 valid JSON. Events are not converted to actions, scored, compared, or treated as
 causal proof.
+
+`agentrec view [<run-id>|latest]` opens a local read-only web UI over the same
+bounded bundle readers. The run sidebar, recorded request, normalized action
+timeline, sanitized provider-event stream, and separately attributed process,
+repository, usage, and verification evidence remain visible together. Parent
+action IDs indent nested agent work without claiming that provider-reported
+relationships are OS-observed causality. Select an action or event to inspect
+its sanitized input and result as text, never executable HTML.
+
+Each viewer snapshot pins one run directory and copies immutable action/event stream bytes
+and refuses the snapshot if any displayed artifact changes while it is being
+created. The API serves both streams in pages of at most 250 records with a 1
+MiB target; one valid record may exceed that target, but a maximum-size bundle
+is never returned or rendered all at once.
+
+The viewer binds to a random port on `127.0.0.1` and opens the default browser.
+Use `--no-open` to print the URL without launching a browser, or `--listen
+127.0.0.1:<port>` to choose a stable loopback port. Non-loopback listeners are
+refused; the viewer has no mutation endpoint and loads no external assets.
 
 ## What a report looks like
 

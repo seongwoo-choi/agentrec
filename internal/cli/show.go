@@ -134,37 +134,44 @@ func newestRunID(root string) (string, error) {
 	return runs[0].ID, nil
 }
 
-// readRun builds the report for one run out of its manifest, its action stream
-// and, when the run has ended, its process result.
+// readRun builds the report for one run out of one held run-directory identity.
 func readRun(root, runID string) (report.Report, error) {
-	dir, err := runDir(root, runID)
+	if _, err := runDir(root, runID); err != nil {
+		return report.Report{}, err
+	}
+	runRoot, err := openRunRoot(root, runID)
 	if err != nil {
 		return report.Report{}, err
 	}
-	manifest, err := readManifest(dir)
+	defer runRoot.Close()
+	return readRunFromRoot(runRoot)
+}
+
+func readRunFromRoot(root *os.Root) (report.Report, error) {
+	manifest, err := readManifestFromRoot(root)
 	if err != nil {
 		return report.Report{}, err
 	}
-	if err := validateUnparsedStream(dir, manifest.UnparsedLines); err != nil {
+	if err := validateUnparsedStreamFromRoot(root, manifest.UnparsedLines); err != nil {
 		return report.Report{}, err
 	}
-	actions, err := readActions(dir)
+	actions, err := readActionsFromRoot(root)
 	if err != nil {
 		return report.Report{}, err
 	}
-	result, err := readProcessResult(dir)
+	result, err := readProcessResultFromRoot(root)
 	if err != nil {
 		return report.Report{}, err
 	}
-	git, err := readGitResult(dir)
+	git, err := readGitResultFromRoot(root)
 	if err != nil {
 		return report.Report{}, err
 	}
-	verification, err := readVerification(dir)
+	verification, err := readVerificationFromRoot(root)
 	if err != nil {
 		return report.Report{}, err
 	}
-	reportedUsage, err := readProviderUsage(dir, manifest.Provider)
+	reportedUsage, err := readProviderUsageFromRoot(root, manifest.Provider)
 	if err != nil {
 		return report.Report{}, err
 	}
@@ -230,6 +237,16 @@ const gitAvailable = "available"
 // and the second is refused.
 func readGitResult(dir string) (*gitResult, error) {
 	raw, err := readDocument(dir, filepath.Join(gitDir, resultFile))
+	return decodeGitResult(raw, err)
+}
+
+func readGitResultFromRoot(root *os.Root) (*gitResult, error) {
+	raw, err := readDocumentFromRoot(root, filepath.Join(gitDir, resultFile))
+	return decodeGitResult(raw, err)
+}
+
+func decodeGitResult(raw []byte, err error) (*gitResult, error) {
+	name := filepath.Join(gitDir, resultFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -238,13 +255,13 @@ func readGitResult(dir string) (*gitResult, error) {
 	}
 	var res gitResult
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return nil, fmt.Errorf("cli: read %s: %w", filepath.Join(gitDir, resultFile), err)
+		return nil, fmt.Errorf("cli: read %s: %w", name, err)
 	}
 	if res.Status == "" {
-		return nil, fmt.Errorf("cli: %s does not say whether the collection ran", filepath.Join(gitDir, resultFile))
+		return nil, fmt.Errorf("cli: %s does not say whether the collection ran", name)
 	}
 	if res.Attribution != evidence.Attribution {
-		return nil, fmt.Errorf("cli: %s claims %q, want the recorded attribution", filepath.Join(gitDir, resultFile), res.Attribution)
+		return nil, fmt.Errorf("cli: %s claims %q, want the recorded attribution", name, res.Attribution)
 	}
 	for _, count := range []struct {
 		name string
@@ -485,6 +502,15 @@ func decodeManifest(raw []byte) (storage.Manifest, error) {
 // one, so a missing result is not an error.
 func readProcessResult(dir string) (*processResult, error) {
 	raw, err := readDocument(dir, filepath.Join(processDir, resultFile))
+	return decodeProcessResult(raw, err)
+}
+
+func readProcessResultFromRoot(root *os.Root) (*processResult, error) {
+	raw, err := readDocumentFromRoot(root, filepath.Join(processDir, resultFile))
+	return decodeProcessResult(raw, err)
+}
+
+func decodeProcessResult(raw []byte, err error) (*processResult, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -502,6 +528,15 @@ func readProcessResult(dir string) (*processResult, error) {
 // recorded before the artifact existed legitimately have no such file.
 func readProviderUsage(dir, provider string) (*usageartifact.Report, error) {
 	raw, err := readDocument(dir, providerUsageFile)
+	return decodeProviderUsage(raw, err, provider)
+}
+
+func readProviderUsageFromRoot(root *os.Root, provider string) (*usageartifact.Report, error) {
+	raw, err := readDocumentFromRoot(root, providerUsageFile)
+	return decodeProviderUsage(raw, err, provider)
+}
+
+func decodeProviderUsage(raw []byte, err error, provider string) (*usageartifact.Report, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -575,8 +610,20 @@ func readActions(dir string) ([]action.Action, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return decodeActions(f)
+}
 
-	scanner := bufio.NewScanner(f)
+func readActionsFromRoot(root *os.Root) ([]action.Action, error) {
+	f, err := openRegularFromRoot(root, actionsFile)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return decodeActions(f)
+}
+
+func decodeActions(r io.Reader) ([]action.Action, error) {
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(nil, maxActionBytes)
 
 	var actions []action.Action
@@ -614,6 +661,30 @@ func readActions(dir string) ([]action.Action, error) {
 // file is still opened through the same confined path as every artifact show
 // reads, and both its size and line count are bounded before the claim is shown.
 func validateUnparsedStream(dir string, want int) error {
+	if err := validateUnparsedCount(want); err != nil || want == 0 {
+		return err
+	}
+	f, err := openRegular(dir, unparsedFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return validateUnparsedFile(f, want)
+}
+
+func validateUnparsedStreamFromRoot(root *os.Root, want int) error {
+	if err := validateUnparsedCount(want); err != nil || want == 0 {
+		return err
+	}
+	f, err := openRegularFromRoot(root, unparsedFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return validateUnparsedFile(f, want)
+}
+
+func validateUnparsedCount(want int) error {
 	switch {
 	case want < 0:
 		return fmt.Errorf("cli: manifest has a negative unparsed line count")
@@ -622,12 +693,10 @@ func validateUnparsedStream(dir string, want int) error {
 	case want > maxUnparsedLines:
 		return fmt.Errorf("cli: manifest holds more than %d unparsed lines", maxUnparsedLines)
 	}
+	return nil
+}
 
-	f, err := openRegular(dir, unparsedFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+func validateUnparsedFile(f *os.File, want int) error {
 	info, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("cli: read %s: %w", unparsedFile, err)

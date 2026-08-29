@@ -47,7 +47,7 @@ agentrec은 비대화형 Claude Code 또는 Codex 실행 한 번을 번들로 �
   `versionUnverified` 표시가 남으므로, parser 위험이 있는 timeline이 나중에 완전히
   이해된 증거로 오인되지 않습니다.
 
-agentrec은 대화형 실행 기록 UI나 클라우드 텔레메트리 서비스가 아닙니다. 또한 에이전트가
+agentrec은 에이전트를 실시간으로 조작하는 대화형 frontend나 클라우드 텔레메트리 서비스가 아닙니다. 또한 에이전트가
 관찰된 모든 파일 변경을 일으켰다는 증명도 아닙니다. 비대화형 실행 한 번을 둘러싼 로컬
 증거 경계로서, 누가 무엇을 관찰했는지와 무엇을 확정할 수 없는지를 함께 남깁니다.
 
@@ -172,6 +172,10 @@ agentrec show latest
 agentrec events 20260728T093159.858622000Z-582ee874
 agentrec events latest --json
 
+# Open the local read-only Action Timeline
+agentrec view latest
+agentrec view 20260728T093159.858622000Z-582ee874
+
 # Report the build this binary came from
 agentrec version
 ```
@@ -206,6 +210,23 @@ artifact를 읽습니다. 사람용 출력은 `provider_reported` 귀속, 이벤
 JSON object인지 검증합니다. 사람용 type 이름은 collision 없이 terminal-safe하게 quote하고,
 JSON 모드는 검증된 sanitized object를 valid JSON으로 보존합니다. 이벤트를 action으로
 변환하거나, 점수를 매기거나, provider를 비교하거나, 인과관계의 증거로 취급하지 않습니다.
+
+`agentrec view [<run-id>|latest]`는 크기 제한을 적용하는 동일한 번들 판독 경로 위에서 로컬
+읽기 전용 웹 UI를 엽니다. 실행 목록, 기록된 요청, 정규화된 작업 타임라인, 정제된 제공자 이벤트
+스트림, 그리고 귀속을 분리한 프로세스·저장소·사용량·검증 증거를 한 화면에서 볼 수 있습니다.
+상위 작업 ID(`parentId`)가 있는 하위 에이전트 작업은 들여쓰기로 표현하지만, 제공자가 보고한
+관계를 OS가 관찰한 인과관계라고 주장하지 않습니다. 작업이나 이벤트를 선택하면 정제된
+`input`/`result`를 실행 가능한 HTML이 아닌 텍스트로 확인할 수 있습니다.
+
+각 뷰어 스냅샷은 하나의 실행 디렉터리를 고정하고 작업·이벤트 스트림의 불변 바이트 사본을 만들며, 생성 중 표시 대상
+artifact가 바뀌면 스냅샷을 거부합니다. API는 두 스트림을 최대 250개, 목표 1 MiB 단위로 제공합니다.
+정상 레코드 하나가 목표 크기를 넘을 수는 있지만 최대 크기의 번들 전체를 한 번에 전송하거나
+렌더링하지는 않습니다.
+
+기본값은 `127.0.0.1`의 임의 포트에 연결한 뒤 기본 브라우저를 여는 것입니다. 브라우저를 열지
+않고 URL만 출력하려면 `--no-open`, 고정 루프백 포트를 쓰려면 `--listen
+127.0.0.1:<port>`를 지정하세요. 루프백이 아닌 주소는 거부하며, 뷰어에는 데이터를 변경하는
+엔드포인트나 외부 자원이 없습니다.
 
 ## 리포트의 모습
 

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agentrec · Action Timeline</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="mark" aria-hidden="true"></span><strong>agentrec</strong><span class="product">Action Timeline</span></div>
+    <div class="top-meta" id="top-meta">Loading recorded evidence…</div>
+  </header>
+
+  <main class="shell">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <span class="eyebrow">RECORDED RUNS</span>
+        <span class="count" id="run-count">0</span>
+      </div>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="run-search" type="search" placeholder="Find a run or project" autocomplete="off"></label>
+      <nav id="run-list" class="run-list" aria-label="Recorded runs"></nav>
+      <div id="unreadable-warning" class="warning hidden"></div>
+    </aside>
+
+    <section class="workspace">
+      <section class="run-header">
+        <div>
+          <div class="run-kicker"><span id="provider-dot" class="status-dot"></span><span id="run-provider">—</span><span class="separator">/</span><span id="run-project">—</span></div>
+          <h1 id="run-title">Select a recorded run</h1>
+          <div class="run-subtitle" id="run-subtitle"></div>
+        </div>
+        <div class="verdict" id="run-verdict">UNKNOWN</div>
+      </section>
+
+      <div id="timeline-warning" class="timeline-warning hidden" role="alert"></div>
+
+      <section class="request-card">
+        <div class="section-label">REQUEST</div>
+        <pre id="run-prompt">No recorded request.</pre>
+      </section>
+
+      <section class="metrics" id="metrics"></section>
+
+      <div class="content-grid">
+        <section class="timeline-panel">
+          <div class="panel-toolbar">
+            <div class="tabs" role="tablist" aria-label="Timeline mode">
+              <button class="tab active" data-mode="actions" role="tab" aria-selected="true">Actions <span id="action-count">0</span></button>
+              <button class="tab" data-mode="events" role="tab" aria-selected="false">Provider events <span id="event-count">0</span></button>
+            </div>
+            <label class="timeline-search"><input id="timeline-search" type="search" placeholder="Filter timeline"></label>
+          </div>
+          <div class="filter-row" id="type-filters"></div>
+          <div id="timeline" class="timeline" aria-live="polite"></div>
+        </section>
+
+        <aside class="inspector-panel">
+          <div class="section-label">EVIDENCE INSPECTOR</div>
+          <div id="inspector" class="inspector-empty">Select an action or provider event to inspect its sanitized evidence.</div>
+          <div class="evidence-sections" id="evidence-sections"></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div id="error" class="error-toast hidden" role="alert"></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
