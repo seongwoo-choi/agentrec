@@ -118,6 +118,15 @@ go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.1.0
 `dev`、`unknown`、`unknown` を報告します。そのため、スタンプのないバイナリを
 リリース済みのものと取り違えることはありません。
 
+最新のタグ付きリリースは `v0.1.0` です。このバージョンには `shadow run`、
+`events`、`view` は含まれていません。以下で説明する 3 つのコマンドはまだリリース
+されておらず、`main` にのみ存在します。この README に記載されたすべてのコマンドを
+使うには、既存の `main` チェックアウトから現在のソースをインストールしてください。
+
+```bash
+go install ./cmd/agentrec
+```
+
 **検証設定をコミットする。** 実行を検証できるのは、リポジトリがすでに持っていた
 チェックに対してだけです。`.agentrec.example.yaml` を `.agentrec.yaml` にコピーして
 コミットします。各コマンドはシェルを介さず直接起動されるため、引数はあくまで引数です:

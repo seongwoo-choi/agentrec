@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,8 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/evidence"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
@@ -37,13 +40,12 @@ type viewEventPage struct {
 
 type viewSnapshot struct {
 	id         string
-	runRoot    *os.Root
+	documents  map[string][]byte
 	actions    *os.File
-	actionTemp string
 	actionSize int64
 	events     *os.File
-	eventTemp  string
 	eventSize  int64
+	unparsed   *os.File
 }
 
 var viewSnapshotFiles = []string{
@@ -51,48 +53,212 @@ var viewSnapshotFiles = []string{
 	promptFile,
 	actionsFile,
 	providerEventsFile,
-	unparsedFile,
 	processDir + "/" + resultFile,
 	gitDir + "/" + resultFile,
 	verifyDir + "/" + verifyResults,
 	providerUsageFile,
 }
 
+var viewSnapshotFileLimits = map[string]int64{
+	manifestFile:                    maxDocumentBytes,
+	promptFile:                      maxDocumentBytes,
+	actionsFile:                     maxActionStreamBytes,
+	providerEventsFile:              maxEventStreamBytes,
+	unparsedFile:                    maxActionStreamBytes,
+	processDir + "/" + resultFile:   maxDocumentBytes,
+	gitDir + "/" + resultFile:       maxDocumentBytes,
+	verifyDir + "/" + verifyResults: maxDocumentBytes,
+	providerUsageFile:               maxDocumentBytes,
+}
+
 type viewFileIdentity struct {
 	present bool
 	info    os.FileInfo
+	digest  [sha256.Size]byte
 }
 
 func (s *viewSnapshot) Close() error {
 	var errs []error
 	if s.actions != nil {
 		errs = append(errs, s.actions.Close())
+		s.actions = nil
 	}
-	if s.actionTemp != "" {
-		errs = append(errs, os.Remove(s.actionTemp))
-	}
+
 	if s.events != nil {
 		errs = append(errs, s.events.Close())
+		s.events = nil
 	}
-	if s.eventTemp != "" {
-		errs = append(errs, os.Remove(s.eventTemp))
+
+	if s.unparsed != nil {
+		errs = append(errs, s.unparsed.Close())
+		s.unparsed = nil
 	}
-	if s.runRoot != nil {
-		errs = append(errs, s.runRoot.Close())
-	}
+
 	return errors.Join(errs...)
 }
 
 type viewSnapshotStore struct {
-	root string
-	sem  chan struct{}
-	mu   sync.RWMutex
-	byID map[string]*viewSnapshot
-	ids  []string
+	root      string
+	sem       chan struct{}
+	mu        sync.RWMutex
+	byID      map[string]*viewSnapshot
+	ids       []string
+	closed    bool
+	afterCopy func()
 }
 
 func newViewSnapshotStore(root string) *viewSnapshotStore {
 	return &viewSnapshotStore{root: root, sem: make(chan struct{}, 2), byID: make(map[string]*viewSnapshot)}
+}
+
+func captureViewRun(source *os.Root, expected map[string]viewFileIdentity, snapshot *viewSnapshot) error {
+	snapshot.documents = make(map[string][]byte)
+	for _, name := range viewSnapshotFiles {
+		identity := expected[name]
+		if !identity.present {
+			continue
+		}
+		switch name {
+		case actionsFile, providerEventsFile, unparsedFile:
+			file, size, err := captureViewStream(source, name, identity)
+			if err != nil {
+				return err
+			}
+			switch name {
+			case actionsFile:
+				snapshot.actions, snapshot.actionSize = file, size
+			case providerEventsFile:
+				snapshot.events, snapshot.eventSize = file, size
+			case unparsedFile:
+				snapshot.unparsed = file
+			}
+		default:
+			raw, err := captureViewDocument(source, name, identity)
+			if err != nil {
+				return err
+			}
+			snapshot.documents[name] = raw
+		}
+	}
+	return nil
+}
+
+func captureViewDocument(source *os.Root, name string, expected viewFileIdentity) ([]byte, error) {
+	file, err := openRegularFromRoot(source, name)
+	if err != nil {
+		return nil, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot: %w", name, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("cli: inspect %s while capturing viewer snapshot: %w", name, err)
+	}
+	if !sameViewFileMetadata(expected.info, info) {
+		file.Close()
+		return nil, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
+	}
+	raw := make([]byte, info.Size())
+	_, readErr := io.ReadFull(file, raw)
+	after, statErr := file.Stat()
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("cli: capture %s for viewer snapshot: %w", name, readErr)
+	}
+	if statErr != nil {
+		return nil, fmt.Errorf("cli: inspect %s after viewer snapshot capture: %w", name, statErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("cli: close %s after viewer snapshot capture: %w", name, closeErr)
+	}
+	if !sameViewFileMetadata(expected.info, after) || sha256.Sum256(raw) != expected.digest {
+		return nil, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
+	}
+	return raw, nil
+}
+
+func captureViewStream(source *os.Root, name string, expected viewFileIdentity) (*os.File, int64, error) {
+	return captureViewStreamWithUnlink(source, name, expected, os.Remove)
+}
+
+// The snapshot resists source-artifact mutation and ordinary concurrent writes.
+// An actively malicious process running as the same OS user is outside this
+// boundary; isolating that actor requires a separate UID or an OS sandbox.
+func captureViewStreamWithUnlink(source *os.Root, name string, expected viewFileIdentity, unlink func(string) error) (*os.File, int64, error) {
+	file, err := openRegularFromRoot(source, name)
+	if err != nil {
+		return nil, 0, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot: %w", name, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, 0, fmt.Errorf("cli: inspect %s while capturing viewer snapshot: %w", name, err)
+	}
+	if !sameViewFileMetadata(expected.info, info) {
+		file.Close()
+		return nil, 0, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
+	}
+	copyFile, err := os.CreateTemp("", "agentrec-view-snapshot-*")
+	if err != nil {
+		file.Close()
+		return nil, 0, fmt.Errorf("cli: create viewer stream snapshot: %w", err)
+	}
+	temp := copyFile.Name()
+	cleanup := func(err error, readFile *os.File) (*os.File, int64, error) {
+		var readCloseErr error
+		if readFile != nil {
+			readCloseErr = readFile.Close()
+		}
+		return nil, 0, errors.Join(err, file.Close(), copyFile.Close(), readCloseErr, os.Remove(temp))
+	}
+	hash := sha256.New()
+	_, copyErr := io.CopyN(io.MultiWriter(copyFile, hash), file, info.Size())
+	after, statErr := file.Stat()
+	if copyErr != nil {
+		return cleanup(fmt.Errorf("cli: capture %s for viewer snapshot: %w", name, copyErr), nil)
+	}
+	if statErr != nil {
+		return cleanup(fmt.Errorf("cli: inspect %s after viewer snapshot capture: %w", name, statErr), nil)
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], hash.Sum(nil))
+	if !sameViewFileMetadata(expected.info, after) || digest != expected.digest {
+		return cleanup(fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name), nil)
+	}
+	readFile, err := os.Open(temp)
+	if err != nil {
+		return cleanup(fmt.Errorf("cli: reopen viewer stream snapshot read-only: %w", err), nil)
+	}
+	readInfo, err := readFile.Stat()
+	if err != nil {
+		return cleanup(fmt.Errorf("cli: inspect read-only viewer stream snapshot: %w", err), readFile)
+	}
+	writeInfo, err := copyFile.Stat()
+	if err != nil {
+		return cleanup(fmt.Errorf("cli: inspect writable viewer stream snapshot: %w", err), readFile)
+	}
+	if !os.SameFile(readInfo, writeInfo) || readInfo.Size() != info.Size() {
+		return cleanup(errors.New("cli: viewer stream snapshot changed before it was pinned"), readFile)
+	}
+	readHash := sha256.New()
+	if _, err := io.CopyN(readHash, readFile, info.Size()); err != nil {
+		return cleanup(fmt.Errorf("cli: verify viewer stream snapshot: %w", err), readFile)
+	}
+	var readDigest [sha256.Size]byte
+	copy(readDigest[:], readHash.Sum(nil))
+	if readDigest != expected.digest {
+		return cleanup(errors.New("cli: viewer stream snapshot changed before it was pinned"), readFile)
+	}
+	if err := unlink(temp); err != nil {
+		return cleanup(fmt.Errorf("cli: unlink viewer stream snapshot: %w", err), readFile)
+	}
+	if err := file.Close(); err != nil {
+		return cleanup(fmt.Errorf("cli: close %s after viewer snapshot capture: %w", name, err), readFile)
+	}
+	if err := copyFile.Close(); err != nil {
+		readFile.Close()
+		return nil, 0, fmt.Errorf("cli: close writable viewer stream snapshot: %w", err)
+	}
+	return readFile, info.Size(), nil
 }
 
 func (s *viewSnapshotStore) withSlot(r *http.Request, fn func() error) error {
@@ -106,66 +272,76 @@ func (s *viewSnapshotStore) withSlot(r *http.Request, fn func() error) error {
 }
 
 func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
-	runRoot, err := openRunRoot(s.root, runID)
+	sourceRoot, err := openRunRoot(s.root, runID)
 	if err != nil {
 		return viewRunResponse{}, err
 	}
-	snapshot := &viewSnapshot{runRoot: runRoot}
+	snapshot := &viewSnapshot{}
 	fail := func(err error) (viewRunResponse, error) {
-		_ = snapshot.Close()
+		err = errors.Join(err, snapshot.Close())
+		if sourceRoot != nil {
+			err = errors.Join(err, sourceRoot.Close())
+		}
 		return viewRunResponse{}, err
 	}
-	before, err := viewRunFingerprint(runRoot)
+	before, err := viewRunFingerprint(sourceRoot)
 	if err != nil {
 		return fail(err)
+	}
+	if err := captureViewRun(sourceRoot, before, snapshot); err != nil {
+		return fail(err)
+	}
+	if s.afterCopy != nil {
+		s.afterCopy()
 	}
 
-	manifest, err := readManifestFromRoot(runRoot)
+	manifestRaw, ok := snapshot.documents[manifestFile]
+	if !ok {
+		return fail(fmt.Errorf("cli: open %s: %w", manifestFile, os.ErrNotExist))
+	}
+	manifest, err := decodeManifest(manifestRaw)
 	if err != nil {
 		return fail(err)
 	}
-	if err := validateUnparsedStreamFromRoot(runRoot, manifest.UnparsedLines); err != nil {
+	if err := validateUnparsedCount(manifest.UnparsedLines); err != nil {
 		return fail(err)
 	}
-	prompt, err := readViewPrompt(runRoot)
-	if err != nil {
-		return fail(err)
-	}
-	evidence, err := readViewEvidenceFromRoot(runRoot, manifest)
-	if err != nil {
-		return fail(err)
-	}
-	actionSource, actionSize, err := openViewStream(runRoot, actionsFile, maxActionStreamBytes, false)
-	if err != nil {
-		return fail(err)
-	}
-	snapshot.actions, snapshot.actionTemp, err = copyViewStream(actionSource, actionSize)
-	closeErr := actionSource.Close()
-	if err != nil {
-		return fail(err)
-	}
-	if closeErr != nil {
-		return fail(closeErr)
-	}
-	snapshot.actionSize = actionSize
-	actionCount, err := countViewActions(snapshot.actions, snapshot.actionSize)
-	if err != nil {
-		return fail(err)
-	}
-	eventSource, eventSize, err := openViewStream(runRoot, providerEventsFile, maxEventStreamBytes, true)
-	if err != nil {
-		return fail(err)
-	}
-	if eventSource != nil {
-		snapshot.events, snapshot.eventTemp, err = copyViewStream(eventSource, eventSize)
-		closeErr = eventSource.Close()
+	if manifest.UnparsedLines > 0 {
+		unparsedBefore, err := viewFileFingerprint(sourceRoot, unparsedFile)
 		if err != nil {
 			return fail(err)
 		}
-		if closeErr != nil {
-			return fail(closeErr)
+		if unparsedBefore.present {
+			snapshot.unparsed, _, err = captureViewStream(sourceRoot, unparsedFile, unparsedBefore)
+			if err != nil {
+				return fail(err)
+			}
 		}
-		snapshot.eventSize = eventSize
+		unparsedAfter, err := viewFileFingerprint(sourceRoot, unparsedFile)
+		if err != nil {
+			return fail(err)
+		}
+		if !sameViewFileIdentity(unparsedBefore, unparsedAfter) {
+			return fail(errors.New("cli: run changed while the viewer snapshot was being created; retry"))
+		}
+	}
+	if err := validateCapturedUnparsed(snapshot, manifest.UnparsedLines); err != nil {
+		return fail(err)
+	}
+	prompt, err := decodeViewPrompt(snapshot.documents[promptFile], snapshot.documents[promptFile] != nil)
+	if err != nil {
+		return fail(err)
+	}
+	evidence, err := readCapturedViewEvidence(snapshot, manifest)
+	if err != nil {
+		return fail(err)
+	}
+	if snapshot.actions == nil {
+		return fail(fmt.Errorf("cli: open %s: %w", actionsFile, os.ErrNotExist))
+	}
+	actionCount, err := countViewActions(snapshot.actions, snapshot.actionSize)
+	if err != nil {
+		return fail(err)
 	}
 	eventCount := 0
 	if snapshot.events != nil {
@@ -174,19 +350,26 @@ func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
 			return fail(err)
 		}
 	}
-	after, err := viewRunFingerprint(runRoot)
+	after, err := viewRunFingerprint(sourceRoot)
 	if err != nil {
 		return fail(err)
 	}
 	if !sameViewFingerprint(before, after) {
 		return fail(errors.New("cli: run changed while the viewer snapshot was being created; retry"))
 	}
+	snapshot.documents = nil
+	if err := sourceRoot.Close(); err != nil {
+		return fail(fmt.Errorf("cli: close source run after viewer snapshot: %w", err))
+	}
+	sourceRoot = nil
 	tokenBytes := make([]byte, 16)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return fail(fmt.Errorf("cli: create viewer snapshot: %w", err))
 	}
 	snapshot.id = hex.EncodeToString(tokenBytes)
-	s.add(snapshot)
+	if err := s.add(snapshot); err != nil {
+		return fail(err)
+	}
 
 	return viewRunResponse{
 		SchemaVersion: 1,
@@ -208,17 +391,44 @@ func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
 func viewRunFingerprint(root *os.Root) (map[string]viewFileIdentity, error) {
 	fingerprint := make(map[string]viewFileIdentity, len(viewSnapshotFiles))
 	for _, name := range viewSnapshotFiles {
-		info, err := lstatConfined(root, name)
-		if errors.Is(err, os.ErrNotExist) {
-			fingerprint[name] = viewFileIdentity{}
-			continue
-		}
+		identity, err := viewFileFingerprint(root, name)
 		if err != nil {
 			return nil, err
 		}
-		fingerprint[name] = viewFileIdentity{present: true, info: info}
+		fingerprint[name] = identity
 	}
 	return fingerprint, nil
+}
+
+func viewFileFingerprint(root *os.Root, name string) (viewFileIdentity, error) {
+	file, err := openRegularFromRoot(root, name)
+	if errors.Is(err, os.ErrNotExist) {
+		return viewFileIdentity{}, nil
+	}
+	if err != nil {
+		return viewFileIdentity{}, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return viewFileIdentity{}, fmt.Errorf("cli: inspect %s for viewer snapshot: %w", name, err)
+	}
+	limit := viewSnapshotFileLimits[name]
+	if info.Size() > limit {
+		file.Close()
+		return viewFileIdentity{}, fmt.Errorf("cli: %s is larger than %d bytes", name, limit)
+	}
+	hash := sha256.New()
+	if _, err := io.CopyN(hash, file, info.Size()); err != nil {
+		file.Close()
+		return viewFileIdentity{}, fmt.Errorf("cli: fingerprint %s for viewer snapshot: %w", name, err)
+	}
+	if err := file.Close(); err != nil {
+		return viewFileIdentity{}, fmt.Errorf("cli: close %s after viewer fingerprint: %w", name, err)
+	}
+	identity := viewFileIdentity{present: true, info: info}
+	copy(identity.digest[:], hash.Sum(nil))
+	return identity, nil
 }
 
 func sameViewFingerprint(a, b map[string]viewFileIdentity) bool {
@@ -230,27 +440,85 @@ func sameViewFingerprint(a, b map[string]viewFileIdentity) bool {
 		if !left.present {
 			continue
 		}
-		if !os.SameFile(left.info, right.info) || left.info.Size() != right.info.Size() || !left.info.ModTime().Equal(right.info.ModTime()) || left.info.Mode() != right.info.Mode() {
+		if !sameViewFileMetadata(left.info, right.info) || left.digest != right.digest {
 			return false
 		}
 	}
 	return true
 }
 
-func readViewEvidenceFromRoot(root *os.Root, manifest storage.Manifest) (viewEvidence, error) {
-	result, err := readProcessResultFromRoot(root)
+func sameViewFileMetadata(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime()) && a.Mode() == b.Mode()
+}
+
+func sameViewFileIdentity(a, b viewFileIdentity) bool {
+	return a.present == b.present && (!a.present || sameViewFileMetadata(a.info, b.info) && a.digest == b.digest)
+}
+
+func capturedViewDocument(snapshot *viewSnapshot, name string) ([]byte, error) {
+	raw, ok := snapshot.documents[name]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return raw, nil
+}
+
+func decodeViewPrompt(raw []byte, present bool) (string, error) {
+	if !present {
+		return "", nil
+	}
+	if !utf8.Valid(raw) {
+		return "", fmt.Errorf("cli: %s is not valid UTF-8", promptFile)
+	}
+	return strings.TrimSuffix(string(raw), "\n"), nil
+}
+
+func validateCapturedUnparsed(snapshot *viewSnapshot, want int) error {
+	validationErr := validateUnparsedCount(want)
+	if validationErr == nil && want > 0 {
+		switch {
+		case snapshot.unparsed == nil:
+			validationErr = os.ErrNotExist
+		default:
+			if _, err := snapshot.unparsed.Seek(0, io.SeekStart); err != nil {
+				validationErr = fmt.Errorf("cli: rewind %s: %w", unparsedFile, err)
+			} else {
+				validationErr = validateUnparsedFile(snapshot.unparsed, want)
+			}
+		}
+	}
+	if snapshot.unparsed != nil {
+		validationErr = errors.Join(validationErr, snapshot.unparsed.Close())
+		snapshot.unparsed = nil
+	}
+	return validationErr
+}
+
+func readCapturedViewEvidence(snapshot *viewSnapshot, manifest storage.Manifest) (viewEvidence, error) {
+	resultRaw, resultReadErr := capturedViewDocument(snapshot, processDir+"/"+resultFile)
+	result, err := decodeProcessResult(resultRaw, resultReadErr)
 	if err != nil {
 		return viewEvidence{}, err
 	}
-	git, err := readGitResultFromRoot(root)
+	gitRaw, gitReadErr := capturedViewDocument(snapshot, gitDir+"/"+resultFile)
+	git, err := decodeGitResult(gitRaw, gitReadErr)
 	if err != nil {
 		return viewEvidence{}, err
 	}
-	verification, err := readVerificationFromRoot(root)
-	if err != nil {
-		return viewEvidence{}, err
+	verificationRaw, verificationReadErr := capturedViewDocument(snapshot, verifyDir+"/"+verifyResults)
+	var verification *evidence.VerificationResult
+	switch {
+	case errors.Is(verificationReadErr, os.ErrNotExist):
+	case verificationReadErr != nil:
+		return viewEvidence{}, verificationReadErr
+	default:
+		verification, err = decodeVerification(verificationRaw, verifyDir+"/"+verifyResults)
+		if err != nil {
+			return viewEvidence{}, err
+		}
 	}
-	usage, err := readProviderUsageFromRoot(root, manifest.Provider)
+	usageRaw, usageReadErr := capturedViewDocument(snapshot, providerUsageFile)
+	usage, err := decodeProviderUsage(usageRaw, usageReadErr, manifest.Provider)
 	if err != nil {
 		return viewEvidence{}, err
 	}
@@ -260,53 +528,6 @@ func readViewEvidenceFromRoot(root *os.Root, manifest storage.Manifest) (viewEvi
 		Repository:    viewFields(repositoryFields(git)),
 		Verification:  viewFields(verificationFields(verification)),
 	}, nil
-}
-
-func copyViewStream(source *os.File, size int64) (*os.File, string, error) {
-	copyFile, err := os.CreateTemp("", "agentrec-view-snapshot-*")
-	if err != nil {
-		return nil, "", fmt.Errorf("cli: create viewer stream snapshot: %w", err)
-	}
-	path := copyFile.Name()
-	ok := false
-	defer func() {
-		if ok {
-			return
-		}
-		_ = copyFile.Close()
-		_ = os.Remove(path)
-	}()
-	if _, err := io.CopyN(copyFile, io.NewSectionReader(source, 0, size), size); err != nil {
-		return nil, "", fmt.Errorf("cli: copy viewer stream snapshot: %w", err)
-	}
-	if _, err := copyFile.Seek(0, io.SeekStart); err != nil {
-		return nil, "", fmt.Errorf("cli: rewind viewer stream snapshot: %w", err)
-	}
-	if err := os.Remove(path); err == nil {
-		path = ""
-	}
-	ok = true
-	return copyFile, path, nil
-}
-
-func openViewStream(root *os.Root, name string, limit int, optional bool) (*os.File, int64, error) {
-	file, err := openRegularFromRoot(root, name)
-	if optional && errors.Is(err, os.ErrNotExist) {
-		return nil, 0, nil
-	}
-	if err != nil {
-		return nil, 0, err
-	}
-	info, err := file.Stat()
-	if err != nil {
-		file.Close()
-		return nil, 0, fmt.Errorf("cli: inspect %s: %w", name, err)
-	}
-	if info.Size() > int64(limit) {
-		file.Close()
-		return nil, 0, fmt.Errorf("cli: %s is larger than %d bytes", name, limit)
-	}
-	return file, info.Size(), nil
 }
 
 func countViewActions(file *os.File, size int64) (int, error) {
@@ -357,19 +578,27 @@ func countViewEvents(file *os.File, size int64) (int, error) {
 	return count, nil
 }
 
-func (s *viewSnapshotStore) add(snapshot *viewSnapshot) {
+func (s *viewSnapshotStore) add(snapshot *viewSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("cli: viewer snapshot store is closed")
+	}
 	s.byID[snapshot.id] = snapshot
 	s.ids = append(s.ids, snapshot.id)
 	if len(s.ids) <= maxViewSnapshots {
-		return
+		return nil
 	}
 	oldID := s.ids[0]
 	s.ids = s.ids[1:]
 	old := s.byID[oldID]
 	delete(s.byID, oldID)
-	_ = old.Close()
+	if err := old.Close(); err != nil {
+		delete(s.byID, snapshot.id)
+		s.ids = s.ids[:len(s.ids)-1]
+		return fmt.Errorf("cli: evict viewer snapshot %s: %w", oldID, err)
+	}
+	return nil
 }
 
 func (s *viewSnapshotStore) withSnapshot(id string, fn func(*viewSnapshot) error) (bool, error) {
@@ -485,6 +714,7 @@ func readViewEventPage(snapshot *viewSnapshot, cursor int64) (viewEventPage, err
 func (s *viewSnapshotStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	var errs []error
 	for _, snapshot := range s.byID {
 		errs = append(errs, snapshot.Close())

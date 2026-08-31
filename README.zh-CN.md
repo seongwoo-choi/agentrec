@@ -79,6 +79,12 @@ go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.1.0
 
 `agentrec version`（等同于 `agentrec --version`）会输出三行：版本、构建所用的提交和 UTC 构建时间。发布版二进制会带有标签、完整提交 SHA 和 RFC 3339 时间戳；其他方式构建的二进制则显示 `dev`、`unknown` 和 `unknown`，因此未加构建信息的二进制不会被误认为发布版。
 
+最新的标签版本是 `v0.1.0`。该版本不包含 `shadow run`、`events` 或 `view`；下文介绍的这三个命令尚未发布，目前仅存在于 `main`。如需使用本 README 中的全部命令，请在已有的 `main` 检出中安装当前源码：
+
+```bash
+go install ./cmd/agentrec
+```
+
 **提交验证配置。** 一次运行只会依据仓库原本已有的检查进行验证。将 `.agentrec.example.yaml` 复制为 `.agentrec.yaml` 并提交。每条命令都会直接启动，不经 shell，因此参数始终只是参数，不会被当作其他内容解释：
 
 ```yaml

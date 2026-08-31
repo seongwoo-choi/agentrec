@@ -45,10 +45,10 @@ const (
 // and a run may hold only so many actions.
 const (
 	maxDocumentBytes     = 1 << 20
-	maxActionBytes       = 4 << 20
-	maxActionStreamBytes = 64 << 20
-	maxActions           = 100000
-	maxUnparsedLines     = 100000
+	maxActionBytes       = storage.MaxStreamLineBytes
+	maxActionStreamBytes = storage.MaxStreamBytes
+	maxActions           = storage.MaxStreamEntries
+	maxUnparsedLines     = storage.MaxStreamEntries
 	// maxEvidenceItems bounds the lists inside one evidence document. A run that
 	// pinned more checks than this, or a warning naming more paths, is past
 	// anything a reviewable verification produced.

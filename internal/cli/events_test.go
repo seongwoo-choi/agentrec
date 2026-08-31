@@ -230,6 +230,19 @@ func TestEventsRejectsExcessiveJSONNesting(t *testing.T) {
 	assertEventsReadFailure(t, "run-a", "nesting exceeds")
 }
 
+func TestEventsAcceptsTheLargestCanonicalEventLine(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", late, "completed")
+	prefix, suffix := `{"type":"boundary","payload":"`, `"}`
+	line := prefix + strings.Repeat("x", maxEventBytes-1-len(prefix)-len(suffix)) + suffix
+	writeEventStream(t, root, "run-a", line+"\n")
+
+	code, stdout, stderr := run(t, "events", "run-a")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "boundary") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 func TestValidateEventObjectRejectsTokenBudgetOverflow(t *testing.T) {
 	if _, err := validateEventObject([]byte(`{"x":[1,2,3]}`), 4); err == nil || !strings.Contains(err.Error(), "JSON tokens") {
 		t.Fatalf("validateEventObject error = %v, want token bound", err)

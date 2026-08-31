@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +89,14 @@ type Finalization struct {
 // anything arriving after it belongs to a run that is no longer being recorded.
 var ErrFinalized = errors.New("storage: run already finalized")
 
+// MaxStreamLineBytes is the exclusive bound shared by bundle writers and
+// readers. bufio.Scanner needs room for the line delimiter inside this bound.
+const (
+	MaxStreamLineBytes = 4 << 20
+	MaxStreamBytes     = 64 << 20
+	MaxStreamEntries   = 100000
+)
+
 // ErrNotProviderEvent reports that a line offered as a provider event was not
 // one JSON object. It is the shape of the line being wrong and not this package
 // failing, so a supervisor can keep the line as what it actually is — see
@@ -99,17 +108,22 @@ var ErrNotProviderEvent = redaction.ErrNotJSONObject
 // recorded under a single marker. A Bundle is for one goroutine only and is not
 // safe for concurrent use: its caller must serialize writes and finalization.
 type Bundle struct {
-	dir      string
-	red      *redaction.Redactor
-	manifest Manifest
-	dirRoot  *os.Root
-	actions  *os.File
-	events   *os.File
+	dir         string
+	red         *redaction.Redactor
+	manifest    Manifest
+	parentRoot  *os.Root
+	dirRoot     *os.Root
+	processRoot *os.Root
+	actions     *os.File
+	events      *os.File
 	// unparsed is opened on the first line that was not an event, so a run whose
 	// provider only ever emitted events leaves no empty file claiming otherwise.
-	unparsed  *os.File
-	writeErr  error
-	finalized bool
+	unparsed      *os.File
+	actionsState  streamState
+	eventsState   streamState
+	unparsedState streamState
+	writeErr      error
+	finalized     bool
 }
 
 // Create makes the run directory under root, writes the initial manifest and
@@ -118,32 +132,118 @@ func Create(root, runID string, manifest Manifest) (*Bundle, error) {
 	if err := validateRunID(runID); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(root, dirMode); err != nil {
+	if err := ensureRoot(root); err != nil {
 		return nil, fmt.Errorf("storage: create root %s: %w", root, err)
 	}
 	dir := filepath.Join(root, runID)
-	// Mkdir, not MkdirAll: an existing run must collide here rather than be
-	// written into.
-	if err := os.Mkdir(dir, dirMode); err != nil {
-		return nil, fmt.Errorf("storage: create run directory: %w", err)
+	parentRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("storage: open root directory: %w", err)
 	}
-	if err := os.Chmod(dir, dirMode); err != nil {
-		os.Remove(dir)
-		return nil, fmt.Errorf("storage: set run directory mode: %w", err)
+	dirRoot, err := createRunRootAt(parentRoot, runID)
+	if err != nil {
+		return nil, errors.Join(err, parentRoot.Close())
 	}
 
 	manifest.RedactionRuleVersion = redaction.RuleVersion
-	dirRoot, err := os.OpenRoot(dir)
-	if err != nil {
-		os.Remove(dir)
-		return nil, fmt.Errorf("storage: open run directory: %w", err)
-	}
-	b := &Bundle{dir: dir, dirRoot: dirRoot, red: redaction.New(), manifest: manifest}
+	b := &Bundle{dir: dir, parentRoot: parentRoot, dirRoot: dirRoot, red: redaction.New(), manifest: manifest}
 	if err := b.start(); err != nil {
-		b.discard()
-		return nil, err
+		return nil, errors.Join(err, b.discard())
 	}
 	return b, nil
+}
+
+func ensureRoot(root string) error {
+	return ensureRootWithSync(root, func(file *os.File) error { return file.Sync() })
+}
+
+func ensureRootWithSync(root string, syncFile func(*os.File) error) error {
+	missing := []string{}
+	anchor := ""
+	for current := filepath.Clean(root); ; current = filepath.Dir(current) {
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s exists and is not a directory", current)
+			}
+			anchor = current
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, current)
+		if parent := filepath.Dir(current); parent == current {
+			return err
+		}
+	}
+	if parentPath := filepath.Dir(anchor); parentPath != anchor {
+		parent, err := os.OpenRoot(parentPath)
+		if err != nil {
+			return err
+		}
+		err = errors.Join(syncRootWith(parent, syncFile), parent.Close())
+		if err != nil {
+			return err
+		}
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		path := missing[i]
+		parent, err := os.OpenRoot(filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		name := filepath.Base(path)
+		err = parent.Mkdir(name, dirMode)
+		if errors.Is(err, os.ErrExist) {
+			if info, statErr := parent.Lstat(name); statErr != nil || !info.IsDir() {
+				err = errors.Join(err, statErr)
+			} else {
+				err = nil
+			}
+		}
+		if err == nil {
+			err = parent.Chmod(name, dirMode)
+		}
+		if err == nil {
+			err = syncRootWith(parent, syncFile)
+		}
+		err = errors.Join(err, parent.Close())
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func createRunRootAt(parent *os.Root, runID string) (*os.Root, error) {
+	return createRunRootAtWithSync(parent, runID, func(file *os.File) error { return file.Sync() })
+}
+
+func createRunRootAtWithSync(parent *os.Root, runID string, syncFile func(*os.File) error) (*os.Root, error) {
+	// Mkdir, not MkdirAll: an existing run must collide here rather than be
+	// written into.
+	if err := parent.Mkdir(runID, dirMode); err != nil {
+		return nil, fmt.Errorf("storage: create run directory: %w", err)
+	}
+	fail := func(err error) (*os.Root, error) {
+		removeErr := parent.Remove(runID)
+		if removeErr == nil {
+			removeErr = syncRoot(parent)
+		}
+		return nil, errors.Join(err, removeErr)
+	}
+	if err := parent.Chmod(runID, dirMode); err != nil {
+		return fail(fmt.Errorf("storage: set run directory mode: %w", err))
+	}
+	runRoot, err := parent.OpenRoot(runID)
+	if err != nil {
+		return fail(fmt.Errorf("storage: open run directory: %w", err))
+	}
+	if err := syncRootWith(parent, syncFile); err != nil {
+		return fail(errors.Join(fmt.Errorf("storage: sync root directory: %w", err), runRoot.Close()))
+	}
+	return runRoot, nil
 }
 
 // Dir returns the run directory.
@@ -155,10 +255,10 @@ func (b *Bundle) start() error {
 		return err
 	}
 	var err error
-	if b.actions, err = createFile(b.path(actionsFile)); err != nil {
+	if b.actions, err = createFileAt(b.dirRoot, actionsFile); err != nil {
 		return err
 	}
-	b.events, err = createFile(b.path(eventsFile))
+	b.events, err = createFileAt(b.dirRoot, eventsFile)
 	return err
 }
 
@@ -176,7 +276,7 @@ func (b *Bundle) WritePrompt(prompt string) error {
 		return err
 	}
 
-	f, err := createFile(b.path(promptFile))
+	f, err := createFileAt(b.dirRoot, promptFile)
 	if err != nil {
 		return err
 	}
@@ -184,8 +284,8 @@ func (b *Bundle) WritePrompt(prompt string) error {
 		f.Close()
 		return fmt.Errorf("storage: write %s: %w", promptFile, err)
 	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("storage: close %s: %w", promptFile, err)
+	if err := finishNewFileAt(b.dirRoot, promptFile, f); err != nil {
+		return err
 	}
 	return nil
 }
@@ -244,11 +344,11 @@ func (b *Bundle) WriteProcessStderr(text string) error {
 	if err != nil {
 		return err
 	}
-	dir, err := b.processDir()
+	root, err := b.processDir()
 	if err != nil {
 		return b.fail(err)
 	}
-	f, err := createFile(filepath.Join(dir, stderrFile))
+	f, err := createFileAt(root, stderrFile)
 	if err != nil {
 		return b.fail(err)
 	}
@@ -256,8 +356,8 @@ func (b *Bundle) WriteProcessStderr(text string) error {
 		f.Close()
 		return b.fail(fmt.Errorf("storage: write %s: %w", stderrFile, err))
 	}
-	if err := syncClose(f); err != nil {
-		return b.fail(fmt.Errorf("storage: finish %s: %w", stderrFile, err))
+	if err := finishNewFileAt(root, stderrFile, f); err != nil {
+		return b.fail(err)
 	}
 	return nil
 }
@@ -274,19 +374,11 @@ func (b *Bundle) WriteProcessResult(rawJSON []byte) error {
 	if err != nil {
 		return fmt.Errorf("storage: redact process result: %w", err)
 	}
-	dir, err := b.processDir()
+	root, err := b.processDir()
 	if err != nil {
 		return b.fail(err)
 	}
-	path := filepath.Join(dir, resultFile)
-	// The install below renames over whatever is at path, so a result already
-	// there is checked for first: it is evidence from this run, and a second
-	// call is the recorder's view of the run having diverged from the disk.
-	// Lstat, so a symlink is refused rather than replaced silently.
-	if _, err := os.Lstat(path); err == nil {
-		return b.fail(fmt.Errorf("storage: %s already exists", resultFile))
-	}
-	if err := install(path, append(safe, '\n')); err != nil {
+	if err := installNewAt(root, resultFile, append(safe, '\n')); err != nil {
 		return b.fail(err)
 	}
 	return nil
@@ -320,29 +412,54 @@ func (b *Bundle) WriteUsage(reported usage.Report) error {
 // wherever it points, so it is refused rather than followed. A directory this
 // call created and could not then write into is left where it is; removing a
 // directory tree is not something a failed write should ever perform.
-func (b *Bundle) processDir() (string, error) {
-	dir := b.path(processDirName)
-	switch err := os.Mkdir(dir, dirMode); {
+func (b *Bundle) processDir() (*os.Root, error) {
+	if b.processRoot != nil {
+		return b.processRoot, nil
+	}
+	root, err := createProcessRootAt(b.dirRoot)
+	if err != nil {
+		return nil, err
+	}
+	b.processRoot = root
+	return root, nil
+}
+
+func createProcessRootAt(parent *os.Root) (*os.Root, error) {
+	return createProcessRootAtWithSync(parent, func(file *os.File) error { return file.Sync() })
+}
+
+func createProcessRootAtWithSync(parent *os.Root, syncFile func(*os.File) error) (*os.Root, error) {
+	created := false
+	switch err := parent.Mkdir(processDirName, dirMode); {
 	case err == nil:
+		created = true
 		// Set again after creation, because the umask masks the mode passed to
 		// Mkdir and is not the recorder's to trust.
-		if err := os.Chmod(dir, dirMode); err != nil {
-			return "", fmt.Errorf("storage: set mode of %s: %w", processDirName, err)
+		if err := parent.Chmod(processDirName, dirMode); err != nil {
+			return nil, fmt.Errorf("storage: set mode of %s: %w", processDirName, err)
 		}
-		return dir, nil
 	case !errors.Is(err, os.ErrExist):
-		return "", fmt.Errorf("storage: create %s directory: %w", processDirName, err)
+		return nil, fmt.Errorf("storage: create %s directory: %w", processDirName, err)
 	}
 	// Lstat, not Stat, so a symlink is seen as a symlink rather than as
 	// whatever it points at.
-	info, err := os.Lstat(dir)
+	info, err := parent.Lstat(processDirName)
 	if err != nil {
-		return "", fmt.Errorf("storage: inspect %s: %w", processDirName, err)
+		return nil, fmt.Errorf("storage: inspect %s: %w", processDirName, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("storage: %s exists and is not a directory", processDirName)
+		return nil, fmt.Errorf("storage: %s exists and is not a directory", processDirName)
 	}
-	return dir, nil
+	root, err := parent.OpenRoot(processDirName)
+	if err != nil {
+		return nil, fmt.Errorf("storage: open %s directory: %w", processDirName, err)
+	}
+	if created {
+		if err := syncRootWith(parent, syncFile); err != nil {
+			return nil, errors.Join(fmt.Errorf("storage: sync run directory after creating %s: %w", processDirName, err), root.Close())
+		}
+	}
+	return root, nil
 }
 
 // WriteAction appends one normalized action to the action stream. The action
@@ -361,7 +478,7 @@ func (b *Bundle) WriteAction(a action.Action) error {
 	if err != nil {
 		return fmt.Errorf("storage: redact action %s: %w", a.ID, err)
 	}
-	return b.appendLine(b.actions, actionsFile, safe)
+	return b.appendLine(b.actions, actionsFile, safe, &b.actionsState)
 }
 
 // WriteProviderEvent appends one raw provider event, sanitized. The event is
@@ -376,7 +493,15 @@ func (b *Bundle) WriteProviderEvent(raw []byte) error {
 	if err != nil {
 		return fmt.Errorf("storage: redact provider event: %w", err)
 	}
-	return b.appendLine(b.events, eventsFile, safe)
+	tokens, err := ValidateProviderEvent(safe, MaxProviderEventTokens-b.eventsState.tokens)
+	if err != nil {
+		return b.fail(fmt.Errorf("storage: provider event exceeds the bundle contract: %w", err))
+	}
+	if err := b.appendLine(b.events, eventsFile, safe, &b.eventsState); err != nil {
+		return err
+	}
+	b.eventsState.tokens += tokens
+	return nil
 }
 
 // unparsedNotUTF8 stands in for a line that cannot be carried as text. The
@@ -406,13 +531,13 @@ func (b *Bundle) WriteUnparsedLine(raw []byte) error {
 		}
 	}
 	if b.unparsed == nil {
-		f, err := createFile(b.path(unparsedFile))
+		f, err := createFileAt(b.dirRoot, unparsedFile)
 		if err != nil {
 			return b.fail(err)
 		}
 		b.unparsed = f
 	}
-	return b.appendLine(b.unparsed, unparsedFile, []byte(safe))
+	return b.appendLine(b.unparsed, unparsedFile, []byte(safe), &b.unparsedState)
 }
 
 // Finalize closes the streams and rewrites the manifest with how the run
@@ -449,15 +574,26 @@ func (b *Bundle) Finalize(f Finalization) error {
 	b.manifest.WarningCount = f.WarningCount
 	b.manifest.UnparsedLines = f.UnparsedLines
 	manifestErr := b.writeManifest()
+	var processRootErr error
+	if b.processRoot != nil {
+		processRootErr = b.processRoot.Close()
+	}
 	rootErr := b.dirRoot.Close()
+	parentRootErr := b.parentRoot.Close()
 	if streamErr != nil {
 		return streamErr
 	}
 	if manifestErr != nil {
 		return manifestErr
 	}
+	if processRootErr != nil {
+		return fmt.Errorf("storage: close process directory: %w", processRootErr)
+	}
 	if rootErr != nil {
 		return fmt.Errorf("storage: close run directory: %w", rootErr)
+	}
+	if parentRootErr != nil {
+		return fmt.Errorf("storage: close runs root directory: %w", parentRootErr)
 	}
 	return nil
 }
@@ -466,11 +602,41 @@ func (b *Bundle) Finalize(f Finalization) error {
 // first failure but always doing both: an unclosed descriptor would outlive the
 // run either way.
 func syncClose(f *os.File) error {
-	err := f.Sync()
+	return syncCloseWith(f, func(file *os.File) error { return file.Sync() })
+}
+
+func syncCloseWith(f *os.File, syncFile func(*os.File) error) error {
+	err := syncFile(f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	return err
+}
+
+func syncRoot(root *os.Root) error {
+	return syncRootWith(root, func(file *os.File) error { return file.Sync() })
+}
+
+func syncRootWith(root *os.Root, syncFile func(*os.File) error) error {
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	return syncCloseWith(dir, syncFile)
+}
+
+func finishNewFileAt(root *os.Root, name string, file *os.File) error {
+	return finishNewFileAtWithSync(root, name, file, func(target *os.File) error { return target.Sync() })
+}
+
+func finishNewFileAtWithSync(root *os.Root, name string, file *os.File, syncFile func(*os.File) error) error {
+	if err := syncCloseWith(file, syncFile); err != nil {
+		return fmt.Errorf("storage: finish %s: %w", name, err)
+	}
+	if err := syncRootWith(root, syncFile); err != nil {
+		return fmt.Errorf("storage: sync directory after creating %s: %w", name, err)
+	}
+	return nil
 }
 
 // writable reports what stops the next artifact from being written. A stream
@@ -493,11 +659,40 @@ func (b *Bundle) fail(err error) error {
 	return b.writeErr
 }
 
+type streamState struct {
+	bytes   int
+	entries int
+	tokens  int
+}
+
 // appendLine writes one sanitized JSON line to an already-open stream.
-func (b *Bundle) appendLine(f *os.File, name string, line []byte) error {
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		return b.fail(fmt.Errorf("storage: append to %s: %w", name, err))
+func (b *Bundle) appendLine(f *os.File, name string, line []byte, state *streamState) error {
+	if len(line) >= MaxStreamLineBytes {
+		return b.fail(fmt.Errorf("storage: %s line is too large", name))
 	}
+	if state.entries == MaxStreamEntries {
+		return b.fail(fmt.Errorf("storage: %s holds too many entries", name))
+	}
+	if state.bytes+len(line)+1 > MaxStreamBytes {
+		return b.fail(fmt.Errorf("storage: %s exceeds %d bytes", name, MaxStreamBytes))
+	}
+	start, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return b.fail(fmt.Errorf("storage: locate end of %s: %w", name, err))
+	}
+	payload := append(line, '\n')
+	n, writeErr := f.Write(payload)
+	if writeErr != nil || n != len(payload) {
+		if writeErr == nil {
+			writeErr = io.ErrShortWrite
+		}
+		if rollbackErr := f.Truncate(start); rollbackErr != nil {
+			return b.fail(fmt.Errorf("storage: append to %s: %w", name, errors.Join(writeErr, fmt.Errorf("rollback partial append: %w", rollbackErr))))
+		}
+		return b.fail(fmt.Errorf("storage: append to %s: %w", name, writeErr))
+	}
+	state.bytes += len(line) + 1
+	state.entries++
 	return nil
 }
 
@@ -505,19 +700,39 @@ func (b *Bundle) appendLine(f *os.File, name string, line []byte) error {
 // one by one, and then the run directory itself: a recursive delete of a
 // caller-supplied path is not something a failed create should ever perform,
 // and a directory holding anything unexpected is left standing.
-func (b *Bundle) discard() {
+func (b *Bundle) discard() error {
+	var errs []error
 	for _, f := range []*os.File{b.actions, b.events, b.unparsed} {
 		if f != nil {
-			f.Close()
+			errs = append(errs, f.Close())
 		}
 	}
 	for _, name := range []string{unparsedFile, eventsFile, actionsFile, manifestFile} {
-		os.Remove(b.path(name))
+		if b.dirRoot == nil {
+			break
+		}
+		if err := b.dirRoot.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("storage: remove %s during failed create: %w", name, err))
+		}
 	}
 	if b.dirRoot != nil {
-		b.dirRoot.Close()
+		errs = append(errs, b.dirRoot.Close())
 	}
-	os.Remove(b.dir)
+	if b.parentRoot != nil {
+		errs = append(errs, removeRunDirectoryAt(b.parentRoot, filepath.Base(b.dir)))
+		errs = append(errs, b.parentRoot.Close())
+	}
+	return errors.Join(errs...)
+}
+
+func removeRunDirectoryAt(parent *os.Root, runID string) error {
+	removeErr := parent.Remove(runID)
+	if removeErr != nil {
+		removeErr = fmt.Errorf("storage: remove run directory: %w", removeErr)
+	} else if syncErr := syncRoot(parent); syncErr != nil {
+		removeErr = fmt.Errorf("storage: sync root after removing run directory: %w", syncErr)
+	}
+	return removeErr
 }
 
 func (b *Bundle) path(name string) string { return filepath.Join(b.dir, name) }
@@ -525,7 +740,13 @@ func (b *Bundle) path(name string) string { return filepath.Join(b.dir, name) }
 // writeManifest redacts the manifest and installs it atomically, so a manifest
 // on disk is always a complete one.
 func (b *Bundle) writeManifest() error {
-	raw, err := json.Marshal(b.manifest)
+	manifest := b.manifest
+	argv, err := b.red.RedactArgv(manifest.Argv)
+	if err != nil {
+		return fmt.Errorf("storage: redact manifest argv: %w", err)
+	}
+	manifest.Argv = argv
+	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("storage: encode manifest: %w", err)
 	}
@@ -536,33 +757,45 @@ func (b *Bundle) writeManifest() error {
 		return fmt.Errorf("storage: redact manifest: %w", err)
 	}
 
-	return install(b.path(manifestFile), append(safe, '\n'))
+	return installAt(b.dirRoot, manifestFile, append(safe, '\n'))
 }
 
-// install writes data to path atomically, through a temporary file that is
-// created exclusively and synced before the rename, so what a crash leaves
-// behind is either the previous file or the whole new one, never a partial.
-func install(path string, data []byte) error {
-	name := filepath.Base(path)
-	tmp := path + ".tmp"
-	f, err := createFile(tmp)
+func installAt(root *os.Root, name string, data []byte) error {
+	return installAtWithSync(root, name, data, func(file *os.File) error { return file.Sync() })
+}
+
+func installAtWithSync(root *os.Root, name string, data []byte, syncFile func(*os.File) error) error {
+	return installAtWithOps(root, name, data, syncFile, root.Remove)
+}
+
+func installAtWithOps(root *os.Root, name string, data []byte, syncFile func(*os.File) error, remove func(string) error) (retErr error) {
+	tmp := name + ".tmp"
+	f, err := createFileAt(root, tmp)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
+	tmpPresent := true
+	defer func() {
+		if !tmpPresent {
+			return
+		}
+		if err := remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("storage: remove temporary %s: %w", tmp, err))
+		}
+	}()
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		return fmt.Errorf("storage: write %s: %w", name, err)
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("storage: sync %s: %w", name, err)
+	if err := syncCloseWith(f, syncFile); err != nil {
+		return fmt.Errorf("storage: finish %s: %w", name, err)
 	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("storage: close %s: %w", name, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := root.Rename(tmp, name); err != nil {
 		return fmt.Errorf("storage: install %s: %w", name, err)
+	}
+	tmpPresent = false
+	if err := syncRootWith(root, syncFile); err != nil {
+		return fmt.Errorf("storage: sync directory after installing %s: %w", name, err)
 	}
 	return nil
 }
@@ -571,12 +804,24 @@ func install(path string, data []byte) error {
 // file or symlink. Linking the fully synced temporary file provides no-clobber
 // semantics at the final directory entry.
 func installNewAt(root *os.Root, name string, data []byte) error {
+	return installNewAtWithSync(root, name, data, func(file *os.File) error { return file.Sync() })
+}
+
+func installNewAtWithSync(root *os.Root, name string, data []byte, syncFile func(*os.File) error) (retErr error) {
 	tmp := name + ".tmp"
 	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, fileMode)
 	if err != nil {
 		return fmt.Errorf("storage: create %s: %w", tmp, err)
 	}
-	defer root.Remove(tmp)
+	tmpPresent := true
+	defer func() {
+		if !tmpPresent {
+			return
+		}
+		if err := root.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("storage: remove temporary %s: %w", tmp, err))
+		}
+	}()
 	if err := f.Chmod(fileMode); err != nil {
 		f.Close()
 		return fmt.Errorf("storage: set mode of %s: %w", tmp, err)
@@ -585,25 +830,30 @@ func installNewAt(root *os.Root, name string, data []byte) error {
 		f.Close()
 		return fmt.Errorf("storage: write %s: %w", name, err)
 	}
-	if err := syncClose(f); err != nil {
+	if err := syncCloseWith(f, syncFile); err != nil {
 		return fmt.Errorf("storage: finish %s: %w", name, err)
 	}
 	if err := root.Link(tmp, name); err != nil {
 		return fmt.Errorf("storage: install %s: %w", name, err)
 	}
+	if err := root.Remove(tmp); err != nil {
+		return fmt.Errorf("storage: remove temporary %s after installing %s: %w", tmp, name, err)
+	}
+	tmpPresent = false
+	if err := syncRootWith(root, syncFile); err != nil {
+		return fmt.Errorf("storage: sync directory after installing %s: %w", name, err)
+	}
 	return nil
 }
 
-// createFile opens name for appending, failing if it already exists. The mode
-// is set again after opening because the umask masks the one passed to open.
-func createFile(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, fileMode)
+func createFileAt(root *os.Root, name string) (*os.File, error) {
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, fileMode)
 	if err != nil {
-		return nil, fmt.Errorf("storage: create %s: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("storage: create %s: %w", filepath.Base(name), err)
 	}
 	if err := f.Chmod(fileMode); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("storage: set mode of %s: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("storage: set mode of %s: %w", filepath.Base(name), err)
 	}
 	return f, nil
 }

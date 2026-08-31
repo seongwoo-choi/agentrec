@@ -2481,6 +2481,21 @@ func TestTraceRefusesToVerifyWithoutAPinnableConfiguration(t *testing.T) {
 		write func(t *testing.T, repo string)
 	}{
 		{"missing", func(*testing.T, string) {}},
+		{"empty checks", func(t *testing.T, repo string) {
+			writeVerifyConfig(t, repo, "version: 1\nverify: []\n")
+			gitIn(t, repo, "add", ".")
+			gitIn(t, repo, "commit", "-m", "add empty verification")
+		}},
+		{"omitted checks", func(t *testing.T, repo string) {
+			writeVerifyConfig(t, repo, "version: 1\n")
+			gitIn(t, repo, "add", ".")
+			gitIn(t, repo, "commit", "-m", "omit verification checks")
+		}},
+		{"null checks", func(t *testing.T, repo string) {
+			writeVerifyConfig(t, repo, "version: 1\nverify: null\n")
+			gitIn(t, repo, "add", ".")
+			gitIn(t, repo, "commit", "-m", "null verification checks")
+		}},
 		{"unknown version", func(t *testing.T, repo string) {
 			commitVerifyConfig(t, repo, verifyHelperName, "pass")
 			writeVerifyConfig(t, repo, "version: 2\nverify: []\n")

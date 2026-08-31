@@ -46,7 +46,7 @@ const DefaultKillGrace = 5 * time.Second
 // so it is capped and the rest read and dropped.
 const (
 	initialLineBuffer = 64 << 10
-	maxLineBytes      = 4 << 20
+	maxLineBytes      = storage.MaxStreamLineBytes
 	maxStderrBytes    = 4 << 20
 )
 
@@ -59,6 +59,7 @@ var stderrTruncationMarker = fmt.Sprintf("\n[agentrec: stderr truncated after %d
 var (
 	ErrInterrupted = errors.New("runner: run interrupted")
 	ErrTimedOut    = errors.New("runner: run timed out")
+	ErrOutputDrain = errors.New("runner: provider descendants held output pipes open")
 )
 
 // ParseResult is what a provider parser recovered from an event stream.
@@ -154,10 +155,11 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	// the whole group.
 	setProcessGroup(cmd)
 
-	stdout, stderr, err := pipes(cmd)
+	output, err := pipes(cmd)
 	if err != nil {
 		return unstarted(req.Bundle, res, fmt.Errorf("runner: start %s: %w", req.Command.Executable, err))
 	}
+	defer output.close()
 	// Asked at the final userspace boundary before launch. The watch below can
 	// only end a process that already exists, so an interrupt that arrived while
 	// this run was preparing its command or pipes must prevent that process from
@@ -180,12 +182,13 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	} else if err != nil {
 		return unstarted(req.Bundle, res, fmt.Errorf("runner: start %s: %w", req.Command.Executable, err))
 	}
+	output.closeWriters()
 
 	// Stderr is drained by its own goroutine: a provider that talks on both
 	// streams would otherwise fill the stderr pipe and block itself while the
 	// recorder waits on stdout.
 	stderrDone := make(chan capture, 1)
-	go func() { stderrDone <- drain(stderr) }()
+	go func() { stderrDone <- drain(output.stderr) }()
 
 	// Each complete stdout line is recorded as evidence and handed to the parser
 	// as it arrives, through a pipe rather than a buffer: nothing here waits for
@@ -200,20 +203,52 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		parsed <- parseOutcome{out, err}
 	}()
 	streamed := make(chan teeOutcome, 1)
-	go func() { streamed <- tee(stdout, pw, req.Bundle) }()
+	go func() { streamed <- tee(output.stdout, pw, req.Bundle) }()
 
 	signaller := &groupSignaller{pid: cmd.Process.Pid}
+	leaderExit := observeLeaderExit(cmd.Process.Pid)
 	watcher := watch(ctx, req, grace, signaller)
 
-	// Wait only once every reader is finished: the pipes are closed by Wait, and
-	// what has not been read by then is evidence that never arrives.
-	stream := <-streamed
-	parse := <-parsed
-	stderrOut := <-stderrDone
-
+	// Observe exit without reaping. The leader remains a zombie, so its process-
+	// group id cannot be reused while the watcher sends its final escalation.
+	observeErr := <-leaderExit
+	if observeErr != nil {
+		// Without a reliable exit observation, fail closed while the leader is
+		// definitely still unreaped rather than risk a later signal by numeric id.
+		if err := signaller.send(sigKill); err != nil {
+			observeErr = firstOf(observeErr, err)
+		}
+	}
 	reason := watcher.stop()
 	waitErr := cmd.Wait()
 	signaller.stop()
+
+	type outputs struct {
+		stream teeOutcome
+		parse  parseOutcome
+		stderr capture
+	}
+	outputDone := make(chan outputs, 1)
+	go func() {
+		outputDone <- outputs{stream: <-streamed, parse: <-parsed, stderr: <-stderrDone}
+	}()
+	var out outputs
+	var outputDrainErr error
+	drainTimer := time.NewTimer(grace)
+	select {
+	case out = <-outputDone:
+		if !drainTimer.Stop() {
+			select {
+			case <-drainTimer.C:
+			default:
+			}
+		}
+	case <-drainTimer.C:
+		output.closeReaders()
+		out = <-outputDone
+		outputDrainErr = ErrOutputDrain
+	}
+	stream, parse, stderrOut := out.stream, out.parse, out.stderr
 
 	res.EndedAt = time.Now()
 	res.Duration = res.EndedAt.Sub(res.StartedAt)
@@ -228,9 +263,18 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.ExitCode, res.Signal = exitStatus(cmd.ProcessState)
 	}
 
+	streamErr, stderrErr := stream.err, stderrOut.err
+	if outputDrainErr != nil {
+		if errors.Is(streamErr, os.ErrClosed) {
+			streamErr = nil
+		}
+		if errors.Is(stderrErr, os.ErrClosed) {
+			stderrErr = nil
+		}
+	}
 	storageErr := writeEvidence(req.Bundle, stderrOut.text, parse)
 	if storageErr == nil {
-		storageErr = firstOf(stream.err, stderrOut.err)
+		storageErr = firstOf(streamErr, stderrErr, outputDrainErr)
 	}
 
 	// The supervisor's own reason comes first: a run it ended is described by
@@ -260,6 +304,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		storageErr,
 		parseError(parse.err),
 		waitErr,
+		observeErr,
 		watcher.err,
 	)
 	return finish(req.Bundle, res, runErr)
@@ -306,15 +351,51 @@ func finish(b *storage.Bundle, res Result, runErr error) (Result, error) {
 	return res, firstOf(runErr, resultErr, finalizeErr)
 }
 
+// outputPipes are owned by Run rather than exec.Cmd. That lets Run reap the
+// leader before waiting for EOF and still bound descendants that inherited the
+// writers, without signalling a process-group id after it may have been reused.
+type outputPipes struct {
+	stdout       *os.File
+	stdoutWriter *os.File
+	stderr       *os.File
+	stderrWriter *os.File
+}
+
 // pipes opens the provider's output streams before it starts.
-func pipes(cmd *exec.Cmd) (stdout, stderr io.Reader, err error) {
-	if stdout, err = cmd.StdoutPipe(); err != nil {
-		return nil, nil, fmt.Errorf("open stdout: %w", err)
+func pipes(cmd *exec.Cmd) (*outputPipes, error) {
+	stdout, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("open stdout: %w", err)
 	}
-	if stderr, err = cmd.StderrPipe(); err != nil {
-		return nil, nil, fmt.Errorf("open stderr: %w", err)
+	stderr, stderrWriter, err := os.Pipe()
+	if err != nil {
+		stdout.Close()
+		stdoutWriter.Close()
+		return nil, fmt.Errorf("open stderr: %w", err)
 	}
-	return stdout, stderr, nil
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
+	return &outputPipes{
+		stdout:       stdout,
+		stdoutWriter: stdoutWriter,
+		stderr:       stderr,
+		stderrWriter: stderrWriter,
+	}, nil
+}
+
+func (p *outputPipes) closeWriters() {
+	p.stdoutWriter.Close()
+	p.stderrWriter.Close()
+}
+
+func (p *outputPipes) closeReaders() {
+	p.stdout.Close()
+	p.stderr.Close()
+}
+
+func (p *outputPipes) close() {
+	p.closeWriters()
+	p.closeReaders()
 }
 
 // teeOutcome is what recording the stdout stream came to: how many lines were
@@ -460,6 +541,13 @@ func watch(ctx context.Context, req Request, grace time.Duration, signaller *gro
 		ask := sigInterrupt
 		select {
 		case <-t.done:
+			// The leader has exited normally but remains unreaped, so its process-
+			// group id is still safe to signal. Anything else in that group has
+			// outlived the provider and must not keep mutating the repository while
+			// evidence and verification are finalized.
+			if err := signaller.send(sigKill); !errors.Is(err, os.ErrPermission) {
+				t.err = err
+			}
 			return
 		case <-ctx.Done():
 			t.reason = ReasonInterrupted

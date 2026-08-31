@@ -10,6 +10,8 @@ import (
 	"os"
 	"slices"
 	"strconv"
+
+	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
 const providerEventsFile = "provider-events.sanitized.jsonl"
@@ -18,8 +20,8 @@ const (
 	maxEventBytes       = maxActionBytes
 	maxEventStreamBytes = maxActionStreamBytes
 	maxEvents           = maxActions
-	maxEventDepth       = 64
-	maxEventTokens      = 1_000_000
+	maxEventDepth       = storage.MaxProviderEventDepth
+	maxEventTokens      = storage.MaxProviderEventTokens
 )
 
 type providerEvent struct {
@@ -188,49 +190,7 @@ func readProviderEvents(root *os.Root) ([]providerEvent, bool, error) {
 }
 
 func validateEventObject(raw []byte, remainingTokens int) (int, error) {
-	if remainingTokens <= 0 {
-		return 0, fmt.Errorf("event stream holds more than %d JSON tokens", maxEventTokens)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	depth, tokens := 0, 0
-	for {
-		token, err := decoder.Token()
-		if errors.Is(err, io.EOF) {
-			if depth != 0 || tokens == 0 {
-				return 0, errors.New("event is not a JSON object")
-			}
-			return tokens, nil
-		}
-		if err != nil {
-			return 0, fmt.Errorf("event is not a JSON object: %w", err)
-		}
-		tokens++
-		if tokens > remainingTokens {
-			return 0, fmt.Errorf("event stream holds more than %d JSON tokens", maxEventTokens)
-		}
-		delim, isDelim := token.(json.Delim)
-		if tokens == 1 && (!isDelim || delim != '{') {
-			return 0, errors.New("event is not a JSON object")
-		}
-		if isDelim {
-			switch delim {
-			case '{', '[':
-				depth++
-				if depth > maxEventDepth {
-					return 0, fmt.Errorf("event nesting exceeds %d", maxEventDepth)
-				}
-			case '}', ']':
-				depth--
-				if depth == 0 {
-					if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-						return 0, errors.New("event holds more than one JSON value")
-					}
-					return tokens, nil
-				}
-			}
-		}
-	}
+	return storage.ValidateProviderEvent(raw, remainingTokens)
 }
 
 func renderEventSummary(w io.Writer, runID string, present bool, events []providerEvent) error {

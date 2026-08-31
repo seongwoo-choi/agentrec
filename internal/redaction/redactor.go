@@ -19,7 +19,7 @@ import (
 // It is bumped whenever a rule is added or changed: two bundles stamped with
 // different versions were judged by different rules, and a reader comparing
 // their redaction counts has to know that.
-const RuleVersion = "2"
+const RuleVersion = "6"
 
 // secretSuffixes are the canonicalized field-name endings whose string values
 // are treated as secret material. Matching on the ending rather than on a
@@ -97,6 +97,36 @@ func (r *Redactor) RedactJSON(raw []byte) ([]byte, error) {
 	return out, nil
 }
 
+// RedactArgv returns a copy of argv with values following secret-bearing option
+// names replaced by run-local markers. JSON field redaction sees argv only as
+// an array, so it cannot otherwise associate a value with the preceding flag.
+func (r *Redactor) RedactArgv(argv []string) ([]string, error) {
+	out := slices.Clone(argv)
+	for i := 0; i < len(out); i++ {
+		arg := out[i]
+		if arg == "--" {
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		name, value, inline := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		if name == "" || !isSecretName(name) {
+			continue
+		}
+		if inline {
+			out[i] = arg[:strings.IndexByte(arg, '=')+1] + r.marker(value)
+			continue
+		}
+		if i+1 == len(out) || strings.HasPrefix(out[i+1], "-") {
+			return nil, errors.New("redaction: secret-bearing option has no unambiguous separate value; use --secret-option=<value>")
+		}
+		out[i+1] = r.marker(out[i+1])
+		i++
+	}
+	return out, nil
+}
+
 // decodeOne decodes exactly one JSON value from raw, rejecting anything that
 // follows it. Numbers are kept as text so a value survives the round trip
 // unchanged.
@@ -141,7 +171,16 @@ func (r *Redactor) redactValue(v any, name string, depth int) any {
 		}
 		return out
 	case string:
-		if isSecretName(name) && len(val) >= minSecretLen {
+		if isSecretName(name) {
+			if marker, ok := r.markers[val]; ok {
+				return marker
+			}
+			if len(val) < minSecretLen {
+				if safe, ok := r.replaceKnownSecrets(val); ok {
+					return safe
+				}
+				return r.redactText(val, depth)
+			}
 			// A value that is already a marker came from an earlier pass over
 			// this run's output. Marking it again would spend a second marker on
 			// text that is not the secret, losing the correlation the first one
@@ -197,6 +236,29 @@ func (r *Redactor) marker(secret string) string {
 	m := fmt.Sprintf("[REDACTED:%d]", len(r.markers)+1)
 	r.markers[secret] = m
 	return m
+}
+
+func (r *Redactor) replaceKnownSecrets(text string) (string, bool) {
+	secrets := slices.Collect(maps.Keys(r.markers))
+	slices.SortFunc(secrets, func(a, b string) int {
+		if len(a) > len(b) {
+			return -1
+		}
+		if len(a) < len(b) {
+			return 1
+		}
+		return strings.Compare(a, b)
+	})
+	pairs := make([]string, 0, len(secrets)*2)
+	for _, secret := range secrets {
+		if secret != "" && strings.Contains(text, secret) {
+			pairs = append(pairs, secret, r.markers[secret])
+		}
+	}
+	if len(pairs) == 0 {
+		return text, false
+	}
+	return strings.NewReplacer(pairs...).Replace(text), true
 }
 
 // canonicalMarker returns the marker for a value that is replaced whole: an

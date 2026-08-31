@@ -44,6 +44,26 @@ type viewRunSummary struct {
 	StartedAt    time.Time `json:"startedAt"`
 	Exit         string    `json:"exit"`
 	Verification string    `json:"verification"`
+	StatusClass  string    `json:"statusClass"`
+	StatusLabel  string    `json:"statusLabel"`
+}
+
+func viewStatusClass(value string) string {
+	switch strings.ToLower(value) {
+	case "pass", "passed", "completed", "success":
+		return "pass"
+	case "fail", "failed", "error", "timeout", "nonzero", "interrupted", "parse_error", "storage_error", "start_error":
+		return "fail"
+	default:
+		return ""
+	}
+}
+
+func viewRunListStatus(exit, verification string) (string, string) {
+	if viewStatusClass(exit) == "fail" {
+		return "fail", exit
+	}
+	return viewStatusClass(verification), verification
 }
 
 type viewRunInfo struct {
@@ -236,9 +256,11 @@ func newViewHandler(root, initialRunID string) *viewHandler {
 		}
 		out := make([]viewRunSummary, 0, len(runs))
 		for _, run := range runs {
+			statusClass, statusLabel := viewRunListStatus(run.Exit, run.Verification)
 			out = append(out, viewRunSummary{
 				ID: run.ID, Provider: run.Provider, Project: run.Project,
 				StartedAt: run.StartedAt, Exit: run.Exit, Verification: run.Verification,
+				StatusClass: statusClass, StatusLabel: statusLabel,
 			})
 		}
 		writeViewJSON(w, viewRunListResponse{1, initialRunID, unreadable, out})

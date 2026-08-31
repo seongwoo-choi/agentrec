@@ -38,6 +38,54 @@ func TestSnapshotDetectsSameSizeRewriteWithRestoredMtime(t *testing.T) {
 	}
 }
 
+func TestSnapshotDetectsGitIndexExtendedFlagChanges(t *testing.T) {
+	for _, flag := range []string{"--assume-unchanged", "--skip-worktree"} {
+		t.Run(flag, func(t *testing.T) {
+			repo := gitRepo(t)
+			p := &PinnedVerification{repoRoot: repo}
+			before, err := p.snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			runGit(t, repo, "update-index", flag, "b.txt")
+			after, err := p.snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if before.index == after.index {
+				t.Fatalf("index fingerprint did not change after %s", flag)
+			}
+			if changed := changedPaths(before, after); len(changed) != 0 {
+				t.Fatalf("content fingerprints changed after index-only flag update: %v", changed)
+			}
+		})
+	}
+}
+
+func TestSnapshotDetectsSplitIndexTopologyChanges(t *testing.T) {
+	repo := gitRepo(t)
+	p := &PinnedVerification{repoRoot: repo}
+	before, err := p.snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, repo, "update-index", "--split-index")
+	after, err := p.snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if before.index == after.index {
+		t.Fatal("index fingerprint did not change after enabling split index")
+	}
+	if changed := changedPaths(before, after); len(changed) != 0 {
+		t.Fatalf("content fingerprints changed after split-index update: %v", changed)
+	}
+}
+
 func TestFingerprintPathsRejectsInvalidWorkerCount(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()

@@ -107,6 +107,15 @@ carries the tag, the full commit SHA and an RFC 3339 timestamp; a build made any
 other way reports `dev`, `unknown` and `unknown`, so an unstamped binary is never
 mistaken for a released one.
 
+The latest tagged release is `v0.1.0`. It does not contain `shadow run`,
+`events`, or `view`; those commands documented below are currently on `main`
+and unreleased. To use every command described in this README, install the
+current source from an existing checkout of `main`:
+
+```bash
+go install ./cmd/agentrec
+```
+
 **Commit the verification config.** A run is verified only against checks the
 repository already held. Copy `.agentrec.example.yaml` to `.agentrec.yaml` and
 commit it — each command is launched directly, with no shell, so an argument is

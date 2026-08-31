@@ -219,6 +219,199 @@ func TestViewFingerprintDetectsReplacedEvidenceFile(t *testing.T) {
 	}
 }
 
+func TestViewFingerprintDetectsSameMetadataContentRewrite(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-content-fingerprint", "claude", early, "completed")
+	runRoot, err := openRunRoot(root, "run-content-fingerprint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runRoot.Close()
+	resultPath := filepath.Join(root, "run-content-fingerprint", processDir, resultFile)
+	info, err := os.Stat(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := viewRunFingerprint(runRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten := bytes.Clone(raw)
+	rewritten[0] ^= 1
+	if err := os.WriteFile(resultPath, rewritten, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(resultPath, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := viewRunFingerprint(runRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sameViewFingerprint(before, after) {
+		t.Fatal("fingerprint accepted an in-place content rewrite with restored metadata")
+	}
+}
+
+func TestViewSnapshotCaptureRejectsABAContent(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-aba", "claude", early, "completed")
+	runRoot, err := openRunRoot(root, "run-aba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runRoot.Close()
+	resultPath := filepath.Join(root, "run-aba", processDir, resultFile)
+	info, err := os.Stat(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := viewRunFingerprint(runRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten := bytes.Clone(original)
+	rewritten[0] ^= 1
+	if err := os.WriteFile(resultPath, rewritten, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(resultPath, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := &viewSnapshot{}
+	copyErr := captureViewRun(runRoot, before, snapshot)
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resultPath, original, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(resultPath, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := viewRunFingerprint(runRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !sameViewFingerprint(before, after) {
+		t.Fatal("ABA test did not restore the endpoint fingerprint")
+	}
+	if copyErr == nil || !strings.Contains(copyErr.Error(), "changed") {
+		t.Fatalf("captureViewRun error = %v, want consumed-content mismatch", copyErr)
+	}
+}
+
+func TestViewSnapshotCreateRejectsMutationAfterCapture(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-create-mutation", "claude", early, "completed")
+	resultPath := filepath.Join(root, "run-create-mutation", processDir, resultFile)
+	info, err := os.Stat(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newViewSnapshotStore(root)
+	store.afterCopy = func() {
+		rewritten := bytes.Clone(original)
+		rewritten[0] ^= 1
+		if err := os.WriteFile(resultPath, rewritten, info.Mode().Perm()); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(resultPath, info.ModTime(), info.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = store.create("run-create-mutation")
+	if err == nil || !strings.Contains(err.Error(), "run changed") {
+		t.Fatalf("create error = %v, want coherent-snapshot retry", err)
+	}
+	if len(store.byID) != 0 {
+		t.Fatalf("registered snapshots = %d, want 0", len(store.byID))
+	}
+}
+
+func TestViewSnapshotCreateCannotRegisterAfterStoreClose(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-close-race", "claude", early, "completed")
+	store := newViewSnapshotStore(root)
+	captured := make(chan struct{})
+	resume := make(chan struct{})
+	store.afterCopy = func() {
+		close(captured)
+		<-resume
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.create("run-close-race")
+		result <- err
+	}()
+	<-captured
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	close(resume)
+	if err := <-result; err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("create error = %v, want closed store", err)
+	}
+	if len(store.byID) != 0 || len(store.ids) != 0 {
+		t.Fatalf("closed store was repopulated: byID=%d ids=%d", len(store.byID), len(store.ids))
+	}
+}
+
+func TestViewSnapshotIgnoresUnparsedArtifactWhenManifestCountIsZero(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-zero-unparsed", "claude", early, "completed")
+	if err := os.Symlink("missing", filepath.Join(root, "run-zero-unparsed", unparsedFile)); err != nil {
+		t.Fatal(err)
+	}
+	store := newViewSnapshotStore(root)
+	t.Cleanup(func() { _ = store.Close() })
+
+	if _, err := store.create("run-zero-unparsed"); err != nil {
+		t.Fatalf("create rejected an ignored zero-count unparsed artifact: %v", err)
+	}
+}
+
+func TestViewStreamCaptureFailsWhenAnonymousUnlinkFails(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-unlink-failure", "claude", early, "completed")
+	runRoot, err := openRunRoot(root, "run-unlink-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runRoot.Close()
+	identity, err := viewFileFingerprint(runRoot, actionsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	file, _, err := captureViewStreamWithUnlink(runRoot, actionsFile, identity, func(string) error {
+		return os.ErrPermission
+	})
+	if file != nil {
+		file.Close()
+		t.Fatal("capture returned a stream after unlink failed")
+	}
+	if err == nil || !strings.Contains(err.Error(), "unlink viewer stream snapshot") {
+		t.Fatalf("capture error = %v, want unlink failure", err)
+	}
+}
+
 func TestViewSnapshotKeepsImmutableStreamBytes(t *testing.T) {
 	root := home(t)
 	b, err := storage.Create(root, "run-immutable", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})
@@ -237,7 +430,12 @@ func TestViewSnapshotKeepsImmutableStreamBytes(t *testing.T) {
 	}
 	viewJSONRequest(t, handler, "/api/runs/run-immutable", &detail)
 	snapshot := handler.snapshots.byID[detail.SnapshotID]
-	tempPath := snapshot.actionTemp
+	if _, err := os.Stat(snapshot.actions.Name()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("action snapshot still has a reachable pathname: %v", err)
+	}
+	if _, err := snapshot.actions.WriteAt([]byte("x"), 0); err == nil {
+		t.Fatal("action snapshot retained write capability")
+	}
 
 	actionsPath := filepath.Join(root, "run-immutable", actionsFile)
 	raw, err := os.ReadFile(actionsPath)
@@ -255,11 +453,6 @@ func TestViewSnapshotKeepsImmutableStreamBytes(t *testing.T) {
 	}
 	if err := handler.Close(); err != nil {
 		t.Fatal(err)
-	}
-	if tempPath != "" {
-		if _, err := os.Stat(tempPath); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("snapshot temp file still exists: %v", err)
-		}
 	}
 }
 
@@ -310,6 +503,37 @@ func TestViewHandlerServesSelfContainedReadOnlyUIWithSecurityHeaders(t *testing.
 	}
 }
 
+func TestViewRunListKeepsUnavailableVerificationNeutral(t *testing.T) {
+	tests := []struct {
+		name, exit, verification, wantClass, wantLabel string
+	}{
+		{"unavailable verification", "completed", "UNAVAILABLE", "", "UNAVAILABLE"},
+		{"passed verification", "completed", "PASS", "pass", "PASS"},
+		{"failed verification", "completed", "FAIL", "fail", "FAIL"},
+		{"unknown verification", "completed", "FUTURE", "", "FUTURE"},
+		{"process failure", "storage_error", "PASS", "fail", "storage_error"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotClass, gotLabel := viewRunListStatus(test.exit, test.verification)
+			if gotClass != test.wantClass || gotLabel != test.wantLabel {
+				t.Fatalf("status = (%q, %q), want (%q, %q)", gotClass, gotLabel, test.wantClass, test.wantLabel)
+			}
+		})
+	}
+	body, err := viewAssets.ReadFile("ui_assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	if !strings.Contains(script, "run.statusClass") || !strings.Contains(script, "run.statusLabel") {
+		t.Fatal("run list does not render the server-classified status")
+	}
+	if strings.Contains(script, "function runListStatus(run)") {
+		t.Fatal("run list still has a second client-side status classifier")
+	}
+}
+
 func TestViewRunListIsNewestFirstAndNamesInitialRun(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-old", "claude", early, "completed")
@@ -325,7 +549,9 @@ func TestViewRunListIsNewestFirstAndNamesInitialRun(t *testing.T) {
 	var body struct {
 		InitialRunID string `json:"initialRunId"`
 		Runs         []struct {
-			ID string `json:"id"`
+			ID          string `json:"id"`
+			StatusClass string `json:"statusClass"`
+			StatusLabel string `json:"statusLabel"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
@@ -336,6 +562,11 @@ func TestViewRunListIsNewestFirstAndNamesInitialRun(t *testing.T) {
 	}
 	if len(body.Runs) != 2 || body.Runs[0].ID != "run-new" || body.Runs[1].ID != "run-old" {
 		t.Fatalf("runs = %+v", body.Runs)
+	}
+	for _, run := range body.Runs {
+		if run.StatusClass != "" || run.StatusLabel != "UNAVAILABLE" {
+			t.Errorf("run %s status = (%q, %q), want neutral UNAVAILABLE", run.ID, run.StatusClass, run.StatusLabel)
+		}
 	}
 }
 

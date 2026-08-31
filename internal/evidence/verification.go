@@ -636,13 +636,19 @@ func (p *PinnedVerification) snapshotWithWorkers(ctx context.Context, fingerprin
 		snap.head = string(bytes.TrimRight(head, "\n"))
 	}
 
-	// The index in full — mode, object and stage of every entry — so that
-	// something staged during the checks is a change even when the worktree
-	// still reads the same.
-	index, err := gitAt(ctx, p.repoRoot, maxListBytes, "ls-files", "--stage", "-z")
+	// Keep the logical entry representation for stable semantic coverage, and
+	// include the raw index bytes so extensions and storage topology changes such
+	// as enabling split-index cannot disappear behind identical entries.
+	index, err := gitAt(ctx, p.repoRoot, maxListBytes, "ls-files", "--stage", "-v", "-z")
 	if err != nil {
 		return repoSnapshot{}, fmt.Errorf("evidence: read the index: %w", err)
 	}
+	rawIndex, err := gitIndexFingerprint(ctx, p.repoRoot)
+	if err != nil {
+		return repoSnapshot{}, err
+	}
+	index = append(index, 0)
+	index = append(index, rawIndex...)
 	snap.index = hashOf(index)
 
 	tracked, err := gitAt(ctx, p.repoRoot, maxListBytes, "ls-files", "-z")
@@ -685,6 +691,31 @@ func (p *PinnedVerification) snapshotWithWorkers(ctx context.Context, fingerprin
 		return repoSnapshot{}, fmt.Errorf("evidence: fingerprint repository files: %w", err)
 	}
 	return snap, nil
+}
+
+func gitIndexFingerprint(ctx context.Context, repoRoot string) ([]byte, error) {
+	rawPath, err := gitAt(ctx, repoRoot, maxSmallBytes, "rev-parse", "--path-format=absolute", "--git-path", "index")
+	if err != nil {
+		return nil, fmt.Errorf("evidence: locate the index: %w", err)
+	}
+	path := string(bytes.TrimSpace(rawPath))
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("evidence: open the index: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("evidence: inspect the index: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("evidence: index is not a regular file")
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
+		return nil, fmt.Errorf("evidence: hash the index: %w", err)
+	}
+	return h.Sum(nil), nil
 }
 
 const snapshotFingerprintWorkers = 16
@@ -891,6 +922,9 @@ func parseVerifyConfig(raw []byte) ([]verifyEntry, error) {
 	}
 	if doc.Version == nil || *doc.Version != verifyConfigVersion {
 		return nil, fmt.Errorf("evidence: the verification config is not version %d", verifyConfigVersion)
+	}
+	if len(doc.Verify) == 0 {
+		return nil, errors.New("evidence: the verification config has no checks")
 	}
 
 	seen := map[string]bool{}

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,6 +29,466 @@ func testManifest() Manifest {
 		Argv:            []string{"agentrec", "trace", "--", "claude", "-p", "hello"},
 		CWD:             "/workspace/project",
 		StartedAt:       time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestInstallAtSyncsFileBeforeRenameAndDirectoryAfter(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	var stages []string
+	syncFile := func(file *os.File) error {
+		info, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if _, err := root.Lstat(manifestFile); err != nil {
+				t.Fatalf("directory synced before install: %v", err)
+			}
+			if _, err := root.Lstat(manifestFile + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("temporary manifest at directory sync: %v", err)
+			}
+			stages = append(stages, "directory")
+			return nil
+		}
+		if _, err := root.Lstat(manifestFile); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("manifest installed before file sync: %v", err)
+		}
+		stages = append(stages, "file")
+		return nil
+	}
+
+	if err := installAtWithSync(root, manifestFile, []byte("{}\n"), syncFile); err != nil {
+		t.Fatalf("installAtWithSync: %v", err)
+	}
+	if got := strings.Join(stages, ","); got != "file,directory" {
+		t.Fatalf("sync stages = %q, want file,directory", got)
+	}
+}
+
+func TestInstallAtReportsTemporaryCleanupFailure(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	syncErr := errors.New("injected file sync failure")
+	removeErr := errors.New("injected temporary cleanup failure")
+	err = installAtWithOps(
+		root,
+		manifestFile,
+		[]byte("manifest"),
+		func(*os.File) error { return syncErr },
+		func(string) error { return removeErr },
+	)
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("error lost sync failure: %v", err)
+	}
+	if !errors.Is(err, removeErr) {
+		t.Fatalf("error lost cleanup failure: %v", err)
+	}
+}
+
+func TestInstallNewAtSyncsFileBeforeLinkAndDirectoryAfter(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	var stages []string
+	syncFile := func(file *os.File) error {
+		info, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if _, err := root.Lstat(usageFile); err != nil {
+				t.Fatalf("directory synced before link: %v", err)
+			}
+			if _, err := root.Lstat(usageFile + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("temporary link at directory sync: %v", err)
+			}
+			stages = append(stages, "directory")
+			return nil
+		}
+		if _, err := root.Lstat(usageFile); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("artifact linked before file sync: %v", err)
+		}
+		stages = append(stages, "file")
+		return nil
+	}
+
+	if err := installNewAtWithSync(root, usageFile, []byte("{}\n"), syncFile); err != nil {
+		t.Fatalf("installNewAtWithSync: %v", err)
+	}
+	if got := strings.Join(stages, ","); got != "file,directory" {
+		t.Fatalf("sync stages = %q, want file,directory", got)
+	}
+}
+
+func TestFinishNewFileAtSyncsFileBeforeDirectory(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	file, err := createFileAt(root, promptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("prompt\n"); err != nil {
+		t.Fatal(err)
+	}
+	var stages []string
+	syncFile := func(target *os.File) error {
+		info, err := target.Stat()
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			stages = append(stages, "directory")
+		} else {
+			stages = append(stages, "file")
+		}
+		return nil
+	}
+
+	if err := finishNewFileAtWithSync(root, promptFile, file, syncFile); err != nil {
+		t.Fatalf("finishNewFileAtWithSync: %v", err)
+	}
+	if got := strings.Join(stages, ","); got != "file,directory" {
+		t.Fatalf("sync stages = %q, want file,directory", got)
+	}
+}
+
+func TestCreateRunRootSyncsParentAfterDirectoryCreation(t *testing.T) {
+	parent, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	var synced bool
+	syncFile := func(file *os.File) error {
+		info, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			t.Fatal("parent sync target is not a directory")
+		}
+		if child, err := parent.Lstat("run-durable"); err != nil || !child.IsDir() {
+			t.Fatalf("run directory before parent sync = %v, %v", child, err)
+		}
+		synced = true
+		return nil
+	}
+
+	runRoot, err := createRunRootAtWithSync(parent, "run-durable", syncFile)
+	if err != nil {
+		t.Fatalf("createRunRootAtWithSync: %v", err)
+	}
+	defer runRoot.Close()
+	if !synced {
+		t.Fatal("parent directory was not synced")
+	}
+}
+
+func TestEnsureRootSyncsEveryNewDirectoryEntry(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "agentrec", "runs")
+	var synced []string
+	syncFile := func(file *os.File) error {
+		synced = append(synced, filepath.Base(file.Name()))
+		return nil
+	}
+
+	if err := ensureRootWithSync(root, syncFile); err != nil {
+		t.Fatalf("ensureRootWithSync: %v", err)
+	}
+	if got := len(synced); got != 3 {
+		t.Fatalf("synced directories = %v, want anchor parent plus two new-entry syncs", synced)
+	}
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		t.Fatalf("root = %v, %v", info, err)
+	}
+}
+
+func TestEnsureRootRetryResyncsExistingAncestorParent(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "agentrec", "runs")
+	failFirst := true
+	err := ensureRootWithSync(root, func(*os.File) error {
+		if failFirst {
+			failFirst = false
+			return errors.New("injected sync failure")
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("first root creation ignored sync failure")
+	}
+	var syncs int
+	if err := ensureRootWithSync(root, func(*os.File) error {
+		syncs++
+		return nil
+	}); err != nil {
+		t.Fatalf("retry ensureRootWithSync: %v", err)
+	}
+	if syncs != 3 {
+		t.Fatalf("retry sync count = %d, want anchor parent plus two new directory entries", syncs)
+	}
+}
+
+func TestCreateProcessRootSyncsRunDirectory(t *testing.T) {
+	runRoot, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runRoot.Close()
+	var synced bool
+	processRoot, err := createProcessRootAtWithSync(runRoot, func(file *os.File) error {
+		if _, err := runRoot.Lstat(processDirName); err != nil {
+			t.Fatalf("process directory before parent sync: %v", err)
+		}
+		synced = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("createProcessRootAtWithSync: %v", err)
+	}
+	defer processRoot.Close()
+	if !synced {
+		t.Fatal("run directory was not synced")
+	}
+}
+
+func TestDiscardReportsRunDirectoryCleanupFailure(t *testing.T) {
+	root := t.TempDir()
+	b, err := Create(root, "run-cleanup", testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b.Dir(), "unexpected"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = b.discard()
+	if err == nil || !strings.Contains(err.Error(), "remove run directory") {
+		t.Fatalf("discard error = %v, want run-directory cleanup failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(b.Dir(), "unexpected")); err != nil {
+		t.Fatalf("unexpected content was removed: %v", err)
+	}
+}
+
+func TestDiscardUsesHeldParentAfterRootPathReplacement(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "runs")
+	b, err := Create(root, "run-held-parent", testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := root + "-moved"
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	replacementRun := filepath.Join(root, "run-held-parent")
+	if err := os.MkdirAll(replacementRun, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.discard(); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if info, err := os.Stat(replacementRun); err != nil || !info.IsDir() {
+		t.Fatalf("replacement run was removed: %v, %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "run-held-parent")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("held original run still exists: %v", err)
+	}
+}
+
+func TestCreateRedactsSeparateSecretFlagValueInManifest(t *testing.T) {
+	manifest := testManifest()
+	secret := "tiny"
+	manifest.Argv = []string{"claude", "--api-key", secret, "--token", secret, "-p", "hello"}
+	originalArgv := slices.Clone(manifest.Argv)
+
+	b, err := Create(t.TempDir(), "run-1", manifest)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	assertRedacted := func(stage string) {
+		t.Helper()
+		got := readManifest(t, b)
+		if slices.Contains(got.Argv, secret) {
+			t.Fatalf("%s manifest persisted the separate secret flag value verbatim", stage)
+		}
+		for _, index := range []int{2, 4} {
+			if got.Argv[index] != "[REDACTED:1]" {
+				t.Errorf("%s manifest argv[%d] = %q, want [REDACTED:1]", stage, index, got.Argv[index])
+			}
+		}
+		if got.RedactionRuleVersion != "6" {
+			t.Errorf("%s redactionRuleVersion = %q, want 6", stage, got.RedactionRuleVersion)
+		}
+	}
+	assertRedacted("initial")
+	if !slices.Equal(manifest.Argv, originalArgv) {
+		t.Fatalf("Create mutated caller argv to %#v, want %#v", manifest.Argv, originalArgv)
+	}
+
+	if err := b.Finalize(Finalization{EndedAt: time.Now(), ExitReason: "completed"}); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	assertRedacted("final")
+	if !slices.Equal(manifest.Argv, originalArgv) {
+		t.Fatalf("Finalize mutated caller argv to %#v, want %#v", manifest.Argv, originalArgv)
+	}
+}
+
+func TestArgvEstablishedShortSecretStaysRedactedInSecretNamedFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+		want  string
+	}{
+		{"exact", `{"api_key":"tiny","note":"tiny"}`, `{"api_key":"[REDACTED:1]","note":"tiny"}`},
+		{"padded", `{"api_key":" tiny "}`, `{"api_key":" [REDACTED:1] "}`},
+		{"quoted", `{"api_key":"\"tiny\""}`, `{"api_key":"\"[REDACTED:1]\""}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest := testManifest()
+			manifest.Argv = []string{"claude", "--api-key", "tiny"}
+			b, err := Create(t.TempDir(), "run-1", manifest)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+
+			if err := b.WriteProviderEvent([]byte(tt.event)); err != nil {
+				t.Fatalf("WriteProviderEvent: %v", err)
+			}
+			lines := readLines(t, filepath.Join(b.Dir(), eventsFile))
+			if len(lines) != 1 || lines[0] != tt.want {
+				t.Fatalf("provider events = %#v, want %q", lines, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateRedactsInlineSecretFlagValueInManifest(t *testing.T) {
+	manifest := testManifest()
+	manifest.Argv = []string{"claude", "--api-key=-credential-value", "-p", "hello"}
+
+	b, err := Create(t.TempDir(), "run-1", manifest)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got := readManifest(t, b)
+	if got.Argv[1] != "--api-key=[REDACTED:1]" {
+		t.Errorf("manifest argv secret = %q, want --api-key=[REDACTED:1]", got.Argv[1])
+	}
+}
+
+func TestCreateRedactsFinalInlineSecretFlagValueInManifest(t *testing.T) {
+	manifest := testManifest()
+	manifest.Argv = []string{"claude", "--api-key=tiny"}
+
+	b, err := Create(t.TempDir(), "run-1", manifest)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got := readManifest(t, b)
+	if got.Argv[1] != "--api-key=[REDACTED:1]" {
+		t.Errorf("manifest argv secret = %q, want --api-key=[REDACTED:1]", got.Argv[1])
+	}
+}
+
+func TestCreateDoesNotLetMarkerShapedCredentialsCollide(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+	}{
+		{"separate", []string{"claude", "--api-key", "[REDACTED:1]", "--token", "different-secret"}},
+		{"inline", []string{"claude", "--api-key=[REDACTED:1]", "--token", "different-secret"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest := testManifest()
+			manifest.Argv = tt.argv
+			b, err := Create(t.TempDir(), "run-1", manifest)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			got := readManifest(t, b).Argv
+			if got[len(got)-1] != "[REDACTED:2]" {
+				t.Errorf("second credential = %q, want [REDACTED:2]", got[len(got)-1])
+			}
+		})
+	}
+}
+
+func TestMarkerShapedCredentialKeepsItsOwnMarkerInLaterArtifacts(t *testing.T) {
+	manifest := testManifest()
+	manifest.Argv = []string{"claude", "--api-key", "normal-secret", "--token", "[REDACTED:1]"}
+	b, err := Create(t.TempDir(), "run-1", manifest)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := readManifest(t, b).Argv[4]; got != "[REDACTED:2]" {
+		t.Fatalf("marker-shaped credential = %q, want [REDACTED:2]", got)
+	}
+
+	if err := b.WriteProviderEvent([]byte(`{"api_key":"[REDACTED:1]"}`)); err != nil {
+		t.Fatalf("WriteProviderEvent: %v", err)
+	}
+	lines := readLines(t, filepath.Join(b.Dir(), eventsFile))
+	if len(lines) != 1 || lines[0] != `{"api_key":"[REDACTED:2]"}` {
+		t.Fatalf("provider events = %#v, want marker-shaped credential correlation", lines)
+	}
+}
+
+func TestCreateRejectsAmbiguousSeparateSecretValues(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+	}{
+		{"missing", []string{"claude", "--api-key"}},
+		{"delimiter", []string{"claude", "--api-key", "--", "--token", "visible"}},
+		{"another option", []string{"claude", "--api-key", "--verbose", "visible"}},
+		{"hyphen-leading value", []string{"claude", "--api-key", "-credential-value"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testManifest()
+			manifest.Argv = tt.argv
+
+			if _, err := Create(root, "run-1", manifest); err == nil {
+				t.Fatal("Create succeeded, want ambiguous secret option rejection")
+			} else {
+				if !strings.Contains(err.Error(), "use --secret-option=<value>") {
+					t.Errorf("Create error = %q, want safe inline-value guidance", err)
+				}
+				if strings.Contains(err.Error(), "credential-value") {
+					t.Errorf("Create error leaked the ambiguous value: %q", err)
+				}
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Errorf("rejected Create left %d run entries, want none", len(entries))
+			}
+		})
 	}
 }
 
@@ -127,6 +589,83 @@ func TestWriteUsageStaysInOriginalRunDirectoryAfterAncestorReplacement(t *testin
 	}
 	if _, err := os.Stat(filepath.Join(outside, usageFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("outside usage artifact: %v", err)
+	}
+}
+
+func TestBundleWritesStayInOriginalRunDirectoryAfterAncestorReplacement(t *testing.T) {
+	root := t.TempDir()
+	b, err := Create(root, "run-1", testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(root, "original")
+	if err := os.Rename(b.Dir(), original); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, b.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.WritePrompt("prompt"); err != nil {
+		t.Fatalf("WritePrompt: %v", err)
+	}
+	if err := b.WriteUnparsedLine([]byte("notice")); err != nil {
+		t.Fatalf("WriteUnparsedLine: %v", err)
+	}
+	if err := b.WriteProcessStderr("stderr"); err != nil {
+		t.Fatalf("WriteProcessStderr: %v", err)
+	}
+	if err := b.WriteProcessResult([]byte(`{"exitReason":"completed"}`)); err != nil {
+		t.Fatalf("WriteProcessResult: %v", err)
+	}
+	if err := b.Finalize(Finalization{EndedAt: time.Now(), ExitReason: "completed", UnparsedLines: 1}); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	for _, name := range []string{promptFile, unparsedFile, filepath.Join(processDirName, stderrFile), filepath.Join(processDirName, resultFile), manifestFile} {
+		if _, err := os.Stat(filepath.Join(original, name)); err != nil {
+			t.Errorf("original artifact %s: %v", name, err)
+		}
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("replacement directory received %d artifact(s)", len(entries))
+	}
+}
+
+func TestProcessWritesStayInHeldDirectoryAfterProcessEntryReplacement(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteProcessStderr("stderr"); err != nil {
+		t.Fatalf("WriteProcessStderr: %v", err)
+	}
+	original := filepath.Join(b.Dir(), "process-original")
+	if err := os.Rename(filepath.Join(b.Dir(), processDirName), original); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(b.Dir(), processDirName)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.WriteProcessResult([]byte(`{"exitReason":"completed"}`)); err != nil {
+		t.Fatalf("WriteProcessResult: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(original, resultFile)); err != nil {
+		t.Fatalf("result missing from held process directory: %v", err)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("replacement process directory received %d artifact(s)", len(entries))
 	}
 }
 
@@ -395,6 +934,258 @@ func TestWriteProviderEventFailsClosedOnMalformedEvents(t *testing.T) {
 		if lines := readLines(t, path); len(lines) != 0 {
 			t.Fatalf("malformed event %q left %d lines on disk, want none", event, len(lines))
 		}
+	}
+}
+
+func TestWriteProviderEventRejectsALineTheBundleReadersCannotRead(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	raw := []byte(`{"type":"tool.call","value":"` + strings.Repeat("x", 4<<20) + `"}`)
+
+	err = b.WriteProviderEvent(raw)
+
+	if err == nil || !strings.Contains(err.Error(), "line") {
+		t.Fatalf("WriteProviderEvent error = %v, want line-limit error", err)
+	}
+	if lines := readLines(t, filepath.Join(b.Dir(), eventsFile)); len(lines) != 0 {
+		t.Fatalf("oversize event left %d lines on disk, want none", len(lines))
+	}
+}
+
+func TestWriteProviderEventAcceptsTheLargestBundleReaderLine(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	prefix, suffix := `{"value":"`, `"}`
+	raw := []byte(prefix + strings.Repeat("x", MaxStreamLineBytes-1-len(prefix)-len(suffix)) + suffix)
+
+	if err := b.WriteProviderEvent(raw); err != nil {
+		t.Fatalf("WriteProviderEvent: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(b.Dir(), eventsFile))
+	if err != nil {
+		t.Fatalf("stat event stream: %v", err)
+	}
+	if info.Size() != MaxStreamLineBytes {
+		t.Fatalf("event stream size = %d, want %d including delimiter", info.Size(), MaxStreamLineBytes)
+	}
+}
+
+func TestAppendLineAcceptsExactStreamAndEntryLimits(t *testing.T) {
+	t.Run("stream bytes", func(t *testing.T) {
+		b, err := Create(t.TempDir(), "run-1", testManifest())
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		payload := []byte(`{}`)
+		start := int64(MaxStreamBytes - len(payload) - 1)
+		if err := b.events.Truncate(start); err != nil {
+			t.Fatalf("prepare stream boundary: %v", err)
+		}
+		b.eventsState.bytes = int(start)
+
+		if err := b.appendLine(b.events, eventsFile, payload, &b.eventsState); err != nil {
+			t.Fatalf("append to exact byte limit: %v", err)
+		}
+		if b.eventsState.bytes != MaxStreamBytes {
+			t.Fatalf("stream bytes = %d, want %d", b.eventsState.bytes, MaxStreamBytes)
+		}
+		if err := b.appendLine(b.events, eventsFile, payload, &b.eventsState); err == nil {
+			t.Fatal("append beyond byte limit succeeded")
+		}
+		info, err := b.events.Stat()
+		if err != nil {
+			t.Fatalf("stat event stream: %v", err)
+		}
+		if info.Size() != MaxStreamBytes {
+			t.Fatalf("event stream size after rejection = %d, want %d", info.Size(), MaxStreamBytes)
+		}
+	})
+
+	t.Run("entries", func(t *testing.T) {
+		b, err := Create(t.TempDir(), "run-1", testManifest())
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		b.eventsState.entries = MaxStreamEntries - 1
+		if err := b.appendLine(b.events, eventsFile, []byte(`{}`), &b.eventsState); err != nil {
+			t.Fatalf("append exact final entry: %v", err)
+		}
+		if b.eventsState.entries != MaxStreamEntries {
+			t.Fatalf("stream entries = %d, want %d", b.eventsState.entries, MaxStreamEntries)
+		}
+		if err := b.appendLine(b.events, eventsFile, []byte(`{}`), &b.eventsState); err == nil {
+			t.Fatal("append beyond entry limit succeeded")
+		}
+		if lines := readLines(t, filepath.Join(b.Dir(), eventsFile)); len(lines) != 1 {
+			t.Fatalf("event stream holds %d physical entries, want only accepted append", len(lines))
+		}
+	})
+}
+
+func TestActionAndUnparsedWritersRejectLinesTheBundleReadersCannotRead(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		write    func(*Bundle) error
+	}{
+		{
+			name:     "action",
+			filename: actionsFile,
+			write: func(b *Bundle) error {
+				return b.WriteAction(action.Action{
+					ID:        "a1",
+					Type:      action.TypeToolCall,
+					Assurance: action.AssuranceProviderReported,
+					Result:    json.RawMessage(`{"value":"` + strings.Repeat("x", MaxStreamLineBytes) + `"}`),
+				})
+			},
+		},
+		{
+			name:     "unparsed",
+			filename: unparsedFile,
+			write: func(b *Bundle) error {
+				return b.WriteUnparsedLine([]byte(strings.Repeat("x", MaxStreamLineBytes)))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := Create(t.TempDir(), "run-1", testManifest())
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+
+			err = tt.write(b)
+
+			if err == nil || !strings.Contains(err.Error(), "line") {
+				t.Fatalf("write error = %v, want line-limit error", err)
+			}
+			data, readErr := os.ReadFile(filepath.Join(b.Dir(), tt.filename))
+			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatalf("read stream: %v", readErr)
+			}
+			if len(data) != 0 {
+				t.Fatalf("rejected write left %d bytes on disk, want none", len(data))
+			}
+		})
+	}
+}
+
+func TestWriteProviderEventRejectsMoreEntriesThanBundleReadersAccept(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i := 0; i < 100000; i++ {
+		if err := b.WriteProviderEvent([]byte(`{}`)); err != nil {
+			t.Fatalf("WriteProviderEvent %d: %v", i+1, err)
+		}
+	}
+
+	err = b.WriteProviderEvent([]byte(`{}`))
+
+	if err == nil || !strings.Contains(err.Error(), "events") {
+		t.Fatalf("WriteProviderEvent 100001 error = %v, want event-count limit", err)
+	}
+}
+
+func TestWriteProviderEventRejectsAStreamLargerThanBundleReadersAccept(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	b.eventsState.bytes = (64 << 20) - len("{}\n") + 1
+
+	err = b.WriteProviderEvent([]byte(`{}`))
+
+	if err == nil || !strings.Contains(err.Error(), "bytes") {
+		t.Fatalf("WriteProviderEvent error = %v, want stream-byte limit", err)
+	}
+	if lines := readLines(t, filepath.Join(b.Dir(), eventsFile)); len(lines) != 0 {
+		t.Fatalf("event beyond stream limit left %d lines on disk, want none", len(lines))
+	}
+}
+
+func TestWriteProviderEventRejectsNestingBeyondTheBundleReaderLimit(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	raw := []byte(strings.Repeat(`{"value":`, 65) + `0` + strings.Repeat(`}`, 65))
+
+	err = b.WriteProviderEvent(raw)
+
+	if err == nil || !strings.Contains(err.Error(), "nesting") {
+		t.Fatalf("WriteProviderEvent error = %v, want nesting-limit error", err)
+	}
+	if lines := readLines(t, filepath.Join(b.Dir(), eventsFile)); len(lines) != 0 {
+		t.Fatalf("over-nested event left %d lines on disk, want none", len(lines))
+	}
+}
+
+func TestWriteProviderEventRejectsMoreJSONTokensThanBundleReadersAccept(t *testing.T) {
+	b, err := Create(t.TempDir(), "run-1", testManifest())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	values := strings.TrimSuffix(strings.Repeat("0,", 128), ",")
+	event := []byte(`{"values":[` + values + `]}`)
+	tokens, err := ValidateProviderEvent(event, MaxProviderEventTokens)
+	if err != nil {
+		t.Fatalf("ValidateProviderEvent: %v", err)
+	}
+	writes := MaxProviderEventTokens/tokens + 1
+	for i := 0; i < writes-1; i++ {
+		if err := b.WriteProviderEvent(event); err != nil {
+			t.Fatalf("WriteProviderEvent %d: %v", i, err)
+		}
+	}
+
+	err = b.WriteProviderEvent(event)
+
+	if err == nil || !strings.Contains(err.Error(), "tokens") {
+		t.Fatalf("WriteProviderEvent error = %v, want token-limit error", err)
+	}
+}
+
+func TestWriteProviderEventRollsBackAPartialAppend(t *testing.T) {
+	if os.Getenv("AGENTREC_PARTIAL_WRITE_HELPER") == "1" {
+		b, err := Create(t.TempDir(), "run-1", testManifest())
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if err := b.WriteProviderEvent([]byte(`{}`)); err != nil {
+			t.Fatalf("write prefix: %v", err)
+		}
+		path := filepath.Join(b.Dir(), eventsFile)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat event stream: %v", err)
+		}
+		limit := uint64(info.Size() + 5)
+		setPartialWriteLimit(t, limit)
+
+		if err := b.WriteProviderEvent([]byte(`{"value":"more"}`)); err == nil {
+			t.Fatal("partial WriteProviderEvent succeeded")
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read event stream: %v", err)
+		}
+		if string(got) != "{}\n" {
+			t.Fatalf("event stream after partial write = %q, want intact prefix", got)
+		}
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestWriteProviderEventRollsBackAPartialAppend$")
+	cmd.Env = append(os.Environ(), "AGENTREC_PARTIAL_WRITE_HELPER=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("partial-write helper: %v\n%s", err, output)
 	}
 }
 

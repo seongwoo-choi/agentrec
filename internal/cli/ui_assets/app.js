@@ -72,11 +72,7 @@
       const head = node('div', 'run-item-head');
       head.append(node('span', 'run-project', run.project), node('span', 'run-time', relativeTime(run.startedAt)));
       const id = node('div', 'run-id', shortID(run.id));
-      const exitStatus = statusClass(run.exit);
-      const verificationStatus = statusClass(run.verification);
-      const listStatus = exitStatus === 'fail' || verificationStatus === 'fail' ? 'fail' : (exitStatus || verificationStatus);
-      const listLabel = exitStatus === 'fail' ? run.exit : run.verification;
-      const status = node('div', `mini-status ${listStatus}`, `${run.provider} · ${listLabel}`);
+      const status = node('div', `mini-status ${run.statusClass}`, `${run.provider} · ${run.statusLabel}`);
       button.append(head, id, status);
       button.addEventListener('click', () => loadRun(run.id));
       list.append(button);

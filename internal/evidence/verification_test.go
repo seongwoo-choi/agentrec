@@ -480,6 +480,33 @@ func TestRepositoryMutationIsWarnedAboutWithoutRewritingTheCheck(t *testing.T) {
 	}
 }
 
+func TestIndexFlagMutationIsWarnedAbout(t *testing.T) {
+	repo, run := gitRepo(t), runDir(t)
+	writeConfig(t, repo, configYAML(checkSpec{
+		name:    "index flag writer",
+		timeout: "10s",
+		argv:    []string{"git", "update-index", "--assume-unchanged", "b.txt"},
+	}))
+
+	res, err := pin(t, repo, run).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != "passed" {
+		t.Fatalf("status = %q/%q, want passed with a separate warning", res.Status, res.Reason)
+	}
+	check := checkByName(t, res, "index flag writer")
+	if check.Status != "passed" || check.ExitCode == nil || *check.ExitCode != 0 {
+		t.Fatalf("check = %+v, want passed with exit code 0", check)
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0].Code != "verification_mutated_repository" {
+		t.Fatalf("warnings = %+v, want index mutation warning", res.Warnings)
+	}
+	if len(res.Warnings[0].Paths) != 0 {
+		t.Fatalf("warning paths = %v, want none for index-only mutation", res.Warnings[0].Paths)
+	}
+}
+
 // 9. A repository that was already dirty hides a mutation from Git's summary:
 // a file modified before the run and modified again during it is reported the
 // same way both times. The content is what is compared, so it is still seen.
@@ -688,6 +715,7 @@ func TestConfigurationsThatCannotBePinned(t *testing.T) {
 		"no version":               strings.Replace(good, "version: 1\n", "", 1),
 		"two documents":            good + "---\nversion: 1\nverify: []\n",
 		"an empty document":        "",
+		"no checks":                "version: 1\nverify: []\n",
 		"a duplicate name":         good + strings.TrimPrefix(configYAML(checkSpec{name: "a", timeout: "1s", argv: []string{"/bin/true"}}), "version: 1\nverify:\n"),
 		"an empty name":            configYAML(checkSpec{name: "", timeout: "1s", argv: []string{"/bin/true"}}),
 		"no command":               "version: 1\nverify:\n  - name: \"a\"\n    timeout: \"1s\"\n    command: []\n",

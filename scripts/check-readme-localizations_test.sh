@@ -52,6 +52,20 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
+needle = "go install ./cmd/agentrec"
+if needle not in text:
+    raise SystemExit("test fixture does not contain unreleased source install")
+path.write_text(text.replace(needle, "go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.1.0", 1), encoding="utf-8")
+PY
+expect_rejected "executable code blocks"
+
+seed
+python3 - "$tmp/README.ko.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
 needle = "## 네 가지 증거 계층"
 if needle not in text:
     raise SystemExit("test fixture does not contain heading")

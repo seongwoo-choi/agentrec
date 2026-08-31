@@ -140,6 +140,23 @@ func helperMain(mode string, args []string) int {
 		spawn("helper:term-defiant-child", args[0])
 		<-term
 		return 0
+	case "exit-with-inherited-pipes":
+		emit("last-event")
+		fmt.Fprintln(os.Stderr, "last stderr")
+		cmd := exec.Command(os.Args[0], helperPrefix+"sleep")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "helper: spawn: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(args[0], []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
+			return 1
+		}
+		return 0
+	case "exit-with-detached-descendant":
+		spawn("helper:sleep", args[0])
+		return 0
 	case "term-defiant-child":
 		signal.Ignore(syscall.SIGTERM)
 		time.Sleep(10 * time.Minute)
@@ -789,6 +806,100 @@ func TestRunKillsDescendantWhenLeaderExitsDuringTimeoutGrace(t *testing.T) {
 	pid := waitForPID(t, pidFile)
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	requireGone(t, pid)
+}
+
+func TestRunBoundsPipesHeldByDescendantAfterLeaderExit(t *testing.T) {
+	b := newBundle(t)
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+	interrupt := make(chan os.Signal, 1)
+	type outcome struct {
+		res Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := Run(context.Background(), Request{
+			Command:   helperCommand("exit-with-inherited-pipes", pidFile),
+			Bundle:    b,
+			Parser:    jsonlParser("", 0),
+			KillGrace: 100 * time.Millisecond,
+			Interrupt: interrupt,
+		})
+		done <- outcome{res: res, err: err}
+	}()
+
+	descendant := waitForPID(t, pidFile)
+	t.Cleanup(func() {
+		if err := syscall.Kill(descendant, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("cleanup descendant: %v", err)
+		}
+		requireGone(t, descendant)
+	})
+	drainStarted := time.Now()
+	var got outcome
+	select {
+	case got = <-done:
+		if got.err != nil {
+			t.Fatalf("Run error = %v", got.err)
+		}
+		if got.res.ExitReason != ReasonCompleted {
+			t.Fatalf("ExitReason = %q, want %q", got.res.ExitReason, ReasonCompleted)
+		}
+	case <-time.After(2 * time.Second):
+		_ = syscall.Kill(descendant, syscall.SIGKILL)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("Run remained blocked on pipes held by a descendant after the leader exited")
+	}
+	if elapsed := time.Since(drainStarted); elapsed > 1500*time.Millisecond {
+		t.Errorf("Run took %v, want KillGrace to bound the output drain", elapsed)
+	}
+	requireGone(t, descendant)
+
+	if events := readLines(t, filepath.Join(b.Dir(), "provider-events.sanitized.jsonl")); len(events) != 1 || !strings.Contains(events[0], "last-event") {
+		t.Errorf("provider events = %q, want buffered final event", events)
+	}
+	if actions := readLines(t, filepath.Join(b.Dir(), "actions.jsonl")); len(actions) != 1 {
+		t.Errorf("actions = %q, want parsed final action", actions)
+	}
+	stderr, err := os.ReadFile(filepath.Join(b.Dir(), "process", "stderr.sanitized.log"))
+	if err != nil || !strings.Contains(string(stderr), "last stderr") {
+		t.Errorf("stderr = %q, err = %v; want buffered final stderr", stderr, err)
+	}
+	if pr := readProcessResult(t, b.Dir()); pr.ExitReason != ReasonCompleted {
+		t.Errorf("result.json exitReason = %q, want %q", pr.ExitReason, ReasonCompleted)
+	}
+	if manifest := readManifest(t, b.Dir()); manifest.ExitReason != ReasonCompleted {
+		t.Errorf("manifest exitReason = %q, want %q", manifest.ExitReason, ReasonCompleted)
+	}
+}
+
+func TestRunRemovesDetachedDescendantAfterNormalLeaderExit(t *testing.T) {
+	b := newBundle(t)
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+
+	res, err := Run(context.Background(), Request{
+		Command:   helperCommand("exit-with-detached-descendant", pidFile),
+		Bundle:    b,
+		Parser:    jsonlParser("", 0),
+		KillGrace: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitReason != ReasonCompleted {
+		t.Fatalf("ExitReason = %q, want %q", res.ExitReason, ReasonCompleted)
+	}
+
+	descendant := waitForPID(t, pidFile)
+	t.Cleanup(func() {
+		if err := syscall.Kill(descendant, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("cleanup descendant: %v", err)
+		}
+	})
+	requireGone(t, descendant)
 }
 
 func TestDefaultKillGraceIsFiveSeconds(t *testing.T) {
