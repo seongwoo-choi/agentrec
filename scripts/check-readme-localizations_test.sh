@@ -52,10 +52,10 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-needle = "go install ./cmd/agentrec"
+needle = "brew install seongwoo-choi/tap/agentrec"
 if needle not in text:
-    raise SystemExit("test fixture does not contain unreleased source install")
-path.write_text(text.replace(needle, "go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.1.0", 1), encoding="utf-8")
+    raise SystemExit("test fixture does not contain Homebrew install")
+path.write_text(text.replace(needle, "brew install another/tap/agentrec", 1), encoding="utf-8")
 PY
 expect_rejected "executable code blocks"
 

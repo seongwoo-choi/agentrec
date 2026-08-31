@@ -66,24 +66,25 @@ sh scripts/check-readme-localizations_test.sh
 每个已打标签的发布版本都包含四个归档文件：`darwin_amd64`、`darwin_arm64`、`linux_amd64` 和 `linux_arm64`，以及一份覆盖全部四个归档的 `SHA256SUMS` 文件。解压归档后会得到一个目录，内含 `agentrec`、`LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `third_party/licenses/Apache-2.0.txt`。
 
 ```bash
+# Homebrew
+brew install seongwoo-choi/tap/agentrec
+agentrec version
+
 # From a release archive — download SHA256SUMS plus the archive for your platform.
-archive=agentrec_0.1.0_darwin_arm64.tar.gz
+archive=agentrec_0.2.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.1.0_darwin_arm64/agentrec version
+./agentrec_0.2.0_darwin_arm64/agentrec version
 
 # On Linux, use `sha256sum -c -` instead of `shasum -a 256 -c -`.
 # Or from source
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.1.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.2.0
 ```
 
 `agentrec version`（等同于 `agentrec --version`）会输出三行：版本、构建所用的提交和 UTC 构建时间。发布版二进制会带有标签、完整提交 SHA 和 RFC 3339 时间戳；其他方式构建的二进制则显示 `dev`、`unknown` 和 `unknown`，因此未加构建信息的二进制不会被误认为发布版。
 
-最新的标签版本是 `v0.1.0`。该版本不包含 `shadow run`、`events` 或 `view`；下文介绍的这三个命令尚未发布，目前仅存在于 `main`。如需使用本 README 中的全部命令，请在已有的 `main` 检出中安装当前源码：
-
-```bash
-go install ./cmd/agentrec
-```
+最新的标签版本是 `v0.2.0`，包含 `shadow run`、`events`、只读 viewer、Change Explorer、
+Unified Overview 和 same-path-observed correlation。
 
 **提交验证配置。** 一次运行只会依据仓库原本已有的检查进行验证。将 `.agentrec.example.yaml` 复制为 `.agentrec.yaml` 并提交。每条命令都会直接启动，不经 shell，因此参数始终只是参数，不会被当作其他内容解释：
 
@@ -321,7 +322,7 @@ go build ./...
 
 # Build the release archives locally; publishes nothing.
 # The output directory must not already exist.
-scripts/build-release.sh v0.1.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.2.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `.github/workflows/release.yml` 会在 `v*.*.*` 标签上运行同一脚本，检查每个归档的文件清单和所构建二进制的版本输出，全部通过后才发布。若对应发布版本已存在，工作流会拒绝运行。
