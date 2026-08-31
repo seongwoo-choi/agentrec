@@ -93,6 +93,19 @@ type viewProviderEvents struct {
 	Present     bool   `json:"present"`
 }
 
+type viewChangeSummary struct {
+	Status      string `json:"status"`
+	Reason      string `json:"reason,omitempty"`
+	Attribution string `json:"attribution,omitempty"`
+	Baseline    string `json:"baseline,omitempty"`
+	Total       int    `json:"total"`
+	Tracked     int    `json:"tracked"`
+	Untracked   int    `json:"untracked"`
+	Additions   int    `json:"additions"`
+	Deletions   int    `json:"deletions"`
+	Binary      int    `json:"binary"`
+}
+
 type viewRunResponse struct {
 	SchemaVersion  int                `json:"schemaVersion"`
 	SnapshotID     string             `json:"snapshotId"`
@@ -100,6 +113,7 @@ type viewRunResponse struct {
 	EventCount     int                `json:"eventCount"`
 	Run            viewRunInfo        `json:"run"`
 	ProviderEvents viewProviderEvents `json:"providerEvents"`
+	Changes        viewChangeSummary  `json:"changes"`
 	Evidence       viewEvidence       `json:"evidence"`
 }
 
@@ -274,7 +288,7 @@ func newViewHandler(root, initialRunID string) *viewHandler {
 		var out viewRunResponse
 		err := snapshots.withSlot(r, func() error {
 			var err error
-			out, err = snapshots.create(runID)
+			out, err = snapshots.createContext(r.Context(), runID)
 			return err
 		})
 		if err != nil {
@@ -302,6 +316,22 @@ func newViewHandler(root, initialRunID string) *viewHandler {
 					return err
 				case "events":
 					page, err := readViewEventPage(snapshot, cursor)
+					if err == nil {
+						writeViewJSON(w, page)
+					}
+					return err
+				case "changes":
+					page, err := readViewChangePage(snapshot, cursor)
+					if err == nil {
+						writeViewJSON(w, page)
+					}
+					return err
+				case "patch":
+					changePath := r.URL.Query().Get("path")
+					if changePath == "" || !utf8.ValidString(changePath) {
+						return errors.New("invalid change path")
+					}
+					page, err := readViewPatchPage(snapshot, changePath, cursor)
 					if err == nil {
 						writeViewJSON(w, page)
 					}

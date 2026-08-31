@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/seongwoo-choi/agentrec/internal/action"
 	"github.com/seongwoo-choi/agentrec/internal/evidence"
 	"github.com/seongwoo-choi/agentrec/internal/provider"
 	"github.com/seongwoo-choi/agentrec/internal/report"
@@ -86,6 +87,30 @@ type recordOutcome struct {
 	Incomplete bool
 }
 
+func canonicalManifestCWD(cwd string) (string, error) {
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("cli: resolve working directory %q: %w", cwd, err)
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("cli: resolve working directory %q: %w", abs, err)
+	}
+	return real, nil
+}
+
+func canonicalManifestPaths(cwd, repoRoot string) (string, string, error) {
+	canonicalCWD, err := canonicalManifestCWD(cwd)
+	if err != nil {
+		return "", "", err
+	}
+	canonicalRoot, err := canonicalManifestCWD(repoRoot)
+	if err != nil {
+		return "", "", err
+	}
+	return canonicalCWD, canonicalRoot, nil
+}
+
 // record supervises one provider run and leaves a finished bundle behind: the
 // baseline pinned before it starts, the checks fixed before it starts, the
 // process recorded as it runs, and the repository measured, verified and
@@ -93,6 +118,11 @@ type recordOutcome struct {
 // happens; what the ending means is the caller's to decide.
 func record(req recordRequest, stderr io.Writer) recordOutcome {
 	runID := req.RunID
+	manifestCWD, manifestRepoRoot, err := canonicalManifestPaths(req.CWD, req.RepoRoot)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return recordOutcome{}
+	}
 
 	// The manifest records the invocation exactly as it will be launched,
 	// executable included, so the recorded argv is the command that ran and not
@@ -103,6 +133,8 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 		VersionUnverified: req.Command.VersionUnverified,
 		Argv:              append([]string{req.Command.Executable}, req.Command.Args...),
 		CWD:               req.CWD,
+		CanonicalCWD:      manifestCWD,
+		RepoRoot:          manifestRepoRoot,
 		StartedAt:         time.Now(),
 	})
 	if err != nil {
@@ -117,7 +149,7 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 	// it is not started. Sanitizing goes through the bundle's own redactor, so a
 	// secret the evidence carries reads as the secret the rest of the run named.
 	startCtx, cancelStart := context.WithTimeout(context.Background(), evidenceStartTimeout)
-	capture, err := evidence.Start(startCtx, req.RepoRoot, runID, bundle.Dir(), evidence.Options{
+	capture, err := evidence.Start(startCtx, manifestRepoRoot, runID, bundle.Dir(), evidence.Options{
 		Sanitize: bundle.SanitizeText,
 	})
 	cancelStart()
@@ -149,7 +181,7 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 	verifierClosed := false
 	if req.Verify {
 		pinCtx, cancelPin := context.WithTimeout(context.Background(), verifyPinTimeout)
-		verifier, err = evidence.PinVerification(pinCtx, req.RepoRoot, bundle.Dir(), filepath.Join(req.RepoRoot, verifyConfigFile), evidence.VerificationOptions{
+		verifier, err = evidence.PinVerification(pinCtx, manifestRepoRoot, bundle.Dir(), filepath.Join(manifestRepoRoot, verifyConfigFile), evidence.VerificationOptions{
 			Sanitize: bundle.SanitizeText,
 		})
 		cancelPin()
@@ -180,10 +212,17 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 
 	out := recordOutcome{Recorded: true}
 	out.Result, out.RunErr = runner.Run(context.Background(), runner.Request{
-		Command:   req.Command,
-		CWD:       req.CWD,
-		Bundle:    bundle,
-		Parser:    req.Parser,
+		Command: req.Command,
+		CWD:     req.CWD,
+		Bundle:  bundle,
+		Parser:  req.Parser,
+		TransformAction: func(item action.Action) action.Action {
+			if recordsRepositoryPaths(item) {
+				item.RepositoryPaths = observeActionRepositoryPaths(item, req.CWD, manifestCWD, manifestRepoRoot)
+				item.RepositoryPathsRecorded = true
+			}
+			return item
+		},
 		Timeout:   req.Timeout,
 		Interrupt: req.Interrupt,
 		StartGate: req.StartGate,

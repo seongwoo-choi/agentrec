@@ -46,18 +46,20 @@
         <section class="timeline-panel">
           <div class="panel-toolbar">
             <div class="tabs" role="tablist" aria-label="Timeline mode">
-              <button class="tab active" data-mode="actions" role="tab" aria-selected="true">Actions <span id="action-count">0</span></button>
-              <button class="tab" data-mode="events" role="tab" aria-selected="false">Provider events <span id="event-count">0</span></button>
+              <button id="timeline-tab-actions" class="tab active" data-mode="actions" role="tab" aria-controls="timeline" aria-selected="true" tabindex="0">Actions <span id="action-count">0</span></button>
+              <button id="timeline-tab-changes" class="tab" data-mode="changes" role="tab" aria-controls="timeline" aria-selected="false" tabindex="-1">Changes <span id="change-count">0</span></button>
+              <button id="timeline-tab-events" class="tab" data-mode="events" role="tab" aria-controls="timeline" aria-selected="false" tabindex="-1">Provider events <span id="event-count">0</span></button>
             </div>
             <label class="timeline-search"><input id="timeline-search" type="search" placeholder="Filter timeline"></label>
           </div>
           <div class="filter-row" id="type-filters"></div>
-          <div id="timeline" class="timeline" aria-live="polite"></div>
+          <div id="timeline" class="timeline" role="tabpanel" aria-labelledby="timeline-tab-actions" aria-live="polite"></div>
         </section>
 
         <aside class="inspector-panel">
           <div class="section-label">EVIDENCE INSPECTOR</div>
-          <div id="inspector" class="inspector-empty">Select an action or provider event to inspect its sanitized evidence.</div>
+          <div id="inspector-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+          <div id="inspector" class="inspector-empty">Select an action, change, or provider event to inspect its sanitized evidence.</div>
           <div class="evidence-sections" id="evidence-sections"></div>
         </aside>
       </div>

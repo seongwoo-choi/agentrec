@@ -62,6 +62,8 @@ type Manifest struct {
 	ProviderVersion string   `json:"providerVersion,omitempty"`
 	Argv            []string `json:"argv"`
 	CWD             string   `json:"cwd"`
+	CanonicalCWD    string   `json:"canonicalCwd,omitempty"`
+	RepoRoot        string   `json:"repoRoot,omitempty"`
 	// VersionUnverified records that the provider's version was outside the
 	// range agentrec's parser was written against and the run was recorded
 	// anyway, on the operator's explicit say-so. What the run reports about

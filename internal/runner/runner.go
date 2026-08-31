@@ -83,6 +83,9 @@ type Request struct {
 	CWD     string
 	Bundle  *storage.Bundle
 	Parser  Parser
+	// TransformAction enriches a parsed action immediately before persistence.
+	// It must not mutate provider input/result payloads.
+	TransformAction func(action.Action) action.Action
 	// Timeout bounds the whole run. Zero means no bound.
 	Timeout time.Duration
 	// KillGrace is how long the provider has to end itself after being asked to.
@@ -272,7 +275,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 			stderrErr = nil
 		}
 	}
-	storageErr := writeEvidence(req.Bundle, stderrOut.text, parse)
+	storageErr := writeEvidence(req.Bundle, stderrOut.text, parse, req.TransformAction)
 	if storageErr == nil {
 		storageErr = firstOf(streamErr, stderrErr, outputDrainErr)
 	}
@@ -583,12 +586,15 @@ func watch(ctx context.Context, req Request, grace time.Duration, signaller *gro
 // the normalized actions. A parser that failed describes a stream it could not
 // read through, so the actions it recovered up to that point are not written:
 // half a reading of a run is not a record of it.
-func writeEvidence(b *storage.Bundle, stderrText string, parse parseOutcome) error {
+func writeEvidence(b *storage.Bundle, stderrText string, parse parseOutcome, transform func(action.Action) action.Action) error {
 	err := b.WriteProcessStderr(stderrText)
 	if parse.err != nil {
 		return err
 	}
 	for _, a := range parse.out.Actions {
+		if transform != nil {
+			a = transform(a)
+		}
 		if werr := b.WriteAction(a); werr != nil && err == nil {
 			err = werr
 		}

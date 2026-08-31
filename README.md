@@ -204,16 +204,30 @@ causal proof.
 `agentrec view [<run-id>|latest]` opens a local read-only web UI over the same
 bounded bundle readers. The run sidebar, recorded request, normalized action
 timeline, sanitized provider-event stream, and separately attributed process,
-repository, usage, and verification evidence remain visible together. Parent
-action IDs indent nested agent work without claiming that provider-reported
-relationships are OS-observed causality. Select an action or event to inspect
-its sanitized input and result as text, never executable HTML.
+repository, usage, and verification evidence remain visible together. The
+overview keeps the process outcome and duration, verification verdict, validated
+repository status and totals, action/event counts, and warnings in one header. The
+`Changes` tab lists tracked and untracked paths and opens the bounded sanitized
+patch recorded for a tracked path; it labels repository evidence as observed
+during the run, not causal proof.
+File actions whose explicit normalized input path exactly matches a displayed
+changed path are labelled `same path observed — not causal proof`; command and
+result text are never inferred as paths. The recorder resolves explicit paths
+to repository-relative `repositoryPaths` while the run's filesystem namespace
+still exists, so symlink aliases do not require the viewer to reopen the live
+repository. Parent action IDs indent nested agent
+work without claiming that provider-reported relationships are OS-observed
+causality. Select an action or event to inspect its sanitized input and result;
+select a change to inspect repository metadata and its bounded patch. All payloads
+are rendered as text, never executable HTML.
 
-Each viewer snapshot pins one run directory and copies immutable action/event stream bytes
-and refuses the snapshot if any displayed artifact changes while it is being
-created. The API serves both streams in pages of at most 250 records with a 1
-MiB target; one valid record may exceed that target, but a maximum-size bundle
-is never returned or rendered all at once.
+Each viewer snapshot pins one run directory, copies immutable action/event
+stream and tracked-patch bytes, and validates the indexed Changes documents. It
+refuses the snapshot if any displayed artifact changes while it is being
+created. The API serves action, event, and change pages with at most 250 records
+and a 1 MiB target, while patch pages are bounded to 1 MiB. One valid record may
+exceed the stream target, but a maximum-size bundle is never returned or
+rendered all at once.
 
 The viewer binds to a random port on `127.0.0.1` and opens the default browser.
 Use `--no-open` to print the URL without launching a browser, or `--listen

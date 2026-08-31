@@ -32,7 +32,7 @@ func TestWriteEvidencePersistsUsageSeparatelyFromActions(t *testing.T) {
 	}
 	input := int64(10)
 	reported := &usage.Report{Schema: 1, Attribution: usage.AttributionProviderReported, Provider: "claude", Scope: usage.ScopeRun, InputTokens: &input}
-	if err := writeEvidence(b, "", parseOutcome{out: ParseResult{Usage: reported}}); err != nil {
+	if err := writeEvidence(b, "", parseOutcome{out: ParseResult{Usage: reported}}, nil); err != nil {
 		t.Fatalf("writeEvidence: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(b.Dir(), "provider-usage.json")); err != nil {
@@ -41,6 +41,32 @@ func TestWriteEvidencePersistsUsageSeparatelyFromActions(t *testing.T) {
 	lines := readLines(t, filepath.Join(b.Dir(), "actions.jsonl"))
 	if len(lines) != 0 {
 		t.Errorf("actions = %q, want none", lines)
+	}
+}
+
+func TestWriteEvidenceTransformsActionsBeforePersistence(t *testing.T) {
+	b, err := storage.Create(t.TempDir(), "run-transform", storage.Manifest{Provider: "claude", Argv: []string{"agentrec"}, CWD: t.TempDir(), StartedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := action.Action{ID: "edit-1", Type: action.TypeFileEdit, Assurance: action.AssuranceProviderReported}
+	transform := func(item action.Action) action.Action {
+		item.RepositoryPaths = []string{"internal/runner/runner.go"}
+		return item
+	}
+	if err := writeEvidence(b, "", parseOutcome{out: ParseResult{Actions: []action.Action{parsed}}}, transform); err != nil {
+		t.Fatal(err)
+	}
+	lines := readLines(t, filepath.Join(b.Dir(), "actions.jsonl"))
+	if len(lines) != 1 {
+		t.Fatalf("action lines = %d, want 1", len(lines))
+	}
+	var got action.Action
+	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.RepositoryPaths, []string{"internal/runner/runner.go"}) {
+		t.Fatalf("repository paths = %v", got.RepositoryPaths)
 	}
 }
 

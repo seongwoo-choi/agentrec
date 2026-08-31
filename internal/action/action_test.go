@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,16 +13,18 @@ import (
 func TestActionJSONRoundTrip(t *testing.T) {
 	started := time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
 	original := Action{
-		ID:         "a1",
-		ParentID:   "a0",
-		Type:       TypeShellExec,
-		Provider:   "claude-code",
-		Assurance:  AssuranceProviderReported,
-		StartedAt:  started,
-		FinishedAt: started.Add(time.Second),
-		Status:     "ok",
-		Input:      json.RawMessage(`{"cmd":"ls"}`),
-		Result:     json.RawMessage(`{"exitCode":0}`),
+		ID:                      "a1",
+		ParentID:                "a0",
+		Type:                    TypeShellExec,
+		Provider:                "claude-code",
+		Assurance:               AssuranceProviderReported,
+		StartedAt:               started,
+		FinishedAt:              started.Add(time.Second),
+		Status:                  "ok",
+		Input:                   json.RawMessage(`{"cmd":"ls"}`),
+		Result:                  json.RawMessage(`{"exitCode":0}`),
+		RepositoryPaths:         []string{"internal/action/action.go"},
+		RepositoryPathsRecorded: true,
 	}
 
 	encoded, err := json.Marshal(original)
@@ -48,6 +51,12 @@ func TestActionJSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Status != original.Status {
 		t.Errorf("status = %q, want %q", decoded.Status, original.Status)
+	}
+	if !slices.Equal(decoded.RepositoryPaths, original.RepositoryPaths) {
+		t.Errorf("repository paths = %v, want %v", decoded.RepositoryPaths, original.RepositoryPaths)
+	}
+	if decoded.RepositoryPathsRecorded != original.RepositoryPathsRecorded {
+		t.Errorf("repository paths recorded = %t, want %t", decoded.RepositoryPathsRecorded, original.RepositoryPathsRecorded)
 	}
 
 	var input, result map[string]any

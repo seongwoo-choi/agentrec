@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,9 +30,14 @@ const (
 	maxViewSnapshots = 4
 )
 
+type viewAction struct {
+	action.Action
+	SamePathObserved []string `json:"samePathObserved,omitempty"`
+}
+
 type viewActionPage struct {
-	Items      []action.Action `json:"items"`
-	NextCursor *int64          `json:"nextCursor,omitempty"`
+	Items      []viewAction `json:"items"`
+	NextCursor *int64       `json:"nextCursor,omitempty"`
 }
 
 type viewEventPage struct {
@@ -39,13 +46,24 @@ type viewEventPage struct {
 }
 
 type viewSnapshot struct {
-	id         string
-	documents  map[string][]byte
-	actions    *os.File
-	actionSize int64
-	events     *os.File
-	eventSize  int64
-	unparsed   *os.File
+	id                string
+	documents         map[string][]byte
+	actions           *os.File
+	actionSize        int64
+	events            *os.File
+	eventSize         int64
+	unparsed          *os.File
+	patch             *os.File
+	patchSize         int64
+	patchSections     map[string]viewPatchSection
+	changes           []viewChange
+	changePaths       map[string]struct{}
+	cwd               string
+	repoRoot          string
+	changeStatus      string
+	changeReason      string
+	changeAttribution string
+	changeBaseline    string
 }
 
 var viewSnapshotFiles = []string{
@@ -55,20 +73,26 @@ var viewSnapshotFiles = []string{
 	providerEventsFile,
 	processDir + "/" + resultFile,
 	gitDir + "/" + resultFile,
+	gitDir + "/" + trackedStatFile,
+	gitDir + "/" + untrackedChangesFile,
+	gitDir + "/" + trackedPatchFile,
 	verifyDir + "/" + verifyResults,
 	providerUsageFile,
 }
 
 var viewSnapshotFileLimits = map[string]int64{
-	manifestFile:                    maxDocumentBytes,
-	promptFile:                      maxDocumentBytes,
-	actionsFile:                     maxActionStreamBytes,
-	providerEventsFile:              maxEventStreamBytes,
-	unparsedFile:                    maxActionStreamBytes,
-	processDir + "/" + resultFile:   maxDocumentBytes,
-	gitDir + "/" + resultFile:       maxDocumentBytes,
-	verifyDir + "/" + verifyResults: maxDocumentBytes,
-	providerUsageFile:               maxDocumentBytes,
+	manifestFile:                        maxDocumentBytes,
+	promptFile:                          maxDocumentBytes,
+	actionsFile:                         maxActionStreamBytes,
+	providerEventsFile:                  maxEventStreamBytes,
+	unparsedFile:                        maxActionStreamBytes,
+	processDir + "/" + resultFile:       maxDocumentBytes,
+	gitDir + "/" + resultFile:           maxDocumentBytes,
+	gitDir + "/" + trackedStatFile:      maxViewChangeDocBytes,
+	gitDir + "/" + untrackedChangesFile: maxViewChangeDocBytes,
+	gitDir + "/" + trackedPatchFile:     maxViewPatchBytes,
+	verifyDir + "/" + verifyResults:     maxDocumentBytes,
+	providerUsageFile:                   maxDocumentBytes,
 }
 
 type viewFileIdentity struct {
@@ -93,6 +117,10 @@ func (s *viewSnapshot) Close() error {
 		errs = append(errs, s.unparsed.Close())
 		s.unparsed = nil
 	}
+	if s.patch != nil {
+		errs = append(errs, s.patch.Close())
+		s.patch = nil
+	}
 
 	return errors.Join(errs...)
 }
@@ -111,16 +139,35 @@ func newViewSnapshotStore(root string) *viewSnapshotStore {
 	return &viewSnapshotStore{root: root, sem: make(chan struct{}, 2), byID: make(map[string]*viewSnapshot)}
 }
 
+type viewContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r viewContextReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(buffer)
+}
+
 func captureViewRun(source *os.Root, expected map[string]viewFileIdentity, snapshot *viewSnapshot) error {
+	return captureViewRunContext(context.Background(), source, expected, snapshot)
+}
+
+func captureViewRunContext(ctx context.Context, source *os.Root, expected map[string]viewFileIdentity, snapshot *viewSnapshot) error {
 	snapshot.documents = make(map[string][]byte)
 	for _, name := range viewSnapshotFiles {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		identity := expected[name]
 		if !identity.present {
 			continue
 		}
 		switch name {
-		case actionsFile, providerEventsFile, unparsedFile:
-			file, size, err := captureViewStream(source, name, identity)
+		case actionsFile, providerEventsFile, unparsedFile, gitDir + "/" + trackedPatchFile:
+			file, size, err := captureViewStreamContext(ctx, source, name, identity)
 			if err != nil {
 				return err
 			}
@@ -131,9 +178,11 @@ func captureViewRun(source *os.Root, expected map[string]viewFileIdentity, snaps
 				snapshot.events, snapshot.eventSize = file, size
 			case unparsedFile:
 				snapshot.unparsed = file
+			case gitDir + "/" + trackedPatchFile:
+				snapshot.patch, snapshot.patchSize = file, size
 			}
 		default:
-			raw, err := captureViewDocument(source, name, identity)
+			raw, err := captureViewDocumentContext(ctx, source, name, identity)
 			if err != nil {
 				return err
 			}
@@ -144,6 +193,10 @@ func captureViewRun(source *os.Root, expected map[string]viewFileIdentity, snaps
 }
 
 func captureViewDocument(source *os.Root, name string, expected viewFileIdentity) ([]byte, error) {
+	return captureViewDocumentContext(context.Background(), source, name, expected)
+}
+
+func captureViewDocumentContext(ctx context.Context, source *os.Root, name string, expected viewFileIdentity) ([]byte, error) {
 	file, err := openRegularFromRoot(source, name)
 	if err != nil {
 		return nil, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot: %w", name, err)
@@ -158,7 +211,7 @@ func captureViewDocument(source *os.Root, name string, expected viewFileIdentity
 		return nil, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
 	}
 	raw := make([]byte, info.Size())
-	_, readErr := io.ReadFull(file, raw)
+	_, readErr := io.ReadFull(viewContextReader{ctx: ctx, reader: file}, raw)
 	after, statErr := file.Stat()
 	closeErr := file.Close()
 	if readErr != nil {
@@ -177,13 +230,21 @@ func captureViewDocument(source *os.Root, name string, expected viewFileIdentity
 }
 
 func captureViewStream(source *os.Root, name string, expected viewFileIdentity) (*os.File, int64, error) {
-	return captureViewStreamWithUnlink(source, name, expected, os.Remove)
+	return captureViewStreamContext(context.Background(), source, name, expected)
+}
+
+func captureViewStreamContext(ctx context.Context, source *os.Root, name string, expected viewFileIdentity) (*os.File, int64, error) {
+	return captureViewStreamWithUnlinkContext(ctx, source, name, expected, os.Remove)
 }
 
 // The snapshot resists source-artifact mutation and ordinary concurrent writes.
 // An actively malicious process running as the same OS user is outside this
 // boundary; isolating that actor requires a separate UID or an OS sandbox.
 func captureViewStreamWithUnlink(source *os.Root, name string, expected viewFileIdentity, unlink func(string) error) (*os.File, int64, error) {
+	return captureViewStreamWithUnlinkContext(context.Background(), source, name, expected, unlink)
+}
+
+func captureViewStreamWithUnlinkContext(ctx context.Context, source *os.Root, name string, expected viewFileIdentity, unlink func(string) error) (*os.File, int64, error) {
 	file, err := openRegularFromRoot(source, name)
 	if err != nil {
 		return nil, 0, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot: %w", name, err)
@@ -211,7 +272,7 @@ func captureViewStreamWithUnlink(source *os.Root, name string, expected viewFile
 		return nil, 0, errors.Join(err, file.Close(), copyFile.Close(), readCloseErr, os.Remove(temp))
 	}
 	hash := sha256.New()
-	_, copyErr := io.CopyN(io.MultiWriter(copyFile, hash), file, info.Size())
+	_, copyErr := io.CopyN(io.MultiWriter(copyFile, hash), viewContextReader{ctx: ctx, reader: file}, info.Size())
 	after, statErr := file.Stat()
 	if copyErr != nil {
 		return cleanup(fmt.Errorf("cli: capture %s for viewer snapshot: %w", name, copyErr), nil)
@@ -272,6 +333,10 @@ func (s *viewSnapshotStore) withSlot(r *http.Request, fn func() error) error {
 }
 
 func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
+	return s.createContext(context.Background(), runID)
+}
+
+func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (viewRunResponse, error) {
 	sourceRoot, err := openRunRoot(s.root, runID)
 	if err != nil {
 		return viewRunResponse{}, err
@@ -288,11 +353,17 @@ func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err := captureViewRun(sourceRoot, before, snapshot); err != nil {
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if err := captureViewRunContext(ctx, sourceRoot, before, snapshot); err != nil {
 		return fail(err)
 	}
 	if s.afterCopy != nil {
 		s.afterCopy()
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
 	}
 
 	manifestRaw, ok := snapshot.documents[manifestFile]
@@ -306,13 +377,25 @@ func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
 	if err := validateUnparsedCount(manifest.UnparsedLines); err != nil {
 		return fail(err)
 	}
+	canonicalCWD := manifest.CanonicalCWD
+	if canonicalCWD == "" {
+		canonicalCWD = manifest.CWD
+	}
+	if !validViewRepositoryRoot(canonicalCWD, manifest.RepoRoot) {
+		return fail(errors.New("cli: manifest repository root must be an absolute ancestor of cwd"))
+	}
+	snapshot.cwd = canonicalCWD
+	snapshot.repoRoot = manifest.RepoRoot
+	if snapshot.repoRoot == "" {
+		snapshot.repoRoot = manifest.CWD
+	}
 	if manifest.UnparsedLines > 0 {
 		unparsedBefore, err := viewFileFingerprint(sourceRoot, unparsedFile)
 		if err != nil {
 			return fail(err)
 		}
 		if unparsedBefore.present {
-			snapshot.unparsed, _, err = captureViewStream(sourceRoot, unparsedFile, unparsedBefore)
+			snapshot.unparsed, _, err = captureViewStreamContext(ctx, sourceRoot, unparsedFile, unparsedBefore)
 			if err != nil {
 				return fail(err)
 			}
@@ -335,6 +418,13 @@ func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
 	evidence, err := readCapturedViewEvidence(snapshot, manifest)
 	if err != nil {
 		return fail(err)
+	}
+	if err := prepareViewChanges(snapshot); err != nil {
+		return fail(err)
+	}
+	snapshot.changePaths = make(map[string]struct{}, len(snapshot.changes))
+	for _, change := range snapshot.changes {
+		snapshot.changePaths[change.Path] = struct{}{}
 	}
 	if snapshot.actions == nil {
 		return fail(fmt.Errorf("cli: open %s: %w", actionsFile, os.ErrNotExist))
@@ -362,12 +452,15 @@ func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
 		return fail(fmt.Errorf("cli: close source run after viewer snapshot: %w", err))
 	}
 	sourceRoot = nil
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
 	tokenBytes := make([]byte, 16)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return fail(fmt.Errorf("cli: create viewer snapshot: %w", err))
 	}
 	snapshot.id = hex.EncodeToString(tokenBytes)
-	if err := s.add(snapshot); err != nil {
+	if err := s.addContext(ctx, snapshot); err != nil {
 		return fail(err)
 	}
 
@@ -384,6 +477,7 @@ func (s *viewSnapshotStore) create(runID string) (viewRunResponse, error) {
 			VersionUnverified: manifest.VersionUnverified,
 		},
 		ProviderEvents: viewProviderEvents{Attribution: "provider_reported", Present: snapshot.events != nil},
+		Changes:        summarizeViewChanges(snapshot),
 		Evidence:       evidence,
 	}, nil
 }
@@ -579,8 +673,15 @@ func countViewEvents(file *os.File, size int64) (int, error) {
 }
 
 func (s *viewSnapshotStore) add(snapshot *viewSnapshot) error {
+	return s.addContext(context.Background(), snapshot)
+}
+
+func (s *viewSnapshotStore) addContext(ctx context.Context, snapshot *viewSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.closed {
 		return errors.New("cli: viewer snapshot store is closed")
 	}
@@ -631,13 +732,92 @@ func viewNextCursor(cursor, size int64) *int64 {
 	return &next
 }
 
+func normalizeViewActionPath(value, cwd, repoRoot string) string {
+	if value == "" || strings.IndexByte(value, 0) >= 0 {
+		return ""
+	}
+	root := path.Clean(repoRoot)
+	working := path.Clean(cwd)
+	if root == "." || working == "." {
+		return ""
+	}
+	clean := path.Clean(value)
+	if !strings.HasPrefix(clean, "/") {
+		prefix := ""
+		if root != working {
+			if root == "/" {
+				prefix = strings.TrimPrefix(working, "/")
+			} else if strings.HasPrefix(working, root+"/") {
+				prefix = strings.TrimPrefix(working, root+"/")
+			} else {
+				return ""
+			}
+		}
+		clean = path.Clean(path.Join(prefix, clean))
+	} else {
+		if root == "/" {
+			clean = strings.TrimPrefix(clean, "/")
+		} else if root == "." || !strings.HasPrefix(clean, root+"/") {
+			return ""
+		} else {
+			clean = strings.TrimPrefix(clean, root+"/")
+		}
+	}
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+		return ""
+	}
+	return clean
+}
+
+func validViewRepositoryRoot(cwd, repoRoot string) bool {
+	if repoRoot == "" {
+		return true
+	}
+	if !path.IsAbs(cwd) || !path.IsAbs(repoRoot) {
+		return false
+	}
+	cleanCWD := path.Clean(cwd)
+	cleanRoot := path.Clean(repoRoot)
+	return cleanRoot == "/" || cleanCWD == cleanRoot || strings.HasPrefix(cleanCWD, cleanRoot+"/")
+}
+
+func viewSamePathObservations(item action.Action, cwd, repoRoot string, changed map[string]struct{}) []string {
+	switch item.Type {
+	case action.TypeFileRead, action.TypeFileWrite, action.TypeFileEdit:
+	default:
+		return nil
+	}
+	candidates := item.RepositoryPaths
+	persisted := item.RepositoryPathsRecorded
+	if !persisted {
+		candidates = explicitActionPathInputs(item)
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	observed := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		relative := candidate
+		if !persisted {
+			relative = normalizeViewActionPath(candidate, cwd, repoRoot)
+		}
+		if _, ok := changed[relative]; !ok || relative == "" {
+			continue
+		}
+		if _, duplicate := seen[relative]; duplicate {
+			continue
+		}
+		seen[relative] = struct{}{}
+		observed = append(observed, relative)
+	}
+	return observed
+}
+
 func readViewActionPage(snapshot *viewSnapshot, cursor int64) (viewActionPage, error) {
 	if cursor > snapshot.actionSize {
 		return viewActionPage{}, errors.New("cursor is outside the action stream")
 	}
 	scanner := bufio.NewScanner(io.NewSectionReader(snapshot.actions, cursor, snapshot.actionSize-cursor))
 	scanner.Buffer(nil, maxActionBytes)
-	page := viewActionPage{Items: make([]action.Action, 0, viewPageSize)}
+	page := viewActionPage{Items: make([]viewAction, 0, viewPageSize)}
 	position := cursor
 	pageBytes := 0
 	for scanner.Scan() {
@@ -658,7 +838,7 @@ func readViewActionPage(snapshot *viewSnapshot, cursor int64) (viewActionPage, e
 		if err := json.Unmarshal(line, &item); err != nil {
 			return viewActionPage{}, fmt.Errorf("cli: read %s page: %w", actionsFile, err)
 		}
-		page.Items = append(page.Items, item)
+		page.Items = append(page.Items, viewAction{Action: item, SamePathObserved: viewSamePathObservations(item, snapshot.cwd, snapshot.repoRoot, snapshot.changePaths)})
 		pageBytes += len(line)
 		if len(page.Items) == viewPageSize {
 			break

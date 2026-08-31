@@ -43,4 +43,8 @@ type Action struct {
 	Status     string          `json:"status,omitempty"`
 	Input      json.RawMessage `json:"input,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
+	// RepositoryPaths are recorder-derived repository-relative projections of
+	// explicit file action inputs. They report a path observation, not causality.
+	RepositoryPaths         []string `json:"repositoryPaths,omitempty"`
+	RepositoryPathsRecorded bool     `json:"repositoryPathsRecorded,omitempty"`
 }
