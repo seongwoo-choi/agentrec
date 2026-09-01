@@ -114,14 +114,14 @@ brew install seongwoo-choi/tap/agentrec
 agentrec version
 
 # From a release archive — download SHA256SUMS plus the archive for your platform.
-archive=agentrec_0.2.0_darwin_arm64.tar.gz
+archive=agentrec_0.3.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.2.0_darwin_arm64/agentrec version
+./agentrec_0.3.0_darwin_arm64/agentrec version
 
 # On Linux, use `sha256sum -c -` instead of `shasum -a 256 -c -`.
 # Or from source
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.2.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.3.0
 ```
 
 `agentrec version`(`agentrec --version`도 동일함)은 세 줄을 출력합니다. 버전,
@@ -130,8 +130,9 @@ RFC 3339 타임스탬프가 들어 있습니다. 그 밖의 방법으로 만든 
 `unknown`을 보고하므로, 스탬프가 없는 바이너리를 릴리스된 바이너리로 오인하지
 않습니다.
 
-최신 태그 릴리스는 `v0.2.0`입니다. `shadow run`, `events`, 읽기 전용 viewer,
-Change Explorer, Unified Overview, same-path-observed correlation을 포함합니다.
+최신 태그 릴리스는 `v0.3.0`입니다. Claude Code와 Codex의 hook으로 대화형 세션을
+기록하고, repository 증거를 Git 기본값에 고정하며, redaction이 스트림 한도를 넘게
+줄을 키우지 않도록 했습니다.
 
 **검증 설정을 커밋하세요.** 실행은 저장소가 이미 보유한 검사에 대해서만 검증됩니다.
 `.agentrec.example.yaml`을 `.agentrec.yaml`로 복사해 커밋하세요. 각 명령은 셸을 거치지
@@ -554,7 +555,7 @@ go build ./...
 
 # Build the release archives locally; publishes nothing.
 # The output directory must not already exist.
-scripts/build-release.sh v0.2.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.3.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `.github/workflows/release.yml`은 `v*.*.*` 태그에서 같은 스크립트를 실행합니다. 모든

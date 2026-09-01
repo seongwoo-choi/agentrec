@@ -106,14 +106,14 @@ brew install seongwoo-choi/tap/agentrec
 agentrec version
 
 # From a release archive — download SHA256SUMS plus the archive for your platform.
-archive=agentrec_0.2.0_darwin_arm64.tar.gz
+archive=agentrec_0.3.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.2.0_darwin_arm64/agentrec version
+./agentrec_0.3.0_darwin_arm64/agentrec version
 
 # On Linux, use `sha256sum -c -` instead of `shasum -a 256 -c -`.
 # Or from source
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.2.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.3.0
 ```
 
 `agentrec version`（または同等の `agentrec --version`）は、バージョン、ビルド元の
@@ -122,8 +122,9 @@ go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.2.0
 `dev`、`unknown`、`unknown` を報告します。そのため、スタンプのないバイナリを
 リリース済みのものと取り違えることはありません。
 
-最新のタグ付きリリースは `v0.2.0` です。`shadow run`、`events`、読み取り専用 viewer、
-Change Explorer、Unified Overview、same-path-observed correlation を含みます。
+最新のタグ付きリリースは `v0.3.0` です。Claude Code と Codex の hook から対話セッションを
+記録し、リポジトリの証拠を Git の既定値に固定し、redaction が行をストリーム上限を超えて
+膨らませないようにしました。
 
 **検証設定をコミットする。** 実行を検証できるのは、リポジトリがすでに持っていた
 チェックに対してだけです。`.agentrec.example.yaml` を `.agentrec.yaml` にコピーして
@@ -501,7 +502,7 @@ go build ./...
 
 # Build the release archives locally; publishes nothing.
 # The output directory must not already exist.
-scripts/build-release.sh v0.2.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.3.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `.github/workflows/release.yml` は `v*.*.*` タグで同じスクリプトを実行します。各アーカイブの

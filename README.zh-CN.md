@@ -71,20 +71,19 @@ brew install seongwoo-choi/tap/agentrec
 agentrec version
 
 # From a release archive — download SHA256SUMS plus the archive for your platform.
-archive=agentrec_0.2.0_darwin_arm64.tar.gz
+archive=agentrec_0.3.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.2.0_darwin_arm64/agentrec version
+./agentrec_0.3.0_darwin_arm64/agentrec version
 
 # On Linux, use `sha256sum -c -` instead of `shasum -a 256 -c -`.
 # Or from source
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.2.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.3.0
 ```
 
 `agentrec version`（等同于 `agentrec --version`）会输出三行：版本、构建所用的提交和 UTC 构建时间。发布版二进制会带有标签、完整提交 SHA 和 RFC 3339 时间戳；其他方式构建的二进制则显示 `dev`、`unknown` 和 `unknown`，因此未加构建信息的二进制不会被误认为发布版。
 
-最新的标签版本是 `v0.2.0`，包含 `shadow run`、`events`、只读 viewer、Change Explorer、
-Unified Overview 和 same-path-observed correlation。
+最新的标签版本是 `v0.3.0`：新增通过 Claude Code 与 Codex 的 hook 记录交互式会话，把仓库证据固定到 Git 默认值，并防止 redaction 把一行放大到超过流上限。
 
 **提交验证配置。** 一次运行只会依据仓库原本已有的检查进行验证。将 `.agentrec.example.yaml` 复制为 `.agentrec.yaml` 并提交。每条命令都会直接启动，不经 shell，因此参数始终只是参数，不会被当作其他内容解释：
 
@@ -346,7 +345,7 @@ go build ./...
 
 # Build the release archives locally; publishes nothing.
 # The output directory must not already exist.
-scripts/build-release.sh v0.2.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.3.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `.github/workflows/release.yml` 会在 `v*.*.*` 标签上运行同一脚本，检查每个归档的文件清单和所构建二进制的版本输出，全部通过后才发布。若对应发布版本已存在，工作流会拒绝运行。
