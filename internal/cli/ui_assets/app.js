@@ -1,7 +1,8 @@
 (() => {
   'use strict';
 
-  const state = { runs: [], run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null };
+  const POLL_MS = 5000;
+  const state = { runs: [], run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, autoSelectedId: '' };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -36,10 +37,10 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return 'unknown';
     const seconds = Math.round((Date.now() - date.getTime()) / 1000);
-    if (seconds < 60) return `${Math.max(0, seconds)}s`;
-    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
-    return `${Math.round(seconds / 86400)}d`;
+    if (seconds < 60) return `${Math.max(0, seconds)}s ago`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+    return `${Math.round(seconds / 86400)}d ago`;
   }
 
   function clock(value) {
@@ -59,28 +60,146 @@
   function statusClass(value) {
     const v = String(value || '').toLowerCase();
     if (v === 'pass' || v === 'passed' || v === 'completed' || v === 'success') return 'pass';
-    if (['fail', 'failed', 'error', 'timeout', 'nonzero', 'interrupted', 'parse_error', 'storage_error', 'start_error', 'session_lost'].includes(v)) return 'fail';
+    if (['fail', 'failed', 'error', 'timeout', 'nonzero', 'interrupted', 'parse_error', 'storage_error', 'start_error'].includes(v)) return 'fail';
     return '';
+  }
+
+  // Plain-English copy for the status vocabulary. The raw tokens stay (they are documented and pinned); these only explain them.
+  const NO_VERIFICATION = 'No checks were run for this session. Record with --verify (agentrec setup --verify) to run the checks pinned in .agentrec.yaml.';
+  const NOT_OBSERVED = 'agentrec did not launch this session, so exit code and signal were never seen.';
+  const ENDED_BY_HOOK = 'The end was reported by the provider\'s SessionEnd hook.';
+  const REPOSITORY_PENDING = 'The diff is measured when the session ends.';
+  const REPOSITORY_NONE = 'No repository diff was recorded for this run.';
+  const NOT_CAUSAL = 'Observed during the run — this is not proof the agent caused it';
+  const REPOSITORY_REASONS = {
+    'repository change evidence was not recorded': REPOSITORY_NONE,
+    'repository change evidence is pending': REPOSITORY_PENDING,
+    'repository change artifacts are missing git/result.json': 'The repository diff artifacts are incomplete (git/result.json is missing).',
+    'repository result is missing change-list evidence': 'The repository diff artifacts are incomplete (the change list is missing).'
+  };
+  const ATTRIBUTIONS = {
+    provider_reported: (provider) => `Reported by ${provider || 'the provider'}`,
+    supervisor_observed: () => 'Observed by agentrec',
+    verification_observed: () => 'Observed by verification checks',
+    'observed during run, not causal proof': () => NOT_CAUSAL,
+    'observed, not causal proof': () => NOT_CAUSAL
+  };
+  const EMPTY_SECTION = {
+    'Provider usage': 'The provider did not report usage for this run.',
+    'Process result': 'No process result was recorded.',
+    'Repository delta': REPOSITORY_NONE,
+    Verification: NO_VERIFICATION
+  };
+
+  function humanAttribution(raw, provider) {
+    const known = ATTRIBUTIONS[raw];
+    return known ? known(provider) : raw;
+  }
+
+  // labelled renders humanised text and keeps the raw token reachable in the title attribute.
+  function labelled(tag, className, text, raw) {
+    const el = node(tag, className, text);
+    if (raw && raw !== text) el.title = raw;
+    return el;
+  }
+
+  function sentence(text) {
+    const t = String(text || '').trim();
+    if (!t) return '';
+    if (REPOSITORY_REASONS[t]) return REPOSITORY_REASONS[t];
+    return t[0].toUpperCase() + t.slice(1) + (/[.!?]$/.test(t) ? '' : '.');
+  }
+
+  function outcome(exitReason, supervisor) {
+    const reason = String(exitReason || 'running').toLowerCase();
+    if (reason === 'running') return { value: 'RUNNING', tone: '', detail: 'Session is still open; results appear when it ends.' };
+    if (reason === 'unknown') return { value: 'UNKNOWN', tone: '', detail: 'The recorder ended without writing how the session ended.' };
+    if (reason === 'session_ended') return { value: 'ENDED', tone: '', detail: 'Ended by the provider\'s SessionEnd hook, as reported.' };
+    if (reason === 'session_lost') return { value: 'LOST', tone: 'warn', detail: 'No hook arrived for the idle timeout, or the recorder was signalled; the session\'s own end was not seen.' };
+    const facts = [supervisor.has('Exit Code') ? `exit code ${supervisor.get('Exit Code')}` : '', supervisor.get('Signal') ? `signal ${supervisor.get('Signal')}` : '', supervisor.get('Duration') || ''].filter(Boolean);
+    return { value: reason.toUpperCase(), tone: statusClass(reason), detail: facts.join(' · ') || 'Duration unavailable' };
+  }
+
+  function verificationSummary(fields) {
+    if (!fields || fields.length === 0) return { value: 'UNAVAILABLE', tone: '', detail: NO_VERIFICATION };
+    const map = fieldsMap(fields);
+    const status = String(map.get('Status') || 'UNAVAILABLE').toUpperCase();
+    const checks = fields.filter((field) => field.name === 'Check');
+    const passed = checks.filter((field) => String(field.value).startsWith('PASS ')).length;
+    const failed = checks.filter((field) => String(field.value).startsWith('FAIL ')).length;
+    let detail = sentence(map.get('Reason'));
+    if (checks.length) detail = `${passed} of ${checks.length} checks passed${failed ? `, ${failed} failed` : ''}.`;
+    else if (!detail && status === 'UNAVAILABLE') detail = NO_VERIFICATION;
+    return { value: status, tone: statusClass(status), detail };
+  }
+
+  function repositorySummary(changes, fields) {
+    const status = String(changes.status || 'unavailable').toUpperCase();
+    if (status === 'AVAILABLE') return { value: String(changes.total || 0), detail: `${changes.tracked || 0} tracked · ${changes.untracked || 0} untracked · +${changes.additions || 0}/−${changes.deletions || 0} · ${changes.binary || 0} binary` };
+    if (status === 'PENDING' || fields.get('Status') === 'PENDING') return { value: 'PENDING', detail: REPOSITORY_PENDING };
+    return { value: 'UNAVAILABLE', detail: sentence(changes.reason) || REPOSITORY_NONE };
+  }
+
+  // explainStatus is the hover text for the server-classified run-list chip.
+  function explainStatus(label) {
+    const v = String(label || '').toUpperCase();
+    if (v === 'UNAVAILABLE') return 'No checks were run for this session.';
+    if (v === 'PASS') return 'Verification checks passed.';
+    if (v === 'FAIL') return 'Verification checks failed.';
+    const known = outcome(label, new Map());
+    return ['RUNNING', 'UNKNOWN', 'ENDED', 'LOST'].includes(known.value) ? known.detail : `The run ended with ${label}.`;
   }
 
   function renderRunList() {
     const query = $('run-search').value.trim().toLowerCase();
     const list = $('run-list');
+    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.runId : undefined;
     list.replaceChildren();
+    let shown = 0;
     for (const run of state.runs) {
       const haystack = `${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase();
       if (query && !haystack.includes(query)) continue;
-      const button = node('button', `run-item${state.run && state.run.run.id === run.id ? ' active' : ''}`);
+      shown += 1;
+      const active = Boolean(state.run && state.run.run.id === run.id);
+      const button = node('button', `run-item${active ? ' active' : ''}`);
       button.type = 'button';
       button.dataset.runId = run.id;
+      if (active) button.setAttribute('aria-current', 'true');
       const head = node('div', 'run-item-head');
-      head.append(node('span', 'run-project', run.project), node('span', 'run-time', relativeTime(run.startedAt)));
-      const id = node('div', 'run-id', shortID(run.id));
-      const status = node('div', `mini-status ${run.statusClass}`, `${run.provider} · ${run.statusLabel}`);
-      button.append(head, id, status);
+      head.append(node('span', 'run-project', run.project || 'unknown project'), node('span', 'run-time', relativeTime(run.startedAt)));
+      const foot = node('div', 'run-item-foot');
+      const status = node('span', `mini-status ${run.statusClass}`, run.statusLabel);
+      status.title = explainStatus(run.statusLabel);
+      foot.append(node('span', 'run-provider', run.provider || 'unknown'), status);
+      button.append(head, node('div', 'run-id', shortID(run.id)), foot);
       button.addEventListener('click', () => loadRun(run.id));
       list.append(button);
+      if (focused === run.id) button.focus({ preventScroll: true });
     }
+    $('run-count').textContent = String(state.runs.length);
+    const empty = $('run-list-empty');
+    if (shown === 0) {
+      empty.textContent = state.runs.length === 0 ? 'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.' : 'No runs match this search.';
+      empty.classList.remove('hidden');
+    } else {
+      empty.classList.add('hidden');
+    }
+  }
+
+  function renderWorkspaceState() {
+    const empty = $('workspace-empty');
+    const view = $('run-view');
+    if (state.run) {
+      empty.classList.add('hidden');
+      view.classList.remove('hidden');
+      return;
+    }
+    view.classList.add('hidden');
+    empty.classList.remove('hidden');
+    const noRuns = state.runs.length === 0;
+    $('workspace-empty-title').textContent = noRuns ? 'No runs recorded yet' : 'No run selected';
+    $('workspace-empty-body').textContent = noRuns ? 'Start a Claude Code or Codex session; it appears here when it ends.' : 'Pick a run from the list to inspect its recorded evidence.';
+    $('top-meta').textContent = noRuns ? 'No recorded runs' : `${state.runs.length} recorded run(s)`;
   }
 
   function firstDetail(value) {
@@ -92,7 +211,6 @@
     if (Array.isArray(value.command)) return value.command.join(' ').slice(0, 180);
     return '';
   }
-
 
   function actionFamily(type) {
     const value = String(type || 'unknown');
@@ -173,6 +291,22 @@
     timeline.append(controls);
   }
 
+  // One focusable, keyboard-activatable timeline row; shared by actions, changes and events.
+  function timelineRow(className, select) {
+    const row = node('article', className);
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute('aria-controls', 'inspector');
+    row.addEventListener('click', select);
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        if (event.key === ' ') event.preventDefault();
+        select();
+      }
+    });
+    return row;
+  }
+
   function renderTimeline() {
     if (!state.run) return;
     const timeline = $('timeline');
@@ -193,11 +327,8 @@
         const searchable = `${type} ${action.provider || ''} ${action.status || ''} ${detail} ${JSON.stringify(action.input || {})}`;
         if (!matches(action, type, searchable)) return;
         shown += 1;
-        const row = node('article', 'action-row');
+        const row = timelineRow('action-row', () => selectItem(row, { kind: 'action', value: action }));
         row.style.setProperty('--depth', String(actionDepth(action, byID)));
-        row.tabIndex = 0;
-        row.setAttribute('role', 'button');
-        row.setAttribute('aria-controls', 'inspector');
         row.dataset.index = String(index);
         const time = node('div', 'action-time', clock(action.startedAt));
         const rail = node('div', 'action-rail');
@@ -214,14 +345,6 @@
         if (observedPaths.length) meta.append(node('span', 'path-correlation', 'same path observed — not causal proof'));
         body.append(head, meta);
         row.append(time, rail, body);
-        const select = () => selectItem(row, { kind: 'action', value: action });
-        row.addEventListener('click', select);
-        row.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            if (event.key === ' ') event.preventDefault();
-            select();
-          }
-        });
         timeline.append(row);
       });
       if (shown === 0 && !stream.error) timeline.append(node('div', 'timeline-empty', stream.loaded ? 'No loaded actions match this filter.' : 'Loading actions…'));
@@ -236,18 +359,21 @@
       if (stream.error) timeline.append(node('div', 'timeline-empty stream-error', `Could not load repository changes: ${stream.error}`));
       renderTypeFilters(changes, changeFamily);
       if (stream.loaded && stream.status === 'unavailable') {
-        timeline.append(node('div', 'timeline-empty change-evidence-warning', `Repository change evidence is unavailable.${stream.reason ? ` ${stream.reason}` : ''}`));
+        const pending = fieldsMap(state.run.evidence.repository).get('Status') === 'PENDING';
+        const reason = pending ? REPOSITORY_PENDING : sentence(stream.reason);
+        timeline.append(node('div', 'timeline-empty change-evidence-warning', `Repository change evidence is unavailable.${reason ? ` ${reason}` : ''}`));
       }
+      if (changes.length) timeline.append(labelled('div', 'timeline-note', humanAttribution(source), source));
       let shown = 0;
       changes.forEach((change) => {
         const type = changeFamily(change);
         const counts = change.binary ? 'binary' : [change.additions === undefined ? '' : `+${change.additions}`, change.deletions === undefined ? '' : `-${change.deletions}`].filter(Boolean).join(' ');
         if (!matches(change, type, `${type} ${change.path} ${change.kind || ''} ${counts}`)) return;
         shown += 1;
-        const row = node('article', 'action-row change-row');
-        row.tabIndex = 0;
-        row.setAttribute('role', 'button');
-        row.setAttribute('aria-controls', 'inspector');
+        const row = timelineRow('action-row change-row', () => {
+          selectItem(row, { kind: 'change', value: change, patch: null, patchCursor: 0, patchNextCursor: null, patchHistory: [], patchLoading: false });
+          if (change.tracked) loadPatchPage(change.path, 0, false, state.loadGeneration);
+        });
         const marker = node('div', `change-marker ${type}`, change.tracked ? (change.binary ? 'B' : 'M') : '?');
         const rail = node('div', 'action-rail');
         rail.append(node('span', `action-dot ${type}`));
@@ -255,21 +381,10 @@
         const head = node('div', 'action-head');
         head.append(node('span', 'action-type', change.path));
         const meta = node('div', 'action-meta');
-        meta.append(node('span', 'source-badge', source), node('span', '', type));
+        meta.append(node('span', '', type));
         if (counts) meta.append(node('span', 'change-counts', counts));
         body.append(head, meta);
         row.append(marker, rail, body);
-        const select = () => {
-          selectItem(row, { kind: 'change', value: change, patch: null, patchCursor: 0, patchNextCursor: null, patchHistory: [], patchLoading: false });
-          if (change.tracked) loadPatchPage(change.path, 0, false, state.loadGeneration);
-        };
-        row.addEventListener('click', select);
-        row.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            if (event.key === ' ') event.preventDefault();
-            select();
-          }
-        });
         timeline.append(row);
       });
       if (shown === 0 && !stream.error && !(stream.loaded && stream.status === 'unavailable')) {
@@ -293,10 +408,7 @@
       const detail = firstDetail(event) || firstDetail(event.message) || event.subtype || event.event || `event ${index + 1}`;
       if (!matches(event, type, `${type} ${detail} ${JSON.stringify(event)}`)) return;
       shown += 1;
-      const row = node('article', 'action-row event-row');
-      row.tabIndex = 0;
-      row.setAttribute('role', 'button');
-      row.setAttribute('aria-controls', 'inspector');
+      const row = timelineRow('action-row event-row', () => selectItem(row, { kind: 'event', value: event, index }));
       const time = node('div', 'action-time', clock(event.timestamp || event.created_at || event.createdAt));
       const rail = node('div', 'action-rail');
       rail.append(node('span', 'action-dot'));
@@ -307,14 +419,6 @@
       meta.append(node('span', 'source-badge', 'provider event'), node('span', '', `#${index + 1}`));
       body.append(head, meta);
       row.append(time, rail, body);
-      const select = () => selectItem(row, { kind: 'event', value: event, index });
-      row.addEventListener('click', select);
-      row.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          if (event.key === ' ') event.preventDefault();
-          select();
-        }
-      });
       timeline.append(row);
     });
     if (shown === 0 && !stream.error) {
@@ -342,6 +446,20 @@
     holder.append(node('pre', 'payload', text));
   }
 
+  // Unified-diff lines rendered as text nodes with a tone class; no markup is derived from the payload.
+  function patchNode(patch) {
+    const pre = node('pre', 'payload diff-patch');
+    for (const line of patch.split('\n')) {
+      let tone = '';
+      if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) tone = ' diff-meta';
+      else if (line.startsWith('+')) tone = ' diff-add';
+      else if (line.startsWith('-')) tone = ' diff-del';
+      else if (line.startsWith('@@')) tone = ' diff-hunk';
+      pre.append(node('span', `diff-line${tone}`, `${line}\n`));
+    }
+    return pre;
+  }
+
   function renderInspector() {
     const holder = $('inspector');
     holder.replaceChildren();
@@ -356,7 +474,9 @@
     holder.append(node('div', 'inspector-title', title));
     const meta = node('div', 'inspector-meta');
     if (kind === 'action') {
-      [value.provider, value.assurance, value.status, value.id].filter(Boolean).forEach((item) => meta.append(node('span', 'pill', item)));
+      if (value.provider) meta.append(node('span', 'pill', value.provider));
+      if (value.assurance) meta.append(labelled('span', 'pill', humanAttribution(value.assurance, value.provider), value.assurance));
+      [value.status, value.id].filter(Boolean).forEach((item) => meta.append(node('span', 'pill', item)));
       const observedPaths = value.samePathObserved || [];
       if (observedPaths.length) meta.append(node('span', 'pill path-correlation', 'same path observed — not causal proof'));
       holder.append(meta);
@@ -365,7 +485,7 @@
       addPayload(holder, 'SANITIZED RESULT', value.result);
     } else if (kind === 'change') {
       const source = state.streams.changes.attribution || 'observed during run, not causal proof';
-      meta.append(node('span', 'pill', value.tracked ? 'tracked' : 'untracked'), node('span', 'pill', source));
+      meta.append(node('span', 'pill', value.tracked ? 'tracked' : 'untracked'), labelled('span', 'pill', humanAttribution(source), source));
       if (value.binary) meta.append(node('span', 'pill', 'binary'));
       holder.append(meta);
       const details = {
@@ -381,8 +501,12 @@
       addPayload(holder, 'REPOSITORY-OBSERVED METADATA', details);
       if (value.tracked) {
         holder.append(node('div', 'payload-label', 'SANITIZED REPOSITORY PATCH'));
-        const patchText = state.selected.patchLoading ? 'Loading patch…' : (state.selected.patchError || state.selected.patch || 'No patch bytes on this page.');
-        holder.append(node('pre', 'payload diff-patch', patchText));
+        const { patchLoading, patchError, patch } = state.selected;
+        if (!patchLoading && !patchError && patch) {
+          holder.append(patchNode(patch));
+        } else {
+          holder.append(node('pre', 'payload diff-patch', patchLoading ? 'Loading patch…' : (patchError || 'No patch bytes on this page.')));
+        }
         if (!state.selected.patchLoading && (state.selected.patchHistory.length > 0 || state.selected.patchNextCursor !== null)) {
           const controls = node('div', 'stream-pager patch-pager');
           const previous = node('button', 'load-more', 'Previous page');
@@ -401,7 +525,7 @@
         }
       }
     } else {
-      meta.append(node('span', 'pill', 'provider_reported'), node('span', 'pill', `event #${state.selected.index + 1}`));
+      meta.append(labelled('span', 'pill', humanAttribution('provider_reported', state.run.run.provider), 'provider_reported'), node('span', 'pill', `event #${state.selected.index + 1}`));
       holder.append(meta);
       addPayload(holder, 'SANITIZED PROVIDER EVENT', value);
     }
@@ -411,9 +535,32 @@
     return new Map((fields || []).map((field) => [field.name, field.value]));
   }
 
+  // describeField turns a raw evidence value into display text plus, where the word alone is opaque, a one-line caption.
+  function describeField(section, name, value, fields, provider) {
+    if (name === 'Attribution') return { text: humanAttribution(value, provider), title: value };
+    if (section === 'Process result' && name === 'Status' && value.startsWith('UNAVAILABLE (interactive session')) {
+      const ended = fields.get('Exit Reason') === 'session_ended';
+      return { text: 'NOT OBSERVED', caption: ended ? `${NOT_OBSERVED} ${ENDED_BY_HOOK}` : NOT_OBSERVED, title: value };
+    }
+    if (section === 'Repository delta' && name === 'Status') {
+      if (value === 'PENDING') return { text: value, caption: REPOSITORY_PENDING };
+      if (value === 'UNAVAILABLE') return { text: value, caption: sentence(fields.get('Reason')) || REPOSITORY_NONE };
+    }
+    if (section === 'Verification' && name === 'Status' && value === 'UNAVAILABLE') return { text: value, caption: sentence(fields.get('Reason')) || NO_VERIFICATION };
+    return { text: value };
+  }
+
+  function fieldValue(described) {
+    const el = node('span', 'field-value', described.text);
+    if (described.title && described.title !== described.text) el.title = described.title;
+    if (described.caption) el.append(node('span', 'field-caption', described.caption));
+    return el;
+  }
+
   function renderEvidence() {
     const holder = $('evidence-sections');
     holder.replaceChildren();
+    const provider = state.run.run.provider;
     const sections = [
       ['Provider usage', 'provider_reported', state.run.evidence.providerUsage || []],
       ['Process result', 'supervisor_observed', state.run.evidence.supervisor || []],
@@ -423,24 +570,27 @@
     for (const [title, source, fields] of sections) {
       const block = node('section', 'evidence-block');
       const heading = node('div', 'evidence-title');
-      heading.append(node('span', '', title), node('span', 'evidence-source', source));
+      heading.append(node('span', '', title), labelled('span', 'evidence-source', humanAttribution(source, provider), source));
       block.append(heading);
       const grid = node('div', 'evidence-fields');
       if (fields.length === 0) {
-        grid.append(node('span', 'field-value', 'Unavailable'));
+        const empty = fieldValue({ text: 'Unavailable', caption: EMPTY_SECTION[title] });
+        empty.classList.add('field-span');
+        grid.append(empty);
       } else {
-        for (const field of fields) grid.append(node('span', 'field-name', field.name), node('span', 'field-value', field.value));
+        const map = fieldsMap(fields);
+        for (const field of fields) grid.append(node('span', 'field-name', field.name), fieldValue(describeField(title, field.name, String(field.value), map, provider)));
       }
       block.append(grid);
       holder.append(block);
     }
   }
 
-  function metric(label, value, detail = '') {
-    const card = node('div', 'metric');
-    card.append(node('div', 'metric-value', String(value)));
+  // tone is one of '', 'pass', 'fail', 'warn'; UNAVAILABLE and RUNNING stay neutral on purpose.
+  function metric(label, value, detail = '', tone = '') {
+    const card = node('div', `metric${tone ? ` ${tone}` : ''}`);
+    card.append(node('div', 'metric-label', label), node('div', 'metric-value', String(value)));
     if (detail) card.append(node('div', 'metric-detail', detail));
-    card.append(node('div', 'metric-label', label));
     return card;
   }
 
@@ -449,20 +599,24 @@
     const run = data.run;
     $('run-provider').textContent = run.provider || 'unknown';
     $('run-project').textContent = run.project || 'unknown';
-    $('run-title').textContent = shortID(run.id);
+    $('run-title').textContent = run.id;
     $('run-subtitle').textContent = `${run.cwd || 'unknown cwd'} · ${new Date(run.startedAt).toLocaleString()}`;
     $('run-prompt').textContent = run.prompt || 'No recorded request.';
     $('action-count').textContent = String(data.actionCount || 0);
     $('change-count').textContent = '0';
     $('event-count').textContent = String(data.eventCount || 0);
     $('top-meta').textContent = `${run.provider || 'unknown'} · ${run.exitReason || 'running'} · ${run.id}`;
+    document.title = `${run.project || run.id} · agentrec`;
 
-    const verification = fieldsMap(data.evidence.verification).get('Status') || 'UNAVAILABLE';
-    const exitStatus = statusClass(run.exitReason);
-    const verificationStatus = statusClass(verification);
-    const runStatus = exitStatus === 'fail' || verificationStatus === 'fail' ? 'fail' : (exitStatus || verificationStatus);
+    const supervisor = fieldsMap(data.evidence.supervisor);
+    const process = outcome(run.exitReason, supervisor);
+    const verification = verificationSummary(data.evidence.verification);
+    const tones = [process.tone, verification.tone];
+    // ponytail: a run reads as passed only when both the process and the checks did; UNAVAILABLE never borrows green.
+    const runStatus = tones.includes('fail') ? 'fail' : (tones.includes('warn') ? 'warn' : (process.tone === 'pass' && verification.tone === 'pass' ? 'pass' : ''));
     const verdict = $('run-verdict');
-    verdict.textContent = `RUN ${String(run.exitReason || 'RUNNING').toUpperCase()} · VERIFY ${String(verification).toUpperCase()}`;
+    verdict.textContent = `Run ${process.value} · Verify ${verification.value}`;
+    verdict.title = `${process.detail} ${verification.detail}`.trim();
     verdict.className = `verdict ${runStatus}`;
     $('provider-dot').className = `status-dot ${runStatus}`;
     const timelineWarning = $('timeline-warning');
@@ -474,25 +628,21 @@
       timelineWarning.classList.add('hidden');
     }
 
-    const supervisor = fieldsMap(data.evidence.supervisor);
-    const verificationReason = fieldsMap(data.evidence.verification).get('Reason') || '';
-    const changes = data.changes || {};
-    const repositoryStatus = String(changes.status || 'unavailable').toUpperCase();
-    const repositoryAvailable = repositoryStatus === 'AVAILABLE';
-    const repositoryValue = repositoryAvailable ? `${changes.total || 0} (${changes.tracked || 0} tracked, ${changes.untracked || 0} untracked)` : repositoryStatus;
-    const repositoryDetail = repositoryAvailable ? `+${changes.additions || 0}/-${changes.deletions || 0}, ${changes.binary || 0} binary` : (changes.reason || 'Repository evidence was not recorded');
+    const repository = repositorySummary(data.changes || {}, fieldsMap(data.evidence.repository));
+    const warnings = Number(run.warningCount) || 0;
     const metrics = $('metrics');
     metrics.replaceChildren(
-      metric('Process outcome', String(run.exitReason || 'RUNNING').toUpperCase(), supervisor.get('Duration') || 'Duration unavailable'),
-      metric('Verification verdict', String(verification).toUpperCase(), verificationReason),
-      metric('Repository evidence', repositoryValue, repositoryDetail),
+      metric('Process outcome', process.value, process.detail, process.tone),
+      metric('Verification verdict', verification.value, verification.detail, verification.tone),
+      metric('Repository evidence', repository.value, repository.detail),
       metric('Normalized actions', data.actionCount || 0),
       metric('Provider events', data.eventCount || 0),
-      metric('Warnings', run.warningCount || 0)
+      metric('Warnings', warnings, '', warnings > 0 ? 'warn' : '')
     );
     renderEvidence();
     renderTimeline();
     renderRunList();
+    renderWorkspaceState();
   }
 
   async function loadPatchPage(path, cursor = 0, rememberCurrent = false, generation = state.loadGeneration, consumeHistory = false) {
@@ -590,22 +740,74 @@
     }
   }
 
+  function applyRunList(list) {
+    state.runs = list.runs || [];
+    const warning = $('unreadable-warning');
+    if (list.unreadable) {
+      warning.textContent = `${list.unreadable} unreadable run(s) were excluded.`;
+      warning.classList.remove('hidden');
+    } else {
+      warning.classList.add('hidden');
+    }
+    renderRunList();
+    renderWorkspaceState();
+  }
+
+  // Selects the newest run when nothing is shown; the guard stops a run that fails to load from being retried every tick.
+  function autoSelect(list) {
+    if (state.run || state.runAbortController || state.runs.length === 0) return;
+    const id = list.initialRunId || state.runs[0].id;
+    if (id === state.autoSelectedId) return;
+    state.autoSelectedId = id;
+    return loadRun(id);
+  }
+
+  // Live refresh: re-fetch /api/runs and redraw the list in place. Selection, focus and the loaded run are untouched.
+  async function refreshRuns() {
+    if (state.pollController || document.visibilityState === 'hidden') return;
+    state.pollController = new AbortController();
+    try {
+      const list = await getJSON('/api/runs', state.pollController.signal);
+      applyRunList(list);
+      await autoSelect(list);
+    } catch (error) {
+      // ponytail: poll failures stay quiet; the next tick retries and user-initiated loads still surface errors.
+    } finally {
+      state.pollController = null;
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    state.pollTimer = window.setInterval(refreshRuns, POLL_MS);
+  }
+
+  function stopPolling() {
+    window.clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+
   async function init() {
     try {
       const list = await getJSON('/api/runs');
-      state.runs = list.runs || [];
-      $('run-count').textContent = String(state.runs.length);
-      if (list.unreadable) {
-        const warning = $('unreadable-warning');
-        warning.textContent = `${list.unreadable} unreadable run(s) were excluded.`;
-        warning.classList.remove('hidden');
-      }
-      renderRunList();
-      if (list.initialRunId) await loadRun(list.initialRunId);
+      applyRunList(list);
+      await autoSelect(list);
     } catch (error) {
+      $('workspace-empty-title').textContent = 'Could not load recorded runs';
+      $('workspace-empty-body').textContent = error instanceof Error ? error.message : String(error);
       showError(error);
     }
+    startPolling();
   }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      stopPolling();
+    } else {
+      refreshRuns();
+      startPolling();
+    }
+  });
 
   $('run-search').addEventListener('input', renderRunList);
   $('timeline-search').addEventListener('input', (event) => {
@@ -627,7 +829,7 @@
       state.mode = tab.dataset.mode;
       state.activeTypes.clear();
       renderTimeline();
-      if (!state.streams[state.mode].loaded) await loadStreamPage(state.mode);
+      if (state.streams && !state.streams[state.mode].loaded) await loadStreamPage(state.mode);
     });
     tab.addEventListener('keydown', (event) => {
       let next = index;
