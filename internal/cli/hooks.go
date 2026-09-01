@@ -37,8 +37,8 @@ var hookEvents = map[string][]string{
 // hookGuidance tells the operator where the fragment goes and what else the
 // provider needs before it runs the hooks.
 var hookGuidance = map[string]string{
-	"claude": "Merge the \"hooks\" object above into ~/.claude/settings.json, or into a project's .claude/settings.json.\n",
-	"codex":  "Merge the \"hooks\" object above into ~/.codex/hooks.json, or into a project's .codex/hooks.json, then run /hooks inside Codex once to trust it: Codex skips a hook it has not been told to trust.\n",
+	"claude": "Merge the \"hooks\" object above into ~/.claude/settings.json, or into a project's .claude/settings.json — or let `agentrec setup` do it.\n",
+	"codex":  "Merge the \"hooks\" object above into ~/.codex/hooks.json, or into a project's .codex/hooks.json — or let `agentrec setup` do it — then run /hooks inside Codex once to trust it: Codex skips a hook it has not been told to trust.\n",
 }
 
 // The shape of Claude Code's hooks setting, as far as this snippet uses it.
@@ -78,24 +78,7 @@ func runHooks(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "cli: locate agentrec: %v\n", err)
 		return exitFailure
 	}
-	command := shellWord(exe) + " hook " + provider
-	if verify {
-		command += " " + verifyFlag
-	}
-	events := hookEvents[provider]
-	settings := hookSettings{Hooks: make(map[string][]hookGroup, len(events))}
-	for _, event := range events {
-		timeout := hookCommandTimeout
-		if provider == "codex" && event == hookSessionEnd {
-			timeout = codexSessionEndHookTimeout
-		}
-		settings.Hooks[event] = []hookGroup{{Hooks: []hookCommand{{
-			Type:    "command",
-			Command: command,
-			Timeout: timeout,
-		}}}}
-	}
-	out, err := json.MarshalIndent(settings, "", "  ")
+	out, err := json.MarshalIndent(hookFragment(provider, exe, verify), "", "  ")
 	if err != nil {
 		fmt.Fprintf(stderr, "cli: encode hook settings: %v\n", err)
 		return exitFailure

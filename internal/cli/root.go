@@ -16,14 +16,15 @@ Usage:
   agentrec show <run-id>|latest
   agentrec events <run-id>|latest [--json]
   agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open]
+  agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]
   agentrec hooks print --claude|--codex [--verify]
   agentrec version
 
-Recording an interactive session: paste the output of 'agentrec hooks print
---claude' into your Claude Code settings, or of '--codex' into your Codex hooks
-file. Each new session is then recorded by 'agentrec hook <provider>' (run by the
-provider) and 'agentrec session serve' (started by the first hook), neither of
-which is meant to be typed by hand.
+Recording an interactive session: 'agentrec setup' installs the hooks into your
+Claude Code settings and your Codex hooks file ('hooks print' shows the fragment
+instead of installing it). Each new session is then recorded by 'agentrec hook
+<provider>' (run by the provider) and 'agentrec session serve' (started by the
+first hook), neither of which is meant to be typed by hand.
 `
 
 // Run executes the CLI with args (os.Args[1:]) and returns the process exit code.
@@ -49,6 +50,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runEvents(args[1:], stdout, stderr)
 	case "view":
 		return runView(args[1:], stdout, stderr)
+	case "setup":
+		return runSetup(args[1:], stdout, stderr)
 	case "hooks":
 		return runHooks(args[1:], stdout, stderr)
 	case "hook":
