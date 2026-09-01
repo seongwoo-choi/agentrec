@@ -18,6 +18,7 @@ const AssuranceProviderReported Assurance = "provider_reported"
 // providers may emit types not listed here.
 const (
 	TypeAgentMessage  = "agent.message"
+	TypeUserPrompt    = "user.prompt"
 	TypeFileRead      = "file.read"
 	TypeFileWrite     = "file.write"
 	TypeFileEdit      = "file.edit"

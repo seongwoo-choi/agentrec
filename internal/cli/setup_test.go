@@ -118,7 +118,7 @@ func TestSetupPreservesEverythingItDoesNotOwn(t *testing.T) {
         "hooks": [{"type": "command", "command": "/usr/bin/other-logger", "timeout": 12}]
       }
     ],
-    "Stop": [
+    "Notification": [
       {"hooks": [{"type": "prompt", "prompt": "Was this good?"}]}
     ]
   },
@@ -157,8 +157,8 @@ func TestSetupPreservesEverythingItDoesNotOwn(t *testing.T) {
 	if got := hookCommands(t, doc, hookPostToolUse); len(got) != 2 || got[0] != "/usr/bin/other-logger" || got[1] != "/usr/local/bin/agentrec hook claude" {
 		t.Errorf("PostToolUse commands = %v, want the existing logger first and agentrec appended", got)
 	}
-	if got := hookCommands(t, doc, "Stop"); len(got) != 1 {
-		t.Errorf("Stop was touched: %v", got)
+	if got := hookCommands(t, doc, "Notification"); len(got) != 1 {
+		t.Errorf("Notification was touched: %v", got)
 	}
 	backups, _ := filepath.Glob(path + ".bak-agentrec-*")
 	if len(backups) != 1 {
@@ -199,13 +199,13 @@ func TestSetupPreservesEverythingItDoesNotOwn(t *testing.T) {
 	if got := hookCommands(t, doc, hookPostToolUse); len(got) != 1 || got[0] != "/usr/bin/other-logger" {
 		t.Errorf("PostToolUse after uninstall = %v, want only the existing logger", got)
 	}
-	for _, event := range []string{hookSessionStart, hookUserPromptSubmit, hookPostToolUseFailure, hookSessionEnd} {
+	for _, event := range []string{hookSessionStart, hookUserPromptSubmit, hookPostToolUseFailure, hookStop, hookSessionEnd} {
 		if _, left := doc["hooks"].(map[string]any)[event]; left {
 			t.Errorf("%s was left behind as an empty event", event)
 		}
 	}
-	if got := hookCommands(t, doc, "Stop"); len(got) != 1 {
-		t.Errorf("Stop was touched by uninstall: %v", got)
+	if got := hookCommands(t, doc, "Notification"); len(got) != 1 {
+		t.Errorf("Notification was touched by uninstall: %v", got)
 	}
 	if code, stdout, _ := run(t, "setup", "--claude", "--uninstall"); code != 0 || !strings.Contains(stdout, "absent") {
 		t.Errorf("uninstall on a clean file exit %d, stdout:\n%s", code, stdout)

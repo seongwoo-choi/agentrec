@@ -203,6 +203,7 @@ var labels = map[string]string{
 	action.TypeMCPCall:       "MCP",
 	action.TypeSubagentSpawn: "SUBAGENT",
 	action.TypeAgentMessage:  "MESSAGE",
+	action.TypeUserPrompt:    "PROMPT",
 	action.TypeProviderError: "ERROR",
 }
 
@@ -229,6 +230,8 @@ var detailKeys = map[string][]string{
 	action.TypeMCPCall:       {"tool", "name"},
 	action.TypeSubagentSpawn: {"name"},
 	action.TypeProviderError: {"message"},
+	action.TypeUserPrompt:    {"prompt"},
+	action.TypeAgentMessage:  {"text"},
 }
 
 // fallbackKeys orders the whole allowlist for action kinds without a preference

@@ -267,9 +267,10 @@ func TestSessionServeRecordsAnInteractiveSessionFromHooks(t *testing.T) {
 	}
 
 	actions := readActionsFile(t, dir)
-	if len(actions) != 3 {
-		t.Fatalf("actions = %d, want 3", len(actions))
+	if len(actions) != 4 || actions[0].Type != action.TypeUserPrompt || actions[0].ID != "hook-1" {
+		t.Fatalf("actions = %d (%+v), want the prompt first and then 3 tool calls", len(actions), actions)
 	}
+	actions = actions[1:]
 	want := []struct{ id, typ, status string }{
 		{"toolu_01", action.TypeShellExec, hookStatusCompleted},
 		{"toolu_02", action.TypeFileWrite, hookStatusCompleted},
@@ -658,7 +659,7 @@ func TestHooksPrintEmitsTheClaudeSettingsFragment(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &settings); err != nil {
 		t.Fatalf("stdout is not a settings fragment: %v\n%s", err, stdout)
 	}
-	for _, event := range []string{hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookPostToolUseFailure, hookSessionEnd} {
+	for _, event := range []string{hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookPostToolUseFailure, hookStop, hookSessionEnd} {
 		groups := settings.Hooks[event]
 		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
 			t.Fatalf("%s: groups = %+v, want one command", event, groups)
@@ -668,8 +669,8 @@ func TestHooksPrintEmitsTheClaudeSettingsFragment(t *testing.T) {
 			t.Errorf("%s: hook = %+v", event, h)
 		}
 	}
-	if len(settings.Hooks) != 5 {
-		t.Errorf("events = %d, want 5", len(settings.Hooks))
+	if len(settings.Hooks) != 6 {
+		t.Errorf("events = %d, want 6", len(settings.Hooks))
 	}
 	if !strings.Contains(stderr, "next session") {
 		t.Errorf("stderr = %q, want the note that open sessions are not recorded", stderr)
@@ -837,7 +838,7 @@ func TestHooksPrintEmitsTheCodexHooksFragment(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &settings); err != nil {
 		t.Fatalf("stdout is not a hooks fragment: %v\n%s", err, stdout)
 	}
-	want := map[string]int{hookSessionStart: 5, hookUserPromptSubmit: 5, hookPostToolUse: 5, hookSessionEnd: 3}
+	want := map[string]int{hookSessionStart: 5, hookUserPromptSubmit: 5, hookPostToolUse: 5, hookSessionEnd: 3, hookStop: hookCommandTimeout}
 	if len(settings.Hooks) != len(want) {
 		t.Errorf("events = %v, want %v", settings.Hooks, want)
 	}
@@ -894,9 +895,10 @@ func TestSessionServeRecordsACodexSession(t *testing.T) {
 		t.Errorf("manifest = %+v, want a codex session that ended", m)
 	}
 	actions := readActionsFile(t, dir)
-	if len(actions) != 3 {
-		t.Fatalf("actions = %d, want 3", len(actions))
+	if len(actions) != 4 || actions[0].Type != action.TypeUserPrompt {
+		t.Fatalf("actions = %d (%+v), want the prompt first and then 3 tool calls", len(actions), actions)
 	}
+	actions = actions[1:]
 	want := []struct{ id, typ string }{{"exec-1", action.TypeShellExec}, {"exec-2", action.TypeFileEdit}, {"exec-3", action.TypeMCPCall}}
 	for i, w := range want {
 		if a := actions[i]; a.ID != w.id || a.Type != w.typ || a.Provider != "codex" {
@@ -984,5 +986,103 @@ func TestOpenSessionReadsAsRunningWhileItsRecorderHoldsTheLock(t *testing.T) {
 	}
 	if _, stdout, _ := run(t, "show", "latest"); !strings.Contains(stdout, "Exit Reason  unknown") || !strings.Contains(stdout, "Ended By     "+sessionEndedBy("")) {
 		t.Errorf("show after the recorder is gone:\n%s", stdout)
+	}
+}
+
+// What was said is part of what happened: each prompt and each final reply is
+// filed as an action of its own, paired by the turn id the provider gives
+// both, redacted like everything else, and shown in the report under labels
+// of its own. A Stop with nothing to say files nothing.
+func TestSessionRecordsPromptsAndReplies(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "session-talk-0001"
+	socket, done, stderr := serveInProcess(t, sessionID, repo)
+
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup"}))
+	// Claude Code names the turn prompt_id; the reply carries a secret.
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "rotate the leaked key AKIAIOSFODNN7EXAMPLE", "prompt_id": "p-1"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "Rotated; the new key AKIAI44QH8DHBEXAMPLE is in the vault.", "prompt_id": "p-1", "stop_hook_active": false}))
+	// Codex names it turn_id, and a turn a stop hook continued stops twice.
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "and the tests?", "turn_id": "t-2"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "All green.", "turn_id": "t-2"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "Still green.", "turn_id": "t-2", "stop_hook_active": true}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": nil}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+
+	dir := onlyRunDir(t, root)
+	actions := readActionsFile(t, dir)
+	want := []struct{ id, typ, key, text string }{
+		{"prompt-p-1", action.TypeUserPrompt, "prompt", "rotate the leaked key [REDACTED:"},
+		{"reply-p-1", action.TypeAgentMessage, "text", "Rotated; the new key [REDACTED:"},
+		{"prompt-t-2", action.TypeUserPrompt, "prompt", "and the tests?"},
+		{"reply-t-2", action.TypeAgentMessage, "text", "All green."},
+		{"reply-t-2-5", action.TypeAgentMessage, "text", "Still green."},
+	}
+	if len(actions) != len(want) {
+		t.Fatalf("actions = %d, want %d:\n%+v", len(actions), len(want), actions)
+	}
+	for i, w := range want {
+		a := actions[i]
+		var input map[string]string
+		if err := json.Unmarshal(a.Input, &input); err != nil {
+			t.Fatalf("action %d input %s: %v", i, a.Input, err)
+		}
+		if a.ID != w.id || a.Type != w.typ || a.Status != hookStatusCompleted || a.Assurance != action.AssuranceProviderReported || !strings.HasPrefix(input[w.key], w.text) || len(input) != 1 {
+			t.Errorf("action %d = %s %s %s %v, want %s %s completed {%s: %q}", i, a.ID, a.Type, a.Status, input, w.id, w.typ, w.key, w.text)
+		}
+	}
+	if r := string(actions[1].Result); !strings.Contains(r, `"source":"hook.Stop"`) || !strings.Contains(r, `"turn":"p-1"`) {
+		t.Errorf("reply result = %s, want its hook and turn named", r)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "actions.jsonl"))
+	if err != nil || bytes.Contains(raw, []byte("AKIAIOSFODNN7EXAMPLE")) || bytes.Contains(raw, []byte("AKIAI44QH8DHBEXAMPLE")) {
+		t.Errorf("actions file leaks a key (%v):\n%s", err, raw)
+	}
+
+	_, stdout, _ := run(t, "show", "latest")
+	for _, want := range []string{"PROMPT  and the tests?", "MESSAGE  All green.", "PROMPT  rotate the leaked key [REDACTED:"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("show output lacks %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// A hook installed in both the user's and the project's settings fires twice
+// per event. Each tool call, prompt and reply is still filed once; a turn that
+// genuinely stops twice with different messages keeps both.
+func TestSessionFilesADoublyDeliveredHookOnce(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "session-twice-0001"
+	socket, done, stderr := serveInProcess(t, sessionID, repo)
+
+	for _, payload := range [][]byte{
+		sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup"}),
+		sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "hi", "prompt_id": "p-1"}),
+		sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "true"}, "tool_use_id": "toolu_1", "tool_response": ""}),
+		sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "hello", "prompt_id": "p-1"}),
+	} {
+		deliver(t, socket, payload)
+		deliver(t, socket, payload)
+	}
+	again := sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "hello again", "prompt_id": "p-1", "stop_hook_active": true})
+	deliver(t, socket, again)
+	deliver(t, socket, again)
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	var ids []string
+	for _, a := range readActionsFile(t, onlyRunDir(t, root)) {
+		ids = append(ids, a.ID)
+	}
+	if got, want := strings.Join(ids, " "), "prompt-p-1 toolu_1 reply-p-1 reply-p-1-4"; got != want {
+		t.Errorf("actions = %q, want %q", got, want)
 	}
 }

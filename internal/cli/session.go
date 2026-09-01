@@ -90,6 +90,7 @@ const (
 	hookUserPromptSubmit   = "UserPromptSubmit"
 	hookPostToolUse        = "PostToolUse"
 	hookPostToolUseFailure = "PostToolUseFailure"
+	hookStop               = "Stop"
 	hookSessionEnd         = "SessionEnd"
 )
 
@@ -103,16 +104,22 @@ const (
 // else is kept verbatim in the event stream; nothing here is trusted beyond
 // routing and naming.
 type hookEnvelope struct {
-	SessionID     string          `json:"session_id"`
-	HookEventName string          `json:"hook_event_name"`
-	CWD           string          `json:"cwd"`
-	Prompt        string          `json:"prompt"`
-	ToolName      string          `json:"tool_name"`
-	ToolInput     json.RawMessage `json:"tool_input"`
-	ToolResponse  json.RawMessage `json:"tool_response"`
-	ToolUseID     string          `json:"tool_use_id"`
-	DurationMs    *int64          `json:"duration_ms"`
-	Error         string          `json:"error"`
+	SessionID     string `json:"session_id"`
+	HookEventName string `json:"hook_event_name"`
+	CWD           string `json:"cwd"`
+	Prompt        string `json:"prompt"`
+	// PromptID (Claude Code) and TurnID (Codex) name the turn a prompt opened,
+	// and the Stop hook that closes it carries the same id beside the
+	// assistant's final message, so the two can be read as one exchange.
+	PromptID             string          `json:"prompt_id"`
+	TurnID               string          `json:"turn_id"`
+	LastAssistantMessage string          `json:"last_assistant_message"`
+	ToolName             string          `json:"tool_name"`
+	ToolInput            json.RawMessage `json:"tool_input"`
+	ToolResponse         json.RawMessage `json:"tool_response"`
+	ToolUseID            string          `json:"tool_use_id"`
+	DurationMs           *int64          `json:"duration_ms"`
+	Error                string          `json:"error"`
 	// AgentID and AgentType are set on hooks a subagent's tool calls fire. They
 	// arrive under the parent's session_id, so without them a subagent's write
 	// would read as the operator-facing agent's.
@@ -125,6 +132,7 @@ type hookEnvelope struct {
 // hook reported from one a stream parser read.
 type hookActionResult struct {
 	Source       string          `json:"source"`
+	Turn         string          `json:"turn,omitempty"`
 	ToolResponse json.RawMessage `json:"toolResponse,omitempty"`
 	Error        string          `json:"error,omitempty"`
 	DurationMs   *int64          `json:"durationMs,omitempty"`
@@ -483,8 +491,13 @@ type sessionRecorder struct {
 	repoRoot     string
 	stderr       io.Writer
 
-	prompted   bool
-	actions    int
+	prompted bool
+	actions  int
+	// seen remembers what was already filed, so a hook registered twice —
+	// once in the user's settings and once in the project's — files each tool
+	// call, prompt and reply once: a tool call by event and tool_use_id, a
+	// prompt or reply by turn and text, and every action id handed out.
+	seen       map[string]bool
 	warnings   int
 	storageErr error
 }
@@ -592,6 +605,7 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 		// would end the recording of everything after it.
 		s.warnings++
 		env.ToolInput, env.ToolResponse = nil, nil
+		env.Prompt, env.LastAssistantMessage = "", ""
 		raw = droppedPayload(env, dropped)
 	}
 	if err := s.bundle.WriteProviderEvent(raw); errors.Is(err, storage.ErrNotProviderEvent) {
@@ -608,6 +622,9 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 			s.prompted = true
 			s.store(s.bundle.WritePrompt(env.Prompt))
 		}
+		s.recordText(env, dropped)
+	case hookStop:
+		s.recordText(env, dropped)
 	case hookPostToolUse, hookPostToolUseFailure:
 		s.recordAction(env, dropped)
 	case hookSessionEnd:
@@ -620,6 +637,9 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 // carries no timestamps: the times here are when the recorder took delivery,
 // and the duration is the provider's own.
 func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
+	if env.ToolUseID != "" && !s.first(env.HookEventName+":"+env.ToolUseID) {
+		return
+	}
 	s.actions++
 	id := env.ToolUseID
 	if id == "" {
@@ -662,6 +682,77 @@ func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
 		act.RepositoryPathsRecorded = true
 	}
 	s.store(s.bundle.WriteAction(act))
+}
+
+// recordText files what was said: the operator's prompt as submitted, and the
+// assistant's final message for the turn as the Stop hook reports it. Both
+// are the provider's word, filed under the same types the stream parser uses
+// for a traced run, and both pass through redaction like any other action.
+// The turn id pairs a reply with its prompt (prompt-<id> and reply-<id>).
+func (s *sessionRecorder) recordText(env hookEnvelope, dropped string) {
+	var typ, prefix, key, text string
+	switch env.HookEventName {
+	case hookUserPromptSubmit:
+		typ, prefix, key, text = action.TypeUserPrompt, "prompt-", "prompt", env.Prompt
+	case hookStop:
+		typ, prefix, key, text = action.TypeAgentMessage, "reply-", "text", env.LastAssistantMessage
+	default:
+		return
+	}
+	if text == "" && dropped == "" {
+		return
+	}
+	turn := env.PromptID
+	if turn == "" {
+		turn = env.TurnID
+	}
+	if turn != "" && !s.first(prefix+turn+"\x00"+text) {
+		return
+	}
+	s.actions++
+	id := fmt.Sprintf("hook-%d", s.actions)
+	if turn != "" {
+		id = prefix + turn
+		if !s.first("id:" + id) {
+			// A turn a stop hook continued reports Stop again with a new
+			// message: filed beside the first, not over it.
+			id = fmt.Sprintf("%s-%d", id, s.actions)
+		}
+	}
+	now := time.Now()
+	input, _ := json.Marshal(map[string]string{key: text})
+	act := action.Action{
+		ID:         id,
+		Type:       typ,
+		Provider:   s.provider,
+		Assurance:  action.AssuranceProviderReported,
+		StartedAt:  now,
+		FinishedAt: now,
+		Status:     hookStatusCompleted,
+		Input:      input,
+	}
+	if payload, err := json.Marshal(hookActionResult{
+		Source:    "hook." + env.HookEventName,
+		Turn:      turn,
+		AgentID:   env.AgentID,
+		AgentType: env.AgentType,
+		Dropped:   dropped,
+	}); err == nil {
+		act.Result = payload
+	}
+	s.store(s.bundle.WriteAction(act))
+}
+
+// first reports whether key was not seen before, and remembers it.
+func (s *sessionRecorder) first(key string) bool {
+	if s.seen == nil {
+		s.seen = map[string]bool{}
+	}
+	if s.seen[key] {
+		return false
+	}
+	s.seen[key] = true
+	return true
 }
 
 // hookActionType maps a tool name onto an action type the way the provider's
