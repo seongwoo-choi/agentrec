@@ -40,7 +40,7 @@
 이를 섞지 않습니다. 그래서 코드 리뷰, 장애 조사, 인수인계, 새 에이전트 버전을
 믿을지에 대한 판단이 요약이 아니라 관측된 사실에서 출발합니다.
 
-[릴리스 노트](docs/releases/v0.3.0.md) ·
+[릴리스 노트](docs/releases/v0.4.0.md) ·
 [설계 노트](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 증거](docs/dogfood/2026-07-28-evidence.md) ·
@@ -54,7 +54,12 @@
 
 ## 빠른 시작
 
-> **상태:** v0.3.0이 최신 릴리스입니다. Claude Code와 Codex의 대화형 세션 기록이
+> **상태:** v0.4.0이 최신 릴리스입니다. 세션에서 무엇을 말했는지, 즉 각 프롬프트와
+> 각 최종 응답이 도구 호출 옆에 기록됩니다. `agentrec setup`과 `agentrec start`로
+> 기록과 되읽기가 명령 하나씩이 됐고, viewer는 보여주는 모든 상태를 네 개 언어로
+> 설명합니다.
+>
+> v0.3.0에서는 Claude Code와 Codex의 대화형 세션 기록이
 > 추가됐고, 저장소 증거를 Git 기본값에 고정하며, redaction이 스트림 한도를 넘게
 > 줄을 키우지 않습니다.
 
@@ -66,14 +71,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.3.0_darwin_arm64.tar.gz
+archive=agentrec_0.4.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.3.0_darwin_arm64/agentrec version
+./agentrec_0.4.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.3.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.4.0
 ```
 
 태그된 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`
@@ -130,7 +135,10 @@ agentrec hooks print --claude
 묻지 않습니다. 기존 hooks는 그대로 두고, 파일 옆에 백업을 남기며, 다시 실행해도
 아무것도 바뀌지 않습니다. Codex는 새 hook을 신뢰하도록 Codex 안에서 `/hooks`를 한
 번 실행해야 합니다. `hooks print`는 설치하지 않고 조각만 출력합니다. 그 뒤에 여는
-모든 세션이 run으로 남습니다. 이미 열려 있던 세션은 기록되지 않습니다.
+모든 세션이 run으로 남습니다. 이미 열려 있던 세션은 기록되지 않습니다. 각
+프롬프트와 각 최종 응답은 도구 호출 옆에 `PROMPT`, `MESSAGE` 줄로 기록되며
+provider의 turn id로 짝지어집니다. v0.3.0에서 올라오셨다면 `agentrec setup`을 한
+번 더 실행하세요. `Stop` hook만 추가하고 나머지는 건드리지 않습니다.
 
 **다시 읽기 — 대부분은 브라우저가 편합니다:**
 
@@ -410,7 +418,7 @@ recorder는 소켓과 lock을 시스템 임시 디렉터리 아래에 둡니다.
 
 ## 문서
 
-- [v0.3.0 릴리스 노트](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.4.0 릴리스 노트](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [플라이트 레코더 설계](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 증거 — recorder](docs/dogfood/2026-07-28-evidence.md): 고정된 20회
@@ -428,7 +436,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.3.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.4.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 릴리스 아카이브를 로컬에서 빌드할 뿐 아무것도

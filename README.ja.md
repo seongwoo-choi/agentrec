@@ -41,7 +41,7 @@
 コードレビュー、障害調査、引き継ぎ、新しいエージェントバージョンを信頼するかの判断を、
 要約ではなく観測された事実から始められます。
 
-[リリースノート](docs/releases/v0.3.0.md) ·
+[リリースノート](docs/releases/v0.4.0.md) ·
 [設計ノート](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood の証拠](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,9 +55,14 @@
 
 ## クイックスタート
 
-> **ステータス:** 最新リリースは v0.3.0 です。Claude Code と Codex の対話セッション
-> 記録を追加し、リポジトリの証拠を Git の既定値に固定し、redaction が行をストリーム
-> 上限を超えて膨らませないようにしました。
+> **ステータス:** 最新リリースは v0.4.0 です。セッションで何が語られたか、つまり各
+> プロンプトと各最終応答がツール呼び出しの隣に記録されるようになりました。`agentrec setup`
+> と `agentrec start` により、記録も読み返しもコマンド 1 つで済みます。ビューアーは
+> 表示するすべてのステータスを 4 か国語で説明します。
+>
+> v0.3.0 では Claude Code と Codex の対話セッション記録を追加し、リポジトリの証拠を
+> Git の既定値に固定し、redaction が行をストリーム上限を超えて膨らませないように
+> しました。
 
 **インストール方法を 1 つ選びます。Homebrew が最も簡単です。**
 
@@ -67,14 +72,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.3.0_darwin_arm64.tar.gz
+archive=agentrec_0.4.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.3.0_darwin_arm64/agentrec version
+./agentrec_0.4.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.3.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.4.0
 ```
 
 各タグ付きリリースには `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64`
@@ -134,7 +139,10 @@ Codex、または両方）、セッションが終わるたびに `.agentrec.yam
 何も変わりません。Codex では、新しい hook を信頼するために Codex 内で `/hooks` を一度
 実行する必要があります。`hooks print` はインストールせずに断片を表示するだけです。それ
 以降に開いたすべてのセッションが run として記録されます。すでに開いているセッションは
-対象になりません。
+対象になりません。各プロンプトと各最終応答は、ツール呼び出しの隣に `PROMPT` 行と
+`MESSAGE` 行として記録され、プロバイダーの turn id で対応づけられます。v0.3.0 から
+更新する場合は `agentrec setup` をもう一度実行してください。`Stop` hook を追加する
+だけで、ほかには何も触れません。
 
 **読み返す — 多くの人が使いたくなるのはブラウザーでしょう:**
 
@@ -419,7 +427,7 @@ agentrec が主張しないこと:
 
 ## ドキュメント
 
-- [v0.3.0 のリリースノート](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.4.0 のリリースノート](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [フライトレコーダーの設計](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood の証拠 — recorder](docs/dogfood/2026-07-28-evidence.md): 固定 20 回の
@@ -437,7 +445,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.3.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.4.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` はリリースアーカイブをローカルでビルドするだけで、何も公開

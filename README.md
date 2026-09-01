@@ -41,7 +41,7 @@ comes from a different observer, and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.3.0.md) ·
+[Release notes](docs/releases/v0.4.0.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,7 +55,12 @@ version starts from what was observed rather than from a summary.
 
 ## Quick start
 
-> **Status:** v0.3.0 is the latest release. It adds interactive session recording
+> **Status:** v0.4.0 is the latest release. A session now records what was said,
+> each prompt and each final reply beside the tool calls; `agentrec setup` and
+> `agentrec start` make recording and reading back one command each; and the
+> viewer explains every status it shows, in four languages.
+>
+> v0.3.0 added interactive session recording
 > for Claude Code and Codex, pins repository evidence to Git's defaults, and keeps
 > redaction from growing a line past the stream limit.
 
@@ -67,14 +72,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.3.0_darwin_arm64.tar.gz
+archive=agentrec_0.4.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.3.0_darwin_arm64/agentrec version
+./agentrec_0.4.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.3.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.4.0
 ```
 
 Each tagged release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -132,6 +137,9 @@ Flags skip the questions. Existing hooks are kept, a backup is written beside th
 file, and running it again changes nothing. Codex needs `/hooks` once, inside Codex,
 to trust the new hook. `hooks print` shows the fragment instead of installing it.
 Every session opened afterwards is filed as a run; sessions already open are not.
+Each prompt and each final reply is recorded beside the tool calls, as `PROMPT`
+and `MESSAGE` lines paired by the provider's turn id. Upgrading from v0.3.0? Run
+`agentrec setup` again: it adds the `Stop` hook and touches nothing else.
 
 **Read it back — in the browser, where most people will want it:**
 
@@ -416,7 +424,7 @@ and lock under the system temporary directory.
 
 ## Documentation
 
-- [Release notes for v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [Release notes for v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed
@@ -435,7 +443,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.3.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.4.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the release archives locally and publishes

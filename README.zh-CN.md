@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.3.0.md) ·
+[发布说明](docs/releases/v0.4.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -52,8 +52,12 @@
 
 ## 快速开始
 
-> **状态：** v0.3.0 是最新发布版本。它新增了 Claude Code 与 Codex 的交互式会话记录，
-> 把仓库证据固定到 Git 默认值，并防止脱敏把一行放大到超过流上限。
+> **状态：** v0.4.0 是最新发布版本。会话现在会记录说过的话：每条提示词和每条最终回复
+> 都记在工具调用旁边；`agentrec setup` 和 `agentrec start` 让记录与回读各只需一条
+> 命令；查看器会用四种语言解释它显示的每一种状态。
+>
+> v0.3.0 新增了 Claude Code 与 Codex 的交互式会话记录，把仓库证据固定到 Git 默认值，
+> 并防止脱敏把一行放大到超过流上限。
 
 **任选一种安装方式。Homebrew 最简单。**
 
@@ -63,14 +67,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.3.0_darwin_arm64.tar.gz
+archive=agentrec_0.4.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.3.0_darwin_arm64/agentrec version
+./agentrec_0.4.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.3.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.4.0
 ```
 
 每个已打标签的发布版本都包含 `darwin_amd64`、`darwin_arm64`、`linux_amd64` 和
@@ -125,7 +129,9 @@ agentrec hooks print --claude
 `.codex/hooks.json`）。带上标志即可跳过提问。已有的 hooks 会被保留，备份会写在原文件
 旁边，再次运行不会有任何改动。Codex 需要在 Codex 内执行一次 `/hooks` 来信任新的 hook。
 `hooks print` 只显示片段而不安装。此后打开的每个会话都会作为一次运行被归档；已经打开
-的会话不会。
+的会话不会。每条提示词和每条最终回复都会记在工具调用旁边，以 `PROMPT` 和 `MESSAGE`
+行的形式出现，并按提供方的 turn id 配对。从 v0.3.0 升级？再运行一次 `agentrec setup`：
+它只添加 `Stop` hook，不会改动其他任何内容。
 
 **回读记录——在浏览器中查看，多数人会更喜欢这种方式：**
 
@@ -389,7 +395,7 @@ agentrec 不声称什么：
 
 ## 文档
 
-- [v0.3.0 发布说明](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.4.0 发布说明](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [飞行记录仪设计](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——recorder](docs/dogfood/2026-07-28-evidence.md)：一个固定的 20 次
@@ -407,7 +413,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.3.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.4.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 在本地构建发布归档，不发布任何内容；其输出目录必须
