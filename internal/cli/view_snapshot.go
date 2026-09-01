@@ -472,7 +472,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		Run: viewRunInfo{
 			ID: runID, Provider: manifest.Provider, ProviderVersion: manifest.ProviderVersion,
 			Project: projectName(manifest.CWD), CWD: manifest.CWD, Prompt: prompt,
-			StartedAt: manifest.StartedAt, EndedAt: manifest.EndedAt, ExitReason: manifest.ExitReason,
+			StartedAt: manifest.StartedAt, EndedAt: manifest.EndedAt, ExitReason: viewExitReason(manifest),
 			WarningCount: manifest.WarningCount, UnparsedLines: manifest.UnparsedLines,
 			VersionUnverified: manifest.VersionUnverified,
 			Mode:              manifest.Mode, SessionID: manifest.SessionID,
@@ -904,4 +904,15 @@ func (s *viewSnapshotStore) Close() error {
 	s.byID = make(map[string]*viewSnapshot)
 	s.ids = nil
 	return errors.Join(errs...)
+}
+
+// viewExitReason is the exit reason the viewer shows. A traced run keeps the
+// manifest's own word, empty while it runs; a session bundle goes through the
+// same reading as the terminal report, so an open session says running and one
+// whose recorder is gone without a result says unknown, in both places.
+func viewExitReason(m storage.Manifest) string {
+	if m.Mode != storage.ModeSession {
+		return m.ExitReason
+	}
+	return exitReason(m, nil)
 }

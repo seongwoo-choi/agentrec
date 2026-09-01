@@ -933,3 +933,56 @@ func TestPatchFilePaths(t *testing.T) {
 		t.Errorf("a shell command was read as a patch: %v, %v", got, ok)
 	}
 }
+
+// A session bundle with no ending reads as running while a recorder holds its
+// lock and as unknown once nothing does: the same word in the table, the
+// report and the viewer, and never "unknown" for a session that is simply
+// still open.
+func TestOpenSessionReadsAsRunningWhileItsRecorderHoldsTheLock(t *testing.T) {
+	root := home(t)
+	sessionSocketHome(t)
+	const sessionID = "session-open"
+	startedAt := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	b, err := storage.Create(root, "run-open", storage.Manifest{
+		Provider: "claude", CWD: "/tmp", StartedAt: startedAt,
+		Mode: storage.ModeSession, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteAction(readAction(startedAt)); err != nil {
+		t.Fatal(err)
+	}
+
+	socket, err := sessionSocketPath(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, lock, err := listenSession(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := true
+	release := func() {
+		if held {
+			listener.Close()
+			lock.Close()
+			held = false
+		}
+	}
+	t.Cleanup(release)
+
+	if _, stdout, _ := run(t, "list"); !strings.Contains(stdout, "  running  ") {
+		t.Errorf("list while the recorder holds the lock:\n%s", stdout)
+	}
+	if _, stdout, _ := run(t, "show", "latest"); !strings.Contains(stdout, "Exit Reason  running") || !strings.Contains(stdout, "Ended By     "+sessionEndedBy(reasonRunning)) {
+		t.Errorf("show while the recorder holds the lock:\n%s", stdout)
+	}
+	release()
+	if _, stdout, _ := run(t, "list"); !strings.Contains(stdout, "  unknown  ") {
+		t.Errorf("list after the recorder is gone:\n%s", stdout)
+	}
+	if _, stdout, _ := run(t, "show", "latest"); !strings.Contains(stdout, "Exit Reason  unknown") || !strings.Contains(stdout, "Ended By     "+sessionEndedBy("")) {
+		t.Errorf("show after the recorder is gone:\n%s", stdout)
+	}
+}

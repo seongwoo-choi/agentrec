@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -129,10 +130,14 @@ func newestRunID(root string) (string, error) {
 		return "", fmt.Errorf("cli: %d run(s) under %s are unreadable, so the latest one cannot be told: name a run id", unreadable, root)
 	}
 	if len(runs) == 0 {
-		return "", fmt.Errorf("cli: no runs recorded under %s", root)
+		return "", fmt.Errorf("%w under %s", errNoRuns, root)
 	}
 	return runs[0].ID, nil
 }
+
+// errNoRuns reports an empty runs root. Readers of one run refuse it; the
+// viewer, which shows the list of runs, opens on the empty list instead.
+var errNoRuns = errors.New("cli: no runs recorded")
 
 // readRun builds the report for one run out of one held run-directory identity.
 func readRun(root, runID string) (report.Report, error) {
@@ -205,8 +210,10 @@ func sessionEndedBy(reason string) string {
 		return "the provider's SessionEnd hook, as reported; agentrec did not observe the process end"
 	case reasonSessionLost:
 		return "the recorder, after no hook delivery for the idle timeout or on a signal; the session's own end was not seen"
+	case reasonRunning:
+		return "nothing yet: the session is still open and its recorder is running"
 	}
-	return "the recorder, on a failure to store what the session reported"
+	return "nothing recorded: the recorder ended without writing how the session ended"
 }
 
 // appendSessionEvidence tells the reader of a session bundle over what window
@@ -860,11 +867,12 @@ func supervisorFields(m storage.Manifest, result *processResult) []report.Field 
 		}
 		fields = append(fields, report.Field{Name: "Version", Value: version})
 	}
-	fields = append(fields, report.Field{Name: "Exit Reason", Value: exitReason(m, result)})
+	reason := exitReason(m, result)
+	fields = append(fields, report.Field{Name: "Exit Reason", Value: reason})
 	if m.Mode == storage.ModeSession {
 		// Who said the session ended matters: a traced run's end was observed,
 		// a session's end is a hook's word — or the recorder giving up.
-		fields = append(fields, report.Field{Name: "Ended By", Value: sessionEndedBy(m.ExitReason)})
+		fields = append(fields, report.Field{Name: "Ended By", Value: sessionEndedBy(reason)})
 	}
 	if result != nil && result.ExitCode != nil {
 		fields = append(fields, report.Field{Name: "Exit Code", Value: strconv.Itoa(*result.ExitCode)})
@@ -892,8 +900,38 @@ func exitReason(m storage.Manifest, result *processResult) string {
 		return m.ExitReason
 	case result != nil && result.ExitReason != "":
 		return result.ExitReason
+	case m.Mode == storage.ModeSession && sessionRecorderAlive(m.SessionID):
+		return reasonRunning
 	}
 	return unknownValue
+}
+
+// reasonRunning is what a session bundle reports while its recorder still
+// holds the session lock: not an ending, and not an unknown one either.
+const reasonRunning = "running"
+
+// sessionRecorderAlive reports whether a recorder currently holds the lock for
+// this session. The lock is exclusive while a recorder serves the session and
+// released by the kernel the moment it is gone, so a shared lock that would
+// block is a live recorder and anything else is not. A session recorded under
+// another socket directory or another user reads as not running, which is the
+// honest answer from here.
+func sessionRecorderAlive(sessionID string) bool {
+	socket, err := sessionSocketPath(sessionID)
+	if err != nil {
+		return false
+	}
+	lock, err := os.OpenFile(sessionLockPath(socket), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	defer lock.Close()
+	err = syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	if err == nil {
+		syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		return false
+	}
+	return errors.Is(err, syscall.EWOULDBLOCK)
 }
 
 // runDuration reports how long the run took: the supervisor's measurement when
