@@ -194,6 +194,7 @@ var gitOperations = []struct {
 	{"rebase-merge", "rebase", "git rebase --abort"},
 	{"rebase-apply", "rebase", "git rebase --abort"},
 	{"CHERRY_PICK_HEAD", "cherry-pick", "git cherry-pick --abort"},
+	{"REVERT_HEAD", "revert", "git revert --abort"},
 	{"BISECT_LOG", "bisect", "git bisect reset"},
 	{"BISECT_START", "bisect", "git bisect reset"},
 }

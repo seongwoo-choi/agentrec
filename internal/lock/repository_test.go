@@ -389,6 +389,7 @@ func TestCheckCleanRejectsAnUnfinishedGitOperation(t *testing.T) {
 		{marker: "rebase-merge", directory: true, operation: "rebase"},
 		{marker: "rebase-apply", directory: true, operation: "rebase"},
 		{marker: "CHERRY_PICK_HEAD", operation: "cherry-pick"},
+		{marker: "REVERT_HEAD", operation: "revert"},
 		{marker: "BISECT_LOG", operation: "bisect"},
 		{marker: "BISECT_START", operation: "bisect"},
 	} {
