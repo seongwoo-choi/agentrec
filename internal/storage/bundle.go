@@ -54,6 +54,11 @@ const (
 	fileMode os.FileMode = 0o600
 )
 
+// ModeSession marks a bundle recorded from an interactive session's hooks rather
+// than from a process agentrec supervised. The trace mode has no marker: a
+// manifest without one was written by a recorder that was the parent process.
+const ModeSession = "session"
+
 // Manifest describes the run as a whole. RedactionRuleVersion records the rules
 // that produced the markers in this bundle, so it is set from the redaction
 // package rather than by the caller.
@@ -69,7 +74,14 @@ type Manifest struct {
 	// anyway, on the operator's explicit say-so. What the run reports about
 	// itself was read by a parser that does not claim to understand this
 	// version's event stream, and every reader of this bundle is told so.
-	VersionUnverified    bool       `json:"versionUnverified,omitempty"`
+	VersionUnverified bool `json:"versionUnverified,omitempty"`
+	// Mode names how the run was recorded. Empty means trace: agentrec launched
+	// the provider itself and supervised the process. ModeSession means an
+	// interactive session whose own hooks reported to agentrec: there was no
+	// supervised process, and SessionID names the provider's session so the
+	// bundle can be told apart from a run agentrec started.
+	Mode                 string     `json:"mode,omitempty"`
+	SessionID            string     `json:"sessionId,omitempty"`
 	StartedAt            time.Time  `json:"startedAt"`
 	EndedAt              *time.Time `json:"endedAt,omitempty"`
 	ExitReason           string     `json:"exitReason,omitempty"`

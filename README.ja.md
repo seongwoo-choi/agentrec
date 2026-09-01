@@ -39,7 +39,7 @@ agentrec は、非対話モードで実行した Claude Code または Codex の
 
 agentrec は、エージェントをリアルタイムで操作する対話型 frontend やクラウドテレメトリサービスではありません。また、
 エージェントが観測されたすべてのファイル変更を引き起こしたことの証明でもありません。1 回の
-非対話的な実行を対象に、誰が何を観測したかと、何を確定できないかを残すためのローカルな
+1 回の実行（agentrec が起動した実行、または hook が報告した対話セッション）を対象に、誰が何を観測したかと、何を確定できないかを残すためのローカルな
 証拠の境界です。
 
 ## 翻訳版の保守
@@ -366,6 +366,43 @@ drift も観測された実行が中断された場合は `130` です。**プ�
 `$AGENTREC_HOME/shadow` 以下に残るディレクトリを削除して回収します。古いワークツリーの
 自動回収は行いません。
 
+## 対話セッションを記録する
+
+`agentrec trace` は provider を自ら起動します。対話的な Claude Code セッションは
+その方法では起動できないため、代わりにセッション自身の hook から記録します。次の
+コマンドが出力する断片を Claude Code の設定に貼り付けると、それ以降に開いたすべての
+セッションが run として残ります。
+
+```bash
+agentrec hooks print --claude
+agentrec hooks print --claude --verify
+```
+
+この断片は `SessionStart`、`UserPromptSubmit`、`PostToolUse`、`PostToolUseFailure`、
+`SessionEnd` に `agentrec hook claude` を登録します。セッション最初の hook がその
+セッションの recorder を起動し、recorder は baseline を固定してから hook が届ける
+すべてのイベントを受け取り、セッションが終わると run を締めくくります。バンドルの
+形は trace で記録した run と同じで、何が異なるかはレポートが明示します。
+
+- **監視したプロセスがありません。** `SUPERVISOR-OBSERVED RESULT` は `UNAVAILABLE`
+  と表示されます。agentrec は親プロセスではなかったため exit code と signal は不明で、
+  `Ended By` はセッションの `SessionEnd` hook が終了を報告したのか、recorder が待ち
+  きれず打ち切ったのか（`session_lost`、既定では hook のないまま 8 時間）を示します。
+- **より遅く、より広い観測ウィンドウ。** baseline は `SessionStart` hook が届いた時点、
+  つまりプロセスが起動し workspace が信頼された後に固定され、その間チェックアウトは
+  オペレーターに開かれていました。未コミットの変更があるチェックアウトや同時セッションは
+  拒否せず記録し、`Window` 行がその事実を述べます。
+- **求められたときだけ、コミット済みのチェックだけを実行します。** 検証は `--verify` で
+  出力した断片でのみ、かつ `.agentrec.yaml` が追跡されていて `HEAD` と同一のときだけ
+  実行されます。チェックアウトはエージェントが編集できる場所だからです。
+- **hook を通じた provider の報告です。** アクションは `PostToolUse` の payload から
+  取り出され、provider の `tool_use_id` と `duration_ms` を持ち、サブエージェントの
+  呼び出しには `agent_id` が付きます。セッションが無効にした hook は空白を残すだけで、
+  何も起きなかったことを意味しません。
+
+断片を導入する前に開いていたセッションは記録されません。Codex のセッションはまだ
+記録しません。
+
 ## 実行の保存場所
 
 `$AGENTREC_HOME` が設定されていれば `$AGENTREC_HOME/runs`、設定されていなければ
@@ -422,7 +459,7 @@ Ctrl-C と SIGTERM は、届いた場所ですぐに処理するのではなく�
 
 - **システムコールレベルの完全性は提供しない。** エージェントの作業中にそれを観測するものはありません。agentrec が記録するのは、プロバイダーが報告した内容、実行前後でのリポジトリの見え方、そして後から独立したチェックが示した結果です。
 - **リポジトリ差分は因果的な帰属ではない。** 変更が実行中に起きたことと、エージェントがその変更を行ったことは同じではありません。チェックアウトを編集する別の要因も同じ差分に現れ得ます。すべての report でもこの点を明記します。同様に、検証が通ったことは、その実行が残したツリー上で固定済みチェックが通ったことだけを示します。
-- **対話セッションは記録しない。** また、ポリシーエンジン、sandbox、リモートアップロードも提供しません。agentrec は観測し、ローカルへ書き込むだけです。
+- **ポリシーエンジン、sandbox、リモートアップロードは提供しません。** agentrec は観測し、ローカルへ書き込むだけです。対話セッションは hook が報告した内容だけを、しかも hook を導入した後に開いたセッションだけを記録します。
 
 **サポート対象: macOS と Linux。** Windows はビルドも検証もされていません。port にはプロセスグループの監督（`internal/runner/process_unix.go`）だけでなく、verification process control（`internal/evidence/verification.go`）と repository locking（`internal/lock/repository.go`）も必要です。
 

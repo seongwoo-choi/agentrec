@@ -475,6 +475,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 			StartedAt: manifest.StartedAt, EndedAt: manifest.EndedAt, ExitReason: manifest.ExitReason,
 			WarningCount: manifest.WarningCount, UnparsedLines: manifest.UnparsedLines,
 			VersionUnverified: manifest.VersionUnverified,
+			Mode:              manifest.Mode, SessionID: manifest.SessionID,
 		},
 		ProviderEvents: viewProviderEvents{Attribution: "provider_reported", Present: snapshot.events != nil},
 		Changes:        summarizeViewChanges(snapshot),
@@ -616,11 +617,12 @@ func readCapturedViewEvidence(snapshot *viewSnapshot, manifest storage.Manifest)
 	if err != nil {
 		return viewEvidence{}, err
 	}
+	repository, verificationSummary := appendSessionEvidence(manifest, repositoryFields(git), verificationFields(verification))
 	return viewEvidence{
 		ProviderUsage: viewFields(providerUsageFields(usage)),
 		Supervisor:    viewFields(supervisorFields(manifest, result)),
-		Repository:    viewFields(repositoryFields(git)),
-		Verification:  viewFields(verificationFields(verification)),
+		Repository:    viewFields(repository),
+		Verification:  viewFields(verificationSummary),
 	}, nil
 }
 

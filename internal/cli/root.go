@@ -16,7 +16,13 @@ Usage:
   agentrec show <run-id>|latest
   agentrec events <run-id>|latest [--json]
   agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open]
+  agentrec hooks print --claude
   agentrec version
+
+Recording an interactive session: paste the output of 'agentrec hooks print
+--claude' into your Claude Code settings. Each new session is then recorded by
+'agentrec hook claude' (run by Claude Code) and 'agentrec session serve' (started
+by the first hook), neither of which is meant to be typed by hand.
 `
 
 // Run executes the CLI with args (os.Args[1:]) and returns the process exit code.
@@ -42,6 +48,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runEvents(args[1:], stdout, stderr)
 	case "view":
 		return runView(args[1:], stdout, stderr)
+	case "hooks":
+		return runHooks(args[1:], stdout, stderr)
+	case "hook":
+		return runHook(args[1:], stdout, stderr)
+	case "session":
+		return runSession(args[1:], stdout, stderr)
 	case "version", "--version":
 		return runVersion(args[1:], stdout, stderr)
 	}
