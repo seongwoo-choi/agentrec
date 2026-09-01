@@ -842,13 +842,18 @@ func TestRunBoundsPipesHeldByDescendantAfterLeaderExit(t *testing.T) {
 		res Result
 		err error
 	}
+	const grace = 100 * time.Millisecond
+	// The bound is the grace plus slack, not a round number: under -race the Go
+	// runtime sleeps a full second at exit of the leader (racefini's atexit
+	// sleep), and that second lands inside the interval measured here.
+	bound := grace + 3*time.Second
 	done := make(chan outcome, 1)
 	go func() {
 		res, err := Run(context.Background(), Request{
 			Command:   helperCommand("exit-with-inherited-pipes", pidFile),
 			Bundle:    b,
 			Parser:    jsonlParser("", 0),
-			KillGrace: 100 * time.Millisecond,
+			KillGrace: grace,
 			Interrupt: interrupt,
 		})
 		done <- outcome{res: res, err: err}
@@ -871,7 +876,7 @@ func TestRunBoundsPipesHeldByDescendantAfterLeaderExit(t *testing.T) {
 		if got.res.ExitReason != ReasonCompleted {
 			t.Fatalf("ExitReason = %q, want %q", got.res.ExitReason, ReasonCompleted)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(bound):
 		_ = syscall.Kill(descendant, syscall.SIGKILL)
 		select {
 		case <-done:
@@ -879,7 +884,7 @@ func TestRunBoundsPipesHeldByDescendantAfterLeaderExit(t *testing.T) {
 		}
 		t.Fatal("Run remained blocked on pipes held by a descendant after the leader exited")
 	}
-	if elapsed := time.Since(drainStarted); elapsed > 1500*time.Millisecond {
+	if elapsed := time.Since(drainStarted); elapsed > bound {
 		t.Errorf("Run took %v, want KillGrace to bound the output drain", elapsed)
 	}
 	requireGone(t, descendant)
