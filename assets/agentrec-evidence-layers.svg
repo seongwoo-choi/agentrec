@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 430" width="1200" height="430" role="img" aria-label="One run, four observers, kept apart: provider-reported actions, supervisor-observed result, repository-observed changes, verification-observed result">
+  <rect x="0" y="0" width="1200" height="430" rx="18" fill="#0F1418" stroke="#2A333C" stroke-width="2"/>
+  <g font-family="IBM Plex Sans, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="600" y="58" text-anchor="middle" font-size="30" font-weight="700" fill="#E6EAEE">One run · four observers · kept apart</text>
+    <text x="600" y="90" text-anchor="middle" font-size="17" fill="#8C99A6">Each layer says who saw it and what it cannot establish. Nothing is combined into a score.</text>
+
+    <g transform="translate(48 120)">
+      <rect width="258" height="230" rx="12" fill="#161C22" stroke="#7AA2F7" stroke-width="2"/>
+      <rect x="0" y="0" width="258" height="6" rx="3" fill="#7AA2F7"/>
+      <text x="20" y="44" font-size="19" font-weight="700" fill="#E6EAEE">Provider-reported</text>
+      <text x="20" y="68" font-size="15" fill="#8C99A6">observer: the agent</text>
+      <text x="20" y="108" font-size="14" fill="#C3CBD3">tool calls, shell commands,</text>
+      <text x="20" y="128" font-size="14" fill="#C3CBD3">file reads and edits, MCP calls</text>
+      <text x="20" y="166" font-size="14" fill="#8C99A6">what the agent said it did —</text>
+      <text x="20" y="186" font-size="14" fill="#8C99A6">never taken as proof</text>
+      <text x="20" y="214" font-family="IBM Plex Mono, Menlo, Consolas, monospace" font-size="12" fill="#7AA2F7">provider_reported</text>
+    </g>
+
+    <g transform="translate(330 120)">
+      <rect width="258" height="230" rx="12" fill="#161C22" stroke="#E8641B" stroke-width="2"/>
+      <rect x="0" y="0" width="258" height="6" rx="3" fill="#E8641B"/>
+      <text x="20" y="44" font-size="19" font-weight="700" fill="#E6EAEE">Supervisor-observed</text>
+      <text x="20" y="68" font-size="15" fill="#8C99A6">observer: agentrec</text>
+      <text x="20" y="108" font-size="14" fill="#C3CBD3">exit code, exit reason, signal,</text>
+      <text x="20" y="128" font-size="14" fill="#C3CBD3">duration, warnings</text>
+      <text x="20" y="166" font-size="14" fill="#8C99A6">UNAVAILABLE for a session:</text>
+      <text x="20" y="186" font-size="14" fill="#8C99A6">agentrec was not the parent</text>
+      <text x="20" y="214" font-family="IBM Plex Mono, Menlo, Consolas, monospace" font-size="12" fill="#E8641B">supervisor_observed</text>
+    </g>
+
+    <g transform="translate(612 120)">
+      <rect width="258" height="230" rx="12" fill="#161C22" stroke="#9ECE6A" stroke-width="2"/>
+      <rect x="0" y="0" width="258" height="6" rx="3" fill="#9ECE6A"/>
+      <text x="20" y="44" font-size="19" font-weight="700" fill="#E6EAEE">Repository-observed</text>
+      <text x="20" y="68" font-size="15" fill="#8C99A6">observer: agentrec</text>
+      <text x="20" y="108" font-size="14" fill="#C3CBD3">baseline ref pinned before the run,</text>
+      <text x="20" y="128" font-size="14" fill="#C3CBD3">worktree diff measured after it</text>
+      <text x="20" y="166" font-size="14" fill="#8C99A6">observed during the run —</text>
+      <text x="20" y="186" font-size="14" fill="#8C99A6">not causal proof</text>
+      <text x="20" y="214" font-family="IBM Plex Mono, Menlo, Consolas, monospace" font-size="12" fill="#9ECE6A">observed, not causal</text>
+    </g>
+
+    <g transform="translate(894 120)">
+      <rect width="258" height="230" rx="12" fill="#161C22" stroke="#BB9AF7" stroke-width="2"/>
+      <rect x="0" y="0" width="258" height="6" rx="3" fill="#BB9AF7"/>
+      <text x="20" y="44" font-size="19" font-weight="700" fill="#E6EAEE">Verification-observed</text>
+      <text x="20" y="68" font-size="15" fill="#8C99A6">observer: agentrec</text>
+      <text x="20" y="108" font-size="14" fill="#C3CBD3">the repository's own checks,</text>
+      <text x="20" y="128" font-size="14" fill="#C3CBD3">pinned before, run after</text>
+      <text x="20" y="166" font-size="14" fill="#8C99A6">a rewritten config is TAINTED</text>
+      <text x="20" y="186" font-size="14" fill="#8C99A6">and nothing is executed</text>
+      <text x="20" y="214" font-family="IBM Plex Mono, Menlo, Consolas, monospace" font-size="12" fill="#BB9AF7">verification_observed</text>
+    </g>
+
+    <text x="600" y="398" text-anchor="middle" font-size="16" fill="#5B6B7A">No score. No winner. No causal claim. UNAVAILABLE is neutral, never a pass.</text>
+  </g>
+</svg>

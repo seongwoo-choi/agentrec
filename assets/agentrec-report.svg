@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760" role="img" aria-label="agentrec show latest: an interactive session recorded from hooks, rendered as an action timeline with four evidence sections">
+  <rect x="0" y="0" width="1200" height="760" rx="18" fill="#0F1418" stroke="#2A333C" stroke-width="2"/>
+  <rect x="0" y="0" width="1200" height="52" rx="18" fill="#161C22"/>
+  <rect x="0" y="34" width="1200" height="18" fill="#161C22"/>
+  <circle cx="34" cy="26" r="7" fill="#FF5F57"/>
+  <circle cx="58" cy="26" r="7" fill="#FEBC2E"/>
+  <circle cx="82" cy="26" r="7" fill="#28C840"/>
+  <g font-family="IBM Plex Mono, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">
+    <text x="600" y="32" text-anchor="middle" fill="#8C99A6">agentrec show latest</text>
+
+    <text x="48" y="98" fill="#E6EAEE" font-weight="700">ACTION TIMELINE</text>
+
+    <text x="48" y="140" fill="#E8641B" font-weight="700">PROVIDER-REPORTED ACTIONS</text>
+    <text x="48" y="168" fill="#C3CBD3">16:06:28  <tspan fill="#7AA2F7" font-weight="700">SHELL</tspan>  echo second-dogfood &amp;&amp; cat README.md</text>
+    <text x="48" y="194" fill="#8C99A6">  Source       <tspan fill="#E6EAEE">claude</tspan></text>
+    <text x="48" y="220" fill="#8C99A6">  Assurance    <tspan fill="#E6EAEE">provider_reported</tspan></text>
+    <text x="48" y="246" fill="#8C99A6">  Result       <tspan fill="#9ECE6A">success</tspan></text>
+    <text x="48" y="272" fill="#8C99A6">  Duration     <tspan fill="#E6EAEE">1.221s</tspan></text>
+
+    <text x="48" y="318" fill="#E8641B" font-weight="700">SUPERVISOR-OBSERVED RESULT</text>
+    <text x="48" y="346" fill="#8C99A6">  Status       <tspan fill="#FEBC2E">UNAVAILABLE</tspan><tspan fill="#8C99A6"> (interactive session: agentrec was not the parent process)</tspan></text>
+    <text x="48" y="372" fill="#8C99A6">  Session      <tspan fill="#E6EAEE">232ebb0e-bc2b-46af-918b-799eda7641d6</tspan></text>
+    <text x="48" y="398" fill="#8C99A6">  Exit Reason  <tspan fill="#E6EAEE">session_ended</tspan></text>
+    <text x="48" y="424" fill="#8C99A6">  Ended By     <tspan fill="#E6EAEE">the provider's SessionEnd hook, as reported; agentrec did not observe the process end</tspan></text>
+    <text x="48" y="450" fill="#8C99A6">  Duration     <tspan fill="#E6EAEE">10.262465s</tspan></text>
+
+    <text x="48" y="496" fill="#E8641B" font-weight="700">REPOSITORY-OBSERVED CHANGES</text>
+    <text x="48" y="524" fill="#8C99A6">  Status       <tspan fill="#9ECE6A">AVAILABLE</tspan></text>
+    <text x="48" y="550" fill="#8C99A6">  Files        <tspan fill="#E6EAEE">1 (1 tracked, 0 untracked)</tspan></text>
+    <text x="48" y="576" fill="#8C99A6">  Diff         <tspan fill="#E6EAEE">+1/-1, 0 binary</tspan></text>
+    <text x="48" y="602" fill="#8C99A6">  Baseline     <tspan fill="#E6EAEE">596ebb1640dd74bb40d59dd8ee598b85f3cfc1c4</tspan></text>
+    <text x="48" y="628" fill="#8C99A6">  Attribution  <tspan fill="#9ECE6A">observed during run, not causal proof</tspan></text>
+    <text x="48" y="654" fill="#8C99A6">  Window       <tspan fill="#E6EAEE">baseline pinned at the SessionStart hook, not before the process started</tspan></text>
+
+    <text x="48" y="700" fill="#E8641B" font-weight="700">VERIFICATION-OBSERVED RESULT</text>
+    <text x="48" y="728" fill="#8C99A6">  <tspan fill="#5B6B7A">(none)</tspan></text>
+  </g>
+</svg>

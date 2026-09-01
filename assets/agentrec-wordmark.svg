@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="1200" height="220" role="img" aria-label="agentrec — a flight recorder for coding agents">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0F1418"/>
+      <stop offset="1" stop-color="#161C22"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1200" height="220" rx="18" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="220" rx="18" fill="none" stroke="#2A333C" stroke-width="2"/>
+  <g font-family="IBM Plex Sans, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="72" y="128" font-size="92" font-weight="700" fill="#E6EAEE" letter-spacing="-2">agentrec</text>
+    <rect x="466" y="60" width="86" height="34" rx="17" fill="#E8641B"/>
+    <circle cx="486" cy="77" r="7" fill="#FFFFFF"/>
+    <text x="500" y="84" font-size="19" font-weight="700" fill="#FFFFFF" letter-spacing="1">REC</text>
+    <text x="72" y="176" font-size="27" fill="#8C99A6">a flight recorder for coding agents</text>
+  </g>
+  <g font-family="IBM Plex Mono, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" fill="#5B6B7A">
+    <text x="760" y="82">provider_reported</text>
+    <text x="760" y="108">supervisor_observed</text>
+    <text x="760" y="134">observed during run, not causal proof</text>
+    <text x="760" y="160">verification_observed</text>
+  </g>
+  <g fill="none" stroke-width="3">
+    <path d="M735 76 h12" stroke="#7AA2F7"/>
+    <path d="M735 102 h12" stroke="#E8641B"/>
+    <path d="M735 128 h12" stroke="#9ECE6A"/>
+    <path d="M735 154 h12" stroke="#BB9AF7"/>
+  </g>
+</svg>
