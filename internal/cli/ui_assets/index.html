@@ -9,17 +9,25 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="mark" aria-hidden="true"></span><strong>agentrec</strong><span class="product">Action Timeline</span></div>
-    <div class="top-meta" id="top-meta">Loading recorded evidence…</div>
+    <div class="brand"><span class="mark" aria-hidden="true"></span><strong>agentrec</strong><span class="product" data-i18n="Action Timeline">Action Timeline</span></div>
+    <div class="top-right">
+      <div class="top-meta" id="top-meta">Loading recorded evidence…</div>
+      <select id="lang" class="lang" aria-label="Language">
+        <option value="en">English</option>
+        <option value="ko">한국어</option>
+        <option value="ja">日本語</option>
+        <option value="zh-CN">简体中文</option>
+      </select>
+    </div>
   </header>
 
   <main class="shell">
     <aside class="sidebar" aria-label="Run list">
       <div class="sidebar-head">
-        <span class="eyebrow">Recorded runs</span>
+        <span class="eyebrow" data-i18n="Recorded runs">Recorded runs</span>
         <span class="count" id="run-count">0</span>
       </div>
-      <label class="search"><span aria-hidden="true">⌕</span><input id="run-search" type="search" placeholder="Find a run or project" autocomplete="off" aria-label="Find a run or project"></label>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="run-search" type="search" placeholder="Find a run or project" autocomplete="off" aria-label="Find a run or project" data-i18n-placeholder="Find a run or project"></label>
       <p id="run-list-empty" class="list-empty hidden"></p>
       <nav id="run-list" class="run-list" aria-label="Recorded runs"></nav>
       <div id="unreadable-warning" class="warning hidden"></div>
@@ -44,7 +52,7 @@
         <div id="timeline-warning" class="timeline-warning hidden" role="alert"></div>
 
         <section class="request-card">
-          <div class="section-label">Request</div>
+          <div class="section-label" data-i18n="Request">Request</div>
           <pre id="run-prompt">No recorded request.</pre>
         </section>
 
@@ -54,18 +62,18 @@
           <section class="timeline-panel">
             <div class="panel-toolbar">
               <div class="tabs" role="tablist" aria-label="Timeline mode">
-                <button id="timeline-tab-actions" class="tab active" data-mode="actions" role="tab" aria-controls="timeline" aria-selected="true" tabindex="0">Actions <span id="action-count">0</span></button>
-                <button id="timeline-tab-changes" class="tab" data-mode="changes" role="tab" aria-controls="timeline" aria-selected="false" tabindex="-1">Changes <span id="change-count">0</span></button>
-                <button id="timeline-tab-events" class="tab" data-mode="events" role="tab" aria-controls="timeline" aria-selected="false" tabindex="-1">Provider events <span id="event-count">0</span></button>
+                <button id="timeline-tab-actions" class="tab active" data-mode="actions" role="tab" aria-controls="timeline" aria-selected="true" tabindex="0"><span data-i18n="Actions">Actions</span> <span id="action-count">0</span></button>
+                <button id="timeline-tab-changes" class="tab" data-mode="changes" role="tab" aria-controls="timeline" aria-selected="false" tabindex="-1"><span data-i18n="Changes">Changes</span> <span id="change-count">0</span></button>
+                <button id="timeline-tab-events" class="tab" data-mode="events" role="tab" aria-controls="timeline" aria-selected="false" tabindex="-1"><span data-i18n="Provider events">Provider events</span> <span id="event-count">0</span></button>
               </div>
-              <label class="timeline-search"><input id="timeline-search" type="search" placeholder="Filter timeline" aria-label="Filter timeline"></label>
+              <label class="timeline-search"><input id="timeline-search" type="search" placeholder="Filter timeline" aria-label="Filter timeline" data-i18n-placeholder="Filter timeline"></label>
             </div>
             <div class="filter-row" id="type-filters"></div>
             <div id="timeline" class="timeline" role="tabpanel" aria-labelledby="timeline-tab-actions" aria-live="polite"></div>
           </section>
 
           <aside class="inspector-panel">
-            <div class="section-label">Evidence inspector</div>
+            <div class="section-label" data-i18n="Evidence inspector">Evidence inspector</div>
             <div id="inspector-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
             <div id="inspector" class="inspector-empty">Select an action, change, or provider event to inspect its sanitized evidence.</div>
             <div class="evidence-sections" id="evidence-sections"></div>

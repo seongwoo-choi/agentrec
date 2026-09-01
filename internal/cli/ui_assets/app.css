@@ -67,7 +67,9 @@ button { cursor: pointer; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 15px; white-space: nowrap; }
 .mark { width: 14px; height: 18px; display: inline-block; background: linear-gradient(90deg,var(--accent) 0 3px,transparent 3px 5px,var(--accent) 5px 8px,transparent 8px 10px,var(--accent) 10px 13px); clip-path: polygon(0 18%,100% 0,100% 82%,0 100%); }
 .product { color: var(--muted); font-size: 13px; border-left: 1px solid var(--border); padding-left: 10px; }
+.top-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .top-meta { color: var(--muted); font: 12px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lang { flex-shrink: 0; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
 
 /* shell: sidebar + workspace, each scrolls on its own */
 .shell { height: calc(100vh - 52px); display: grid; grid-template-columns: 288px minmax(0,1fr); }
@@ -174,6 +176,16 @@ h1 { margin: 6px 0; font: 600 20px/1.3 var(--mono); letter-spacing: -.01em; over
 .source-badge { color: var(--accent); }
 .path-correlation { color: var(--warn); }
 .event-row .action-dot { background: var(--quiet); }
+/* conversation rows: the operator's prompt and the assistant's reply as quote blocks, no dot-and-type layout */
+.conversation-row { grid-template-columns: 76px minmax(0,1fr); }
+.speech-body { min-width: 0; padding: 8px 12px 10px 4px; }
+.speaker { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.speech { border-left: 3px solid var(--border); background: var(--surface); border-radius: 0 8px 8px 0; padding: 8px 12px; }
+.conversation-row.prompt .speech { border-left-color: var(--accent); background: var(--accent-soft); }
+.speech-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.speech-text.expanded { display: block; max-height: 60vh; overflow: auto; }
+.show-more { margin-top: 6px; border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; font-weight: 500; }
+.show-more:hover { text-decoration: underline; }
 .change-row { grid-template-columns: 76px 22px minmax(0,1fr); }
 .change-row .action-type { white-space: normal; overflow-wrap:anywhere; }
 .change-marker { padding: 11px 8px 0 4px; color: var(--muted); font: 600 12px var(--mono); text-align: right; }
