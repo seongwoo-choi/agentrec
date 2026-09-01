@@ -90,11 +90,28 @@ func (r *Redactor) RedactJSON(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: want a JSON object", ErrNotJSONObject)
 	}
 
-	out, err := json.Marshal(r.redactValue(v, "", 0))
+	out, err := marshalJSON(r.redactValue(v, "", 0))
 	if err != nil {
 		return nil, fmt.Errorf("redaction: %w", err)
 	}
 	return out, nil
+}
+
+// marshalJSON is json.Marshal without HTML escaping. The default turns every
+// `<`, `>` and `&` into a six-byte \u sequence, so a line of markup that
+// arrived under the stream line limit can come back out well over it (2 MiB
+// of `<div>a</div>` becomes 5.6 MiB) and poison the whole run. None of this
+// is rendered as HTML and none of those bytes carry a secret, so they pass
+// through as they arrived. encoding/json still escapes U+2028/U+2029
+// unconditionally; that doubles at worst and is not worth a second pass.
+func marshalJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte{'\n'}), nil
 }
 
 // RedactArgv returns a copy of argv with values following secret-bearing option
@@ -271,7 +288,7 @@ func (r *Redactor) replaceKnownSecrets(text string) (string, bool) {
 // that number stays correlated. A value that came out of decodeOne always
 // marshals again.
 func (r *Redactor) canonicalMarker(v any) string {
-	out, _ := json.Marshal(v)
+	out, _ := marshalJSON(v)
 	return r.marker(string(out))
 }
 

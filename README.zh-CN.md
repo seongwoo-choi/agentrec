@@ -28,7 +28,7 @@ agentrec 会将一次非交互式 Claude Code 或 Codex 运行记录为一个证
 - **比较智能体，但不武断评判高下。** `shadow run` 会基于同一基线，为 Claude 和 Codex 分别创建独立的工作树和证据包。它只呈现记录到的事实，不会把操作数量、diff 或检查结果加工成缺乏依据的评分。
 - **谨慎升级提供方。** 默认拒绝不受支持的提供方版本。显式覆盖后，manifest 和报告中会留下 `versionUnverified` 标记，避免日后将存在解析风险的时间线误认为是已被完全理解的证据。
 
-agentrec 不是用于实时操控智能体的交互式 frontend，也不是云端遥测服务，更不能证明智能体导致了每一处观察到的文件变更。它为一次非交互式运行建立本地证据边界，同时说明谁观察到了什么，以及它无法证明什么。
+agentrec 不是用于实时操控智能体的交互式 frontend，也不是云端遥测服务，更不能证明智能体导致了每一处观察到的文件变更。它为一次运行（由 agentrec 启动的运行，或由 hook 报告的交互式会话）建立本地证据边界，同时说明谁观察到了什么，以及它无法证明什么。
 
 ## 维护翻译版本
 
@@ -265,6 +265,30 @@ between them, so a later leg may observe what an earlier one left.
 
 如果在最终决定启动提供方时已经收到或排队了中断信号，该提供方不会启动。若信号在作出该用户态决定后送达，则会停止当前分支的进程组；POSIX 信号投递和进程启动并不是原子操作。agentrec 会完成该分支的证据收集、移除检出，且不会启动下一个分支；比较结果中未运行的 runner 会显示为 `(not run)`。如果 agentrec 被直接杀死，例如收到 `SIGKILL` 或机器关机，可在源仓库中运行 `git worktree prune`，再删除 `$AGENTREC_HOME/shadow` 下遗留的目录来恢复遗留检出。不会自动清理陈旧工作树。
 
+## 记录交互式会话
+
+`agentrec trace` 会自行启动 provider。交互式 Claude Code 会话无法以这种方式启动，因此改为通过会话自身的 hook 来记录：把下面命令输出的片段粘贴到 Claude Code 设置中，之后打开的每个会话都会作为一次运行被归档。
+
+```bash
+agentrec hooks print --claude
+agentrec hooks print --claude --verify
+agentrec hooks print --codex
+agentrec hooks print --codex --verify
+```
+
+该片段为 `SessionStart`、`UserPromptSubmit`、`PostToolUse`、`PostToolUseFailure` 和 `SessionEnd` 注册 `agentrec hook claude`（Codex 为 `hook codex`）。会话的第一个 hook 会为该会话启动一个 recorder；recorder 固定 baseline，接收 hook 送达的每个事件，并在会话结束时收尾这次运行。证据包的结构与 trace 记录的运行相同，报告会说明其中的差异：
+
+- **没有受监管的进程。** `SUPERVISOR-OBSERVED RESULT` 显示为 `UNAVAILABLE`：agentrec 不是父进程，因此退出码和信号未知；`Ended By` 会说明是会话的 `SessionEnd` hook 报告了结束，还是 recorder 放弃等待（`session_lost`，默认在 8 小时没有 hook 之后）。
+- **更晚、更宽的观测窗口。** baseline 在 `SessionStart` hook 到达时固定，也就是在进程已启动、workspace 已被信任之后，而这期间检出目录一直对操作者开放。有未提交变更的检出目录和并发会话会被记录而不是拒绝，`Window` 行会说明这一点。
+- **仅在被要求时运行检查，且只运行已提交的检查。** 只有用 `--verify` 输出的片段才会执行验证，并且只在 `.agentrec.yaml` 已被跟踪且与 `HEAD` 一致时执行：检出目录是智能体可以编辑的地方。
+- **由 provider 通过 hook 报告。** 操作来自 `PostToolUse` 的 payload，带有 provider 的 `tool_use_id` 和 `duration_ms`，子智能体的调用带有其 `agent_id`。被会话禁用的 hook 只会留下空白，而不代表什么都没发生。
+
+安装片段之前已经打开的会话不会被记录。
+
+对于 Codex，把用 `--codex` 输出的片段合并到 `~/.codex/hooks.json`（或仓库的 `.codex/hooks.json`），然后在 Codex 中用 `/hooks` 信任一次；Codex 会跳过未被信任的 hook。Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注明失败的已完成操作出现；其 `apply_patch` 编辑在补丁头中写明文件名，仓库路径即由此而来。payload 的形状已在 Codex 0.150.1 的 `codex exec` 中确认，交互式 TUI 中的 hook 遵循同一份文档化契约。
+
+用 `agentrec list` 和 `agentrec show latest` 回看会话，或在浏览器中用 `agentrec view` 查看——多数人会更喜欢浏览器。
+
 ## 运行记录存放在哪里
 
 设置 `$AGENTREC_HOME` 时，运行记录存放在 `$AGENTREC_HOME/runs`；否则存放在 `~/.local/share/agentrec/runs`。运行目录以 `0700` 权限创建，目录内每个文件均以 `0600` 权限创建，`report.md` 也不例外。证据包可能引用私有仓库，因此只有创建它的用户可读。每次运行对应一个目录，其中包含 `manifest.json`、`prompt.txt`、经净化的事件流和 stderr、`actions.jsonl`、`process/result.json`、`git/`（基线、结果和未跟踪文件内容）、`verification/results.json` 以及 `report.md`。只有当提供方在 stdout 输出了非事件内容时，才会有 `provider-stdout.unparsed.log`；若运行只输出事件，就不会留下一个空文件来暗示其他情况。
@@ -301,7 +325,7 @@ SIGTERM 控制。仓库测量、验证检查和报告写入各自使用独立限
 
 - **并非系统调用级别的完整观测。** 智能体工作时没有任何机制对其进行观测。agentrec 记录的是提供方报告的内容、运行前后仓库的状态，以及之后独立检查给出的结果。
 - **仓库差异不是因果归属。** 变更发生在运行期间，并不等于由智能体造成。任何其他进程对检出的编辑都会落在同一份差异中，每份报告都会注明这一点。同样，通过验证只说明固定检查在运行留下的工作树上通过。
-- **不记录交互式会话**，也不提供策略引擎、沙箱或远程上传；agentrec 只在本地观测和写入。
+- **不提供策略引擎、沙箱或远程上传**；agentrec 只在本地观测和写入。交互式会话只记录其 hook 报告的内容，且只记录安装 hook 之后打开的会话。
 
 **支持范围：macOS 和 Linux。** Windows 尚未构建或验证；移植不仅需要进程组监管（`internal/runner/process_unix.go`），还需要 verification process control（`internal/evidence/verification.go`）和 repository locking（`internal/lock/repository.go`）。
 

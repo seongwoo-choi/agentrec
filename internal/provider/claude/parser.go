@@ -270,6 +270,11 @@ func applyHookDuration(actions []action.Action, index map[string]int, durations 
 	}
 }
 
+// ActionType is the normalized action type for a Claude Code tool name — the
+// same mapping the stream parser applies, so a run recorded from the session's
+// own hooks files each tool under the type a traced run would.
+func ActionType(toolName string) string { return actionType(toolName) }
+
 // actionType maps a Claude tool name onto a normalized action type.
 func actionType(name string) string {
 	switch name {

@@ -235,16 +235,75 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 	// is held here and reported at the end.
 	held := holdSignals(req.Interrupt)
 
-	// Measured now that the provider's process group has ended and its streams
-	// and manifest are on disk, so what the repository shows is what the run
-	// left. Attempted for every ending, including a bad one: an interrupted or
-	// failed run changed the repository too, and the lock is still held, so
-	// nothing else has touched it in between. Its deadline is its own: a
-	// measurement abandoned halfway is a run with nothing to show.
-	finalizeCtx, cancelFinalize := context.WithTimeout(context.Background(), evidenceFinalizeTimeout)
-	_, evidenceErr := capture.Finalize(finalizeCtx)
-	cancelFinalize()
+	// The lock is still held, so nothing else has touched the repository since
+	// the provider's process group ended; what the close-out measures is what
+	// the run left.
+	closed := closeOut(closeOutRequest{
+		RunsRoot: req.RunsRoot,
+		RunID:    runID,
+		Capture:  capture,
+		Verifier: verifier,
+		Cancel:   held.fired,
+		Timeline: req.Timeline,
+	}, stderr)
+	// The close-out measured the repository and closed the verification itself,
+	// so the deferred closes above stand down.
 	evidenceMeasured = true
+	verifierClosed = true
+
+	// Handed back to the operating system now that the run has been recorded to
+	// the end. A signal from here on is one this process no longer has anything
+	// to hold it for.
+	out.Interrupted = held.stop()
+	out.Verified = closed.Verified
+	out.Verification = closed.Verification
+	out.Incomplete = closed.Incomplete
+	return out
+}
+
+// closeOutRequest is what ending a run takes once its provider has stopped,
+// whatever stopped it: a supervised process that exited, or an interactive
+// session whose end the provider's own hook reported.
+type closeOutRequest struct {
+	RunsRoot string
+	RunID    string
+	Capture  *evidence.Capture
+	// Verifier is nil when no checks were pinned for the run.
+	Verifier *evidence.PinnedVerification
+	// Cancel, once closed, stops a verification still running. It is the one
+	// way the recorder's own work ends early: the operator asked it to. A nil
+	// channel never fires.
+	Cancel <-chan struct{}
+	// Timeline receives the rendered timeline once the report is filed; nil
+	// files the report and prints nothing.
+	Timeline io.Writer
+}
+
+// closeOutResult is what the close-out could and could not produce.
+type closeOutResult struct {
+	Verified     bool
+	Verification evidence.VerificationResult
+	// Incomplete reports that some part of the record could not be produced:
+	// the repository evidence, the verification, or the report.
+	Incomplete bool
+}
+
+// closeOut measures the repository, runs the pinned checks and files the
+// report, in that order, and attempts each step whatever the earlier ones
+// returned: partial evidence is what a bad ending has to show. Every
+// diagnostic is written to stderr as it happens.
+func closeOut(req closeOutRequest, stderr io.Writer) closeOutResult {
+	runID := req.RunID
+	var res closeOutResult
+
+	// Measured now that the provider has stopped and its streams and manifest
+	// are on disk, so what the repository shows is what the run left. Attempted
+	// for every ending, including a bad one: an interrupted or failed run
+	// changed the repository too. Its deadline is its own: a measurement
+	// abandoned halfway is a run with nothing to show.
+	finalizeCtx, cancelFinalize := context.WithTimeout(context.Background(), evidenceFinalizeTimeout)
+	_, evidenceErr := req.Capture.Finalize(finalizeCtx)
+	cancelFinalize()
 
 	// The checks run against the repository the run left, and after it has been
 	// measured, so nothing a check writes can be read as the agent's work. They
@@ -253,20 +312,19 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 	// operator's interrupt does stop them: a verification is minutes of the
 	// recorder's own work, and one they asked to end is one to end.
 	var verifyErr, verifyCloseErr error
-	if verifier != nil {
+	if req.Verifier != nil {
 		verifyCtx, stopVerify := context.WithCancel(context.Background())
 		go func() {
 			select {
-			case <-held.fired:
+			case <-req.Cancel:
 				stopVerify()
 			case <-verifyCtx.Done():
 			}
 		}()
-		out.Verification, verifyErr = verifier.Run(verifyCtx)
+		res.Verification, verifyErr = req.Verifier.Run(verifyCtx)
 		stopVerify()
-		verifyCloseErr = verifier.Close()
-		verifierClosed = true
-		out.Verified = true
+		verifyCloseErr = req.Verifier.Close()
+		res.Verified = true
 	}
 
 	// The report is read back from the finalized bundle rather than rendered
@@ -277,11 +335,6 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 	if renderErr == nil && req.Timeline != nil {
 		renderErr = printRun(req.Timeline, runID, rep)
 	}
-
-	// Handed back to the operating system now that the run has been recorded to
-	// the end. A signal from here on is one this process no longer has anything
-	// to hold it for.
-	out.Interrupted = held.stop()
 
 	if evidenceErr != nil {
 		fmt.Fprintf(stderr, "cli: run %s: capture repository evidence: %v\n", runID, evidenceErr)
@@ -294,8 +347,8 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 			fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
 		}
 	}
-	out.Incomplete = evidenceErr != nil || renderErr != nil || verifyErr != nil || verifyCloseErr != nil
-	return out
+	res.Incomplete = evidenceErr != nil || renderErr != nil || verifyErr != nil || verifyCloseErr != nil
+	return res
 }
 
 // unrecordable ends a run that could not be recorded before its provider was

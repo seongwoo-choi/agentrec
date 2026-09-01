@@ -175,13 +175,53 @@ func readRunFromRoot(root *os.Root) (report.Report, error) {
 	if err != nil {
 		return report.Report{}, err
 	}
-	return report.Report{
+	rep := report.Report{
 		Actions:       actions,
 		ProviderUsage: providerUsageFields(reportedUsage),
 		Supervisor:    supervisorFields(manifest, result),
 		Repository:    repositoryFields(git),
 		Verification:  verificationFields(verification),
-	}, nil
+	}
+	rep.Repository, rep.Verification = appendSessionEvidence(manifest, rep.Repository, rep.Verification)
+	return rep, nil
+}
+
+// What a session-mode bundle says where a traced run reports its process and
+// its evidence window. The supervisor never saw a process, the baseline was
+// pinned when the session's first hook arrived rather than before anything
+// ran, and the reader is told both before reading anything else.
+const (
+	sessionSupervisorStatus = "UNAVAILABLE (interactive session: agentrec was not the parent process; exit code and signal unknown)"
+	sessionRepositoryWindow = "baseline pinned at the SessionStart hook, not before the process started; measured after the session ended; the checkout was open to the operator in between"
+	sessionVerificationPin  = "at the SessionStart hook; run after the session ended"
+)
+
+// sessionEndedBy names what ended a session-mode run. The session's own end is
+// a hook's report — anything running as the operator could have sent it — and
+// the reader is told that where they read the exit reason.
+func sessionEndedBy(reason string) string {
+	switch reason {
+	case reasonSessionEnded:
+		return "the provider's SessionEnd hook, as reported; agentrec did not observe the process end"
+	case reasonSessionLost:
+		return "the recorder, after no hook delivery for the idle timeout or on a signal; the session's own end was not seen"
+	}
+	return "the recorder, on a failure to store what the session reported"
+}
+
+// appendSessionEvidence tells the reader of a session bundle over what window
+// the evidence was measured, beside the evidence itself. Every reader — the
+// terminal report and the viewer — goes through here, so they say the same
+// thing. A traced run's fields are returned as they are.
+func appendSessionEvidence(m storage.Manifest, repository, verification []report.Field) ([]report.Field, []report.Field) {
+	if m.Mode != storage.ModeSession {
+		return repository, verification
+	}
+	repository = append(repository, report.Field{Name: "Window", Value: sessionRepositoryWindow})
+	if len(verification) > 0 {
+		verification = append(verification, report.Field{Name: "Pinned", Value: sessionVerificationPin})
+	}
+	return repository, verification
 }
 
 func providerUsageFields(reported *usageartifact.Report) []report.Field {
@@ -799,7 +839,17 @@ func lstatConfined(root *os.Root, name string) (os.FileInfo, error) {
 // fields that only a finished run has are omitted when it has none, rather than
 // reported as zero.
 func supervisorFields(m storage.Manifest, result *processResult) []report.Field {
-	fields := []report.Field{{Name: "Provider", Value: m.Provider}}
+	var fields []report.Field
+	// A session was never supervised: the section keeps its place so a reader
+	// looks for the process outcome where it always is, and finds it said to be
+	// missing rather than absent.
+	if m.Mode == storage.ModeSession {
+		fields = append(fields,
+			report.Field{Name: "Status", Value: sessionSupervisorStatus},
+			report.Field{Name: "Session", Value: m.SessionID},
+		)
+	}
+	fields = append(fields, report.Field{Name: "Provider", Value: m.Provider})
 	if m.ProviderVersion != "" {
 		// A version the parser does not claim to understand is never shown as a
 		// bare version: what follows in the timeline was read by a parser written
@@ -811,6 +861,11 @@ func supervisorFields(m storage.Manifest, result *processResult) []report.Field 
 		fields = append(fields, report.Field{Name: "Version", Value: version})
 	}
 	fields = append(fields, report.Field{Name: "Exit Reason", Value: exitReason(m, result)})
+	if m.Mode == storage.ModeSession {
+		// Who said the session ended matters: a traced run's end was observed,
+		// a session's end is a hook's word — or the recorder giving up.
+		fields = append(fields, report.Field{Name: "Ended By", Value: sessionEndedBy(m.ExitReason)})
+	}
 	if result != nil && result.ExitCode != nil {
 		fields = append(fields, report.Field{Name: "Exit Code", Value: strconv.Itoa(*result.ExitCode)})
 	}

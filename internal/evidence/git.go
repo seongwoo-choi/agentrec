@@ -715,8 +715,16 @@ func (c *Capture) baselineReachable(ctx context.Context) (bool, error) {
 // Git tracks. The diff runs from the baseline to the worktree, so commits made
 // during the run, staged changes and unstaged changes are all one difference.
 func (c *Capture) captureTracked(ctx context.Context, res *Result) error {
+	// The repository's own attributes and the operator's own configuration could
+	// otherwise decide what the patch says: a textconv filter rewrites what is
+	// compared, and the prefix, colour, context and algorithm settings change
+	// its bytes. Every option that shapes the text is pinned to Git's default
+	// here, so the same change produces the same patch wherever it is run — up
+	// to whatever options a future Git adds to the same class.
 	patch, err := c.gitBytes(ctx, c.opts.MaxPatchBytes,
-		"diff", "--binary", "--full-index", "--no-ext-diff", "--no-renames", c.baseline, "--")
+		"diff", "--binary", "--full-index", "--no-ext-diff", "--no-renames", "--no-color", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--unified=3", "--inter-hunk-context=0",
+		"--diff-algorithm=myers", "--indent-heuristic", c.baseline, "--")
 	if errors.Is(err, errOutputTooLarge) {
 		return c.refusePatch(res, reasonPatchTooLarge)
 	}
@@ -747,7 +755,8 @@ func (c *Capture) captureTracked(ctx context.Context, res *Result) error {
 		return err
 	}
 
-	raw, err := c.gitBytes(ctx, maxListBytes, "diff", "--numstat", "--no-renames", "-z", c.baseline, "--")
+	raw, err := c.gitBytes(ctx, maxListBytes,
+		"diff", "--numstat", "--no-renames", "--no-color", "--no-textconv", "-z", c.baseline, "--")
 	if err != nil {
 		return fmt.Errorf("evidence: summarize diff from baseline: %w", err)
 	}
@@ -1083,44 +1092,43 @@ func (c *Capture) gitBytes(ctx context.Context, limit int64, args ...string) ([]
 // gitAt runs one Git command with no shell between it and this process, and
 // reads at most limit bytes of its answer. LC_ALL=C keeps Git's own messages in
 // the language this package parses, and GIT_OPTIONAL_LOCKS=0 keeps a question
-// from writing an index the operator did not ask to have written.
+// from writing an index the operator did not ask to have written. The -c
+// settings outrank the repository's own: core.fsmonitor names a command the
+// repository could otherwise have run merely for being listed, and colour would
+// put escape codes into evidence that is meant to be byte-identical.
 func gitAt(ctx context.Context, dir string, limit int64, args ...string) ([]byte, error) {
-	full := args
+	full := []string{"-c", "core.fsmonitor=false", "-c", "color.ui=never"}
 	if dir != "" {
-		full = append([]string{"-C", dir}, args...)
+		full = append(full, "-C", dir)
 	}
+	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0")
-	stderr := &capWriter{limit: maxStderrBytes}
-	cmd.Stderr = stderr
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("git %s: %w", quote(strings.Join(args, " ")), err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("git %s: %w", quote(strings.Join(args, " ")), err)
-	}
 	// One byte past the limit is enough to know the limit was passed, and the
-	// rest is drained rather than left to stall the command being waited on.
-	out, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
-	_, drainErr := io.Copy(io.Discard, stdout)
-	waitErr := cmd.Wait()
+	// rest is counted and dropped rather than left to stall the command.
+	stdout := &capWriter{limit: limit + 1}
+	stderr := &capWriter{limit: maxStderrBytes}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	// A filter or hook that inherited the pipes and outlived Git would otherwise
+	// hold Wait open past every deadline the callers set. The delay is the one
+	// the pinned checks get, for the same reason.
+	cmd.WaitDelay = verifyWaitDelay
 
+	err := cmd.Run()
 	switch {
-	case waitErr != nil:
+	case errors.Is(err, exec.ErrWaitDelay):
+		// Git itself exited successfully and only something it left behind still
+		// held the pipes; what it wrote before exiting is its whole answer.
+	case err != nil:
 		if len(stderr.buf) > 0 {
 			return nil, fmt.Errorf("git %s: %s", quote(strings.Join(args, " ")), quote(string(stderr.buf)))
 		}
-		return nil, fmt.Errorf("git %s: %w", quote(strings.Join(args, " ")), waitErr)
-	case readErr != nil:
-		return nil, fmt.Errorf("git %s: %w", quote(strings.Join(args, " ")), readErr)
-	case drainErr != nil:
-		return nil, fmt.Errorf("git %s: %w", quote(strings.Join(args, " ")), drainErr)
-	case int64(len(out)) > limit:
+		return nil, fmt.Errorf("git %s: %w", quote(strings.Join(args, " ")), err)
+	}
+	if int64(len(stdout.buf)) > limit {
 		return nil, fmt.Errorf("git %s: %w (%d bytes)", quote(strings.Join(args, " ")), errOutputTooLarge, limit)
 	}
-	return out, nil
+	return stdout.buf, nil
 }
 
 // quote makes text from the repository or from Git safe to report onward:

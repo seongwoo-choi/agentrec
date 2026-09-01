@@ -52,7 +52,10 @@ func viewStatusClass(value string) string {
 	switch strings.ToLower(value) {
 	case "pass", "passed", "completed", "success":
 		return "pass"
-	case "fail", "failed", "error", "timeout", "nonzero", "interrupted", "parse_error", "storage_error", "start_error":
+	// session_lost is the session analogue of interrupted: the recording ended
+	// without the session saying so. session_ended stays neutral, as completed
+	// would if the process result were unknown.
+	case "fail", "failed", "error", "timeout", "nonzero", "interrupted", "parse_error", "storage_error", "start_error", reasonSessionLost:
 		return "fail"
 	default:
 		return ""
@@ -79,6 +82,10 @@ type viewRunInfo struct {
 	WarningCount      int        `json:"warningCount"`
 	UnparsedLines     int        `json:"unparsedLines"`
 	VersionUnverified bool       `json:"versionUnverified,omitempty"`
+	// Mode and SessionID are set for a run recorded from an interactive
+	// session's hooks, so the viewer can say which kind of run it shows.
+	Mode      string `json:"mode,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 type viewEvidence struct {

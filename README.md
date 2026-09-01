@@ -33,7 +33,7 @@ Use agentrec when an agent run must be more than a transient terminal session �
 - **Compare agents without inventing a winner.** `shadow run` gives Claude and Codex separate worktrees and evidence bundles from one baseline. It presents the recorded facts; it does not turn action counts, diffs, or check results into an ungrounded score.
 - **Upgrade providers conservatively.** Unsupported provider versions are refused by default. An explicit override leaves a visible `versionUnverified` mark in the manifest and report, so a parser-risky timeline cannot later be mistaken for fully understood evidence.
 
-agentrec is not a live interactive agent frontend, a cloud telemetry service, or proof that an agent caused every observed file change. It is a local evidence boundary around one non-interactive run: useful precisely because it states what was observed, by whom, and what it cannot establish.
+agentrec is not a live interactive agent frontend, a cloud telemetry service, or proof that an agent caused every observed file change. It is a local evidence boundary around one run — one agentrec launched, or one interactive session its hooks reported: useful precisely because it states what was observed, by whom, and what it cannot establish.
 
 ## Maintaining translations
 
@@ -390,6 +390,60 @@ leftover checkout is recovered by running `git worktree prune` in the source
 repository and deleting the leftover directory under `$AGENTREC_HOME/shadow`.
 There is no automatic stale-worktree collection.
 
+## Recording an interactive session
+
+`agentrec trace` launches the provider itself. An interactive Claude Code session
+cannot be launched that way, so it is recorded from the session's own hooks
+instead: paste the fragment below into your Claude Code settings, and every
+session opened afterwards is filed as a run.
+
+```bash
+agentrec hooks print --claude
+agentrec hooks print --claude --verify
+agentrec hooks print --codex
+agentrec hooks print --codex --verify
+```
+
+The fragment registers `agentrec hook claude` (or `hook codex`) for
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure` and
+`SessionEnd`. The first hook of a session starts a recorder for it; the recorder pins the
+baseline, takes every event the hooks deliver, and closes the run out when the
+session ends. The bundle has the same shape as a traced run's, and the report
+states what differs:
+
+- **No supervised process.** `SUPERVISOR-OBSERVED RESULT` reads `UNAVAILABLE`:
+  agentrec was not the parent, so the exit code and signal are unknown, and
+  `Ended By` says whether the session's `SessionEnd` hook reported the end or
+  the recorder gave up waiting for it (`session_lost`, after eight hours
+  without a hook by default).
+- **A later, wider window.** The baseline is pinned when the `SessionStart`
+  hook arrives — after the process started and the workspace was trusted — and
+  the checkout was open to the operator throughout. A dirty checkout and
+  concurrent sessions are recorded rather than refused; the `Window` line says
+  so.
+- **Checks only when asked, and only committed ones.** Verification runs only
+  for a fragment printed with `--verify`, and only when `.agentrec.yaml` is
+  tracked and identical to `HEAD`: the checkout is one the agent can edit.
+- **Provider-reported, through hooks.** Actions come from `PostToolUse`
+  payloads, with the provider's `tool_use_id` and `duration_ms`, and a
+  subagent's calls carry its `agent_id`. A hook the session disabled leaves a
+  gap, not an absence.
+
+Sessions already open when the fragment is installed are not recorded.
+
+For Codex, merge the `--codex` fragment into `~/.codex/hooks.json` (or a
+repository's `.codex/hooks.json`) and trust it once with `/hooks` inside Codex;
+Codex skips a hook it has not been told to trust. Codex sends no
+`PostToolUseFailure`, so a command that failed appears as a completed action
+whose response says so, and its `apply_patch` edits name their files in the
+patch headers, which is where the repository paths come from. The payload
+shapes were confirmed against Codex 0.150.1 in `codex exec`; hooks in the
+interactive TUI follow the same documented contract.
+
+Read sessions back with `agentrec list` and `agentrec show latest`, or in the
+browser with `agentrec view`, which is where most people will want to read
+them.
+
 ## Where runs are stored
 
 Under `$AGENTREC_HOME/runs` when that is set, otherwise
@@ -477,8 +531,9 @@ no exit code, and neither field is inferred from the other.
   editing the checkout lands in the same delta, and every report says so. A
   passing verification likewise only says the pinned checks passed on the tree
   the run left behind.
-- **Interactive sessions are not recorded**, and there is no policy engine, no
-  sandbox and no remote upload — agentrec observes and writes locally.
+- **No policy engine, no sandbox and no remote upload** — agentrec observes and
+  writes locally. An interactive session is recorded only from what its hooks
+  report, and only once those hooks are installed.
 
 **Supported scope: macOS and Linux.** Windows is unbuilt and unverified: the port needs process-group supervision (`internal/runner/process_unix.go`), verification process control (`internal/evidence/verification.go`), and repository locking (`internal/lock/repository.go`) rather than only one platform file.
 

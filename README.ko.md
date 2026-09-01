@@ -48,7 +48,7 @@ agentrec은 비대화형 Claude Code 또는 Codex 실행 한 번을 번들로 �
   이해된 증거로 오인되지 않습니다.
 
 agentrec은 에이전트를 실시간으로 조작하는 대화형 frontend나 클라우드 텔레메트리 서비스가 아닙니다. 또한 에이전트가
-관찰된 모든 파일 변경을 일으켰다는 증명도 아닙니다. 비대화형 실행 한 번을 둘러싼 로컬
+관찰된 모든 파일 변경을 일으켰다는 증명도 아닙니다. 실행 한 번(agentrec이 시작한 실행이든, hook이 보고한 대화형 세션이든)을 둘러싼 로컬
 증거 경계로서, 누가 무엇을 관찰했는지와 무엇을 확정할 수 없는지를 함께 남깁니다.
 
 ## 번역본 관리
@@ -392,6 +392,53 @@ agentrec이 즉시 종료되면, 예를 들어 `SIGKILL`을 받거나 머신이 
 `git worktree prune`을 실행하고 `$AGENTREC_HOME/shadow` 아래 남은 디렉터리를 삭제해
 남겨진 체크아웃을 복구합니다. 오래된 worktree를 자동으로 수거하지는 않습니다.
 
+## 대화형 세션 기록하기
+
+`agentrec trace`는 provider를 직접 실행합니다. 대화형 Claude Code 세션은 그렇게
+실행할 수 없으므로, 대신 세션 자체의 hook에서 기록합니다. 아래 명령이 출력하는
+조각을 Claude Code 설정에 붙여 넣으면, 그 뒤에 여는 모든 세션이 run으로 남습니다.
+
+```bash
+agentrec hooks print --claude
+agentrec hooks print --claude --verify
+agentrec hooks print --codex
+agentrec hooks print --codex --verify
+```
+
+이 조각은 `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`,
+`SessionEnd`에 `agentrec hook claude`(Codex는 `hook codex`)를 등록합니다. 세션의 첫 hook이 그 세션의
+recorder를 띄우고, recorder는 baseline을 고정한 뒤 hook이 전달하는 모든 이벤트를
+받아 두었다가 세션이 끝나면 run을 마무리합니다. 번들의 모양은 trace로 기록한
+run과 같고, 무엇이 다른지는 리포트가 밝힙니다.
+
+- **감독한 프로세스가 없습니다.** `SUPERVISOR-OBSERVED RESULT`는 `UNAVAILABLE`로
+  표시됩니다. agentrec이 부모 프로세스가 아니었으므로 exit code와 signal을 알 수
+  없고, `Ended By`는 세션의 `SessionEnd` hook이 종료를 보고한 것인지, recorder가
+  기다리다 포기한 것인지(`session_lost`, 기본값은 hook 없이 8시간)를 말합니다.
+- **더 늦고 더 넓은 관측 창.** baseline은 `SessionStart` hook이 도착했을 때, 즉
+  프로세스가 시작되고 workspace를 신뢰한 뒤에 고정되며, 그동안 체크아웃은 운영자에게
+  열려 있었습니다. 커밋되지 않은 변경이 있는 체크아웃과 동시 세션은 거부하지 않고
+  기록하며, `Window` 줄이 그 사실을 말합니다.
+- **요청했을 때만, 커밋된 체크만 실행합니다.** 검증은 `--verify`로 출력한 조각에서만,
+  그리고 `.agentrec.yaml`이 추적 중이고 `HEAD`와 동일할 때만 실행됩니다. 체크아웃은
+  에이전트가 편집할 수 있는 곳이기 때문입니다.
+- **hook을 통한 provider 보고입니다.** 액션은 `PostToolUse` payload에서 오며 provider의
+  `tool_use_id`와 `duration_ms`를 담고, 서브에이전트의 호출에는 `agent_id`가 붙습니다.
+  세션이 비활성화한 hook은 공백을 남길 뿐, 아무 일도 없었다는 뜻이 아닙니다.
+
+조각을 설치하기 전에 이미 열려 있던 세션은 기록되지 않습니다.
+
+Codex는 `--codex`로 출력한 조각을 `~/.codex/hooks.json`(또는 레포의
+`.codex/hooks.json`)에 병합한 뒤, Codex 안에서 `/hooks`로 한 번 신뢰해 주면 됩니다.
+Codex는 신뢰하지 않은 hook을 건너뜁니다. Codex는 `PostToolUseFailure`를 보내지
+않으므로 실패한 명령은 응답에 실패가 적힌 완료 액션으로 남고, `apply_patch` 편집은
+패치 헤더에 파일을 적으므로 repository 경로는 거기서 옵니다. payload 형태는 Codex
+0.150.1의 `codex exec`에서 확인했고, 대화형 TUI의 hook도 같은 문서화된 계약을
+따릅니다.
+
+기록은 `agentrec list`와 `agentrec show latest`로, 브라우저에서는 `agentrec view`로
+읽습니다. 대부분은 브라우저 쪽이 편할 것입니다.
+
 ## 실행이 저장되는 위치
 
 `$AGENTREC_HOME`이 설정돼 있으면 `$AGENTREC_HOME/runs` 아래에, 그렇지 않으면
@@ -476,7 +523,7 @@ Ctrl-C와 SIGTERM은 전달된 지점에서 즉시 따르지 않고 전체 기�
   에이전트가 그 변경을 만들었다는 뜻이 아닙니다. 체크아웃을 편집하는 다른 무엇이든
   같은 델타에 포함되며, 모든 report가 이를 명시합니다. 마찬가지로 검증 통과는 실행이
   남긴 트리에서 고정된 검사가 통과했다는 사실만 뜻합니다.
-- **대화형 세션은 기록하지 않습니다.** policy engine, sandbox, remote upload도 없습니다.
+- **policy engine, sandbox, remote upload는 없습니다.** agentrec은 관찰하고 로컬에 기록할 뿐입니다. 대화형 세션은 hook이 보고한 것만, 그리고 hook을 설치한 뒤에 연 세션만 기록합니다.
   agentrec은 관찰하고 로컬에 기록합니다.
 
 **지원 범위: macOS와 Linux.** Windows는 빌드·검증하지 않았습니다. port에는 프로세스 그룹 감독(`internal/runner/process_unix.go`)뿐 아니라 verification process control(`internal/evidence/verification.go`)과 repository locking(`internal/lock/repository.go`)도 필요합니다.

@@ -178,7 +178,7 @@ func (r *Redactor) redactEncodedJSON(s string, depth int) (string, bool) {
 	if err != nil {
 		return r.marker(s), true
 	}
-	out, err := json.Marshal(r.redactValue(v, "", depth+1))
+	out, err := marshalJSON(r.redactValue(v, "", depth+1))
 	if err != nil {
 		return r.marker(s), true
 	}

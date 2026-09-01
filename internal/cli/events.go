@@ -168,8 +168,11 @@ func readProviderEvents(root *os.Root) ([]providerEvent, bool, error) {
 			return nil, true, fmt.Errorf("cli: %s line %d: %w", providerEventsFile, line, err)
 		}
 		totalTokens += tokens
+		// A stream event names itself under "type"; a hook payload, recorded
+		// from an interactive session, under "hook_event_name".
 		var envelope struct {
-			Type json.RawMessage `json:"type"`
+			Type          json.RawMessage `json:"type"`
+			HookEventName json.RawMessage `json:"hook_event_name"`
 		}
 		if err := json.Unmarshal(raw, &envelope); err != nil {
 			return nil, true, fmt.Errorf("cli: %s line %d: %w", providerEventsFile, line, err)
@@ -177,6 +180,8 @@ func readProviderEvents(root *os.Root) ([]providerEvent, bool, error) {
 		var typeName string
 		if len(envelope.Type) > 0 {
 			_ = json.Unmarshal(envelope.Type, &typeName)
+		} else if len(envelope.HookEventName) > 0 {
+			_ = json.Unmarshal(envelope.HookEventName, &typeName)
 		}
 		events = append(events, providerEvent{raw: append(json.RawMessage(nil), raw...), typeName: typeName})
 	}

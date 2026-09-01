@@ -59,7 +59,7 @@
   function statusClass(value) {
     const v = String(value || '').toLowerCase();
     if (v === 'pass' || v === 'passed' || v === 'completed' || v === 'success') return 'pass';
-    if (['fail', 'failed', 'error', 'timeout', 'nonzero', 'interrupted', 'parse_error', 'storage_error', 'start_error'].includes(v)) return 'fail';
+    if (['fail', 'failed', 'error', 'timeout', 'nonzero', 'interrupted', 'parse_error', 'storage_error', 'start_error', 'session_lost'].includes(v)) return 'fail';
     return '';
   }
 
