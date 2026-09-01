@@ -119,26 +119,39 @@ agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 **すでにある対話セッションを記録する:**
 
 ```sh
+agentrec setup
+agentrec setup --claude --verify
+agentrec setup --codex --project
 agentrec hooks print --claude
-agentrec hooks print --claude --verify
-agentrec hooks print --codex
-agentrec hooks print --codex --verify
 ```
 
-出力された断片を Claude Code の設定（`~/.claude/settings.json` またはプロジェクトの
-`.claude/settings.json`）か、Codex の hooks ファイル（`~/.codex/hooks.json` または
-プロジェクトの `.codex/hooks.json`。その後 Codex 内で `/hooks` を使って一度信頼します）
-に貼り付けます。それ以降に開いたすべてのセッションが run として記録されます。すでに
-開いているセッションは対象になりません。
+ターミナルで `agentrec setup` を実行すると、どのエージェントを記録するか（Claude Code、
+Codex、または両方）、セッションが終わるたびに `.agentrec.yaml` に固定されたチェックを
+走らせるか（`--verify`）、ユーザーのファイル（`~/.claude/settings.json`、
+`~/.codex/hooks.json`）とプロジェクトのファイル（`.claude/settings.json`、
+`.codex/hooks.json`）のどちらに書き込むかを尋ねます。フラグを付ければ質問は省略されます。
+既存の hooks はそのまま残り、バックアップがファイルの隣に書き出され、もう一度実行しても
+何も変わりません。Codex では、新しい hook を信頼するために Codex 内で `/hooks` を一度
+実行する必要があります。`hooks print` はインストールせずに断片を表示するだけです。それ
+以降に開いたすべてのセッションが run として記録されます。すでに開いているセッションは
+対象になりません。
 
 **読み返す — 多くの人が使いたくなるのはブラウザーでしょう:**
 
 ```sh
+agentrec start
+agentrec status
+agentrec stop
 agentrec view latest
 agentrec list
 agentrec show latest
 agentrec events latest --json
 ```
+
+`agentrec start` はビューアーをバックグラウンドで `http://127.0.0.1:7788/` に立ち上げた
+まま保ち、ブラウザーで開きます。`status` はビューアーが動いているか、run がいくつ
+記録されているか、hooks がインストールされているかを伝え、`stop` はビューアーを終了
+します。`view` は同じページをフォアグラウンドで提供します。
 
 | プロバイダー | 実行ファイル | サポート範囲 | agentrec が注入するもの |
 | --- | --- | --- | --- |
@@ -228,7 +241,11 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 | コマンド | 動作 |
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | agentrec が起動・監督する非対話実行 1 件を記録します。 |
-| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 対話セッションを記録する hooks の断片を出力します。何もインストールしません。 |
+| 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | 対話セッションを記録する hooks をインストールします。フラグなしでターミナルから実行すると、どのエージェントか、検証するか、どこに書くかを尋ねます。 |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | ビューアーをバックグラウンドで起動し、ブラウザーで開きます。 |
+| ⏹️ `agentrec stop` | バックグラウンドのビューアーを停止します。 |
+| ℹ️ `agentrec status` | ビューアーの状態、run の件数、hooks がインストールされているかを報告します。 |
+| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | `setup` がインストールする hooks の断片を出力します。手動でインストールするときに使います。 |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 1 つのタスクを、1 つのコミット済み baseline から、隔離されたワークツリーで 2 回記録します。 |
 | ⚖️ `agentrec shadow show <group-id>` | 記録済みの比較を、証拠だけで再描画します。 |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | 実行を新しい順に一覧します。 |
@@ -326,6 +343,8 @@ agentrec が言うのは、見たことが起きた、ということだけで�
 | `(none)` | 検証が要求されませんでした。合格したチェックではありません。 |
 | `completed` / `nonzero` / `timeout` / `interrupted` | 監督対象プロセスの終了を agentrec がどう見たか。 |
 | `session_ended` / `session_lost` | セッションの `SessionEnd` hook が終了を報告した — または recorder が待つのをやめた。 |
+| `running` | セッションはまだ開いていて、その recorder は生きています。 |
+| `unknown` | recorder は、セッションがどう終わったかを書き残さないまま終了しました。 |
 
 | 終了コード | 意味 |
 | --- | --- |

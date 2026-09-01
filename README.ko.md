@@ -117,25 +117,37 @@ agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 **이미 쓰고 있는 대화형 세션을 기록하기:**
 
 ```sh
+agentrec setup
+agentrec setup --claude --verify
+agentrec setup --codex --project
 agentrec hooks print --claude
-agentrec hooks print --claude --verify
-agentrec hooks print --codex
-agentrec hooks print --codex --verify
 ```
 
-출력된 조각을 Claude Code 설정(`~/.claude/settings.json` 또는 프로젝트의
-`.claude/settings.json`)이나 Codex hooks 파일(`~/.codex/hooks.json` 또는 프로젝트의
-`.codex/hooks.json`, 이후 Codex 안에서 `/hooks`로 한 번 신뢰)에 붙여 넣으세요. 그
-뒤에 여는 모든 세션이 run으로 남습니다. 이미 열려 있던 세션은 기록되지 않습니다.
+터미널에서 `agentrec setup`은 어떤 에이전트를 기록할지(Claude Code, Codex, 둘 다),
+세션이 끝날 때마다 `.agentrec.yaml`에 고정된 체크를 돌릴지(`--verify`), 사용자
+파일(`~/.claude/settings.json`, `~/.codex/hooks.json`)에 쓸지 프로젝트
+파일(`.claude/settings.json`, `.codex/hooks.json`)에 쓸지 묻습니다. 플래그를 주면
+묻지 않습니다. 기존 hooks는 그대로 두고, 파일 옆에 백업을 남기며, 다시 실행해도
+아무것도 바뀌지 않습니다. Codex는 새 hook을 신뢰하도록 Codex 안에서 `/hooks`를 한
+번 실행해야 합니다. `hooks print`는 설치하지 않고 조각만 출력합니다. 그 뒤에 여는
+모든 세션이 run으로 남습니다. 이미 열려 있던 세션은 기록되지 않습니다.
 
 **다시 읽기 — 대부분은 브라우저가 편합니다:**
 
 ```sh
+agentrec start
+agentrec status
+agentrec stop
 agentrec view latest
 agentrec list
 agentrec show latest
 agentrec events latest --json
 ```
+
+`agentrec start`는 viewer를 백그라운드에서 `http://127.0.0.1:7788/`에 계속 띄워 두고
+브라우저를 엽니다. `status`는 viewer가 돌고 있는지, run이 몇 개 기록됐는지, hooks가
+설치됐는지 알려 주고, `stop`은 viewer를 끝냅니다. `view`는 같은 화면을
+포그라운드로 띄웁니다.
 
 | Provider | 실행 파일 | 지원 범위 | agentrec이 주입하는 것 |
 | --- | --- | --- | --- |
@@ -221,7 +233,11 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 | 명령 | 하는 일 |
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | agentrec이 직접 실행하고 감독하는 비대화형 run 하나를 기록합니다. |
-| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 대화형 세션을 기록하는 hooks 조각을 출력합니다. 설치는 하지 않습니다. |
+| 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | 대화형 세션을 기록하는 hooks를 설치합니다. 플래그 없이 터미널에서 실행하면 어떤 에이전트인지, 검증할지, 어디에 쓸지 묻습니다. |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | viewer를 백그라운드로 띄우고 브라우저를 엽니다. |
+| ⏹️ `agentrec stop` | 백그라운드 viewer를 종료합니다. |
+| ℹ️ `agentrec status` | viewer 상태, 기록된 run 수, hooks 설치 여부를 보여줍니다. |
+| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | `setup`이 설치할 hooks 조각을 출력합니다. 손으로 설치할 때 씁니다. |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 하나의 작업을 같은 커밋에서 격리된 worktree 두 곳에 두 번 기록합니다. |
 | ⚖️ `agentrec shadow show <group-id>` | 기록된 비교를 증거만으로 다시 렌더합니다. |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | run을 최신순으로 나열합니다. |
@@ -320,6 +336,8 @@ agentrec은 직접 본 것만 일어났다고 말합니다. 상태는 기록된 
 | `(none)` | 검증을 요청하지 않았습니다. 통과한 체크가 아닙니다. |
 | `completed` / `nonzero` / `timeout` / `interrupted` | agentrec이 본 감독 프로세스의 종료 방식. |
 | `session_ended` / `session_lost` | 세션의 `SessionEnd` hook이 종료를 보고했거나, recorder가 기다림을 멈췄습니다. |
+| `running` | 세션이 아직 열려 있고 recorder가 살아 있습니다. |
+| `unknown` | recorder가 세션이 어떻게 끝났는지 적지 못한 채 끝났습니다. |
 
 | 종료 코드 | 의미 |
 | --- | --- |

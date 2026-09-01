@@ -118,26 +118,37 @@ at a time per repository: a second is refused, not queued.
 **Record the interactive sessions you already have:**
 
 ```sh
+agentrec setup
+agentrec setup --claude --verify
+agentrec setup --codex --project
 agentrec hooks print --claude
-agentrec hooks print --claude --verify
-agentrec hooks print --codex
-agentrec hooks print --codex --verify
 ```
 
-Paste the printed fragment into your Claude Code settings (`~/.claude/settings.json`
-or a project's `.claude/settings.json`) or into your Codex hooks file
-(`~/.codex/hooks.json` or a project's `.codex/hooks.json`, then trust it once with
-`/hooks` inside Codex). Every session opened afterwards is filed as a run; sessions
-already open are not.
+On a terminal, `agentrec setup` asks which agent to record (Claude Code, Codex or
+both), whether to run the checks pinned in `.agentrec.yaml` after each session
+(`--verify`), and whether to write your user file (`~/.claude/settings.json`,
+`~/.codex/hooks.json`) or the project's (`.claude/settings.json`, `.codex/hooks.json`).
+Flags skip the questions. Existing hooks are kept, a backup is written beside the
+file, and running it again changes nothing. Codex needs `/hooks` once, inside Codex,
+to trust the new hook. `hooks print` shows the fragment instead of installing it.
+Every session opened afterwards is filed as a run; sessions already open are not.
 
 **Read it back — in the browser, where most people will want it:**
 
 ```sh
+agentrec start
+agentrec status
+agentrec stop
 agentrec view latest
 agentrec list
 agentrec show latest
 agentrec events latest --json
 ```
+
+`agentrec start` keeps the viewer running in the background at `http://127.0.0.1:7788/`
+and opens it; `status` says whether it is running, how many runs are recorded and
+whether the hooks are installed; `stop` ends it. `view` serves the same pages in the
+foreground.
 
 | Provider | Executable | Supported range | What agentrec injects |
 | --- | --- | --- | --- |
@@ -226,7 +237,11 @@ the interactive TUI follow the same documented contract.
 | Command | What it does |
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | Records one non-interactive run agentrec launches and supervises. |
-| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | Prints the hooks fragment that records interactive sessions; it installs nothing. |
+| 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | Installs the hooks that record interactive sessions; without flags, on a terminal, it asks which agent, whether to verify and where. |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | Starts the viewer in the background and opens it. |
+| ⏹️ `agentrec stop` | Stops the background viewer. |
+| ℹ️ `agentrec status` | Reports the viewer, the run count and whether the hooks are installed. |
+| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | Prints the hooks fragment `setup` would install, for installing by hand. |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | Records one task twice, from one committed baseline, in isolated worktrees. |
 | ⚖️ `agentrec shadow show <group-id>` | Re-renders a recorded comparison, evidence only. |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | Lists runs newest first. |
@@ -324,6 +339,8 @@ recorded, never inferred:
 | `(none)` | No verification was requested. This is not a check that passed. |
 | `completed` / `nonzero` / `timeout` / `interrupted` | How agentrec saw the supervised process end. |
 | `session_ended` / `session_lost` | The session's `SessionEnd` hook reported the end — or the recorder stopped waiting for it. |
+| `running` | The session is still open and its recorder is alive. |
+| `unknown` | The recorder ended without writing how the session ended. |
 
 | Exit code | Meaning |
 | --- | --- |

@@ -113,25 +113,35 @@ agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 **记录你已经在用的交互式会话：**
 
 ```sh
+agentrec setup
+agentrec setup --claude --verify
+agentrec setup --codex --project
 agentrec hooks print --claude
-agentrec hooks print --claude --verify
-agentrec hooks print --codex
-agentrec hooks print --codex --verify
 ```
 
-把输出的片段粘贴到 Claude Code 设置（`~/.claude/settings.json` 或项目的
-`.claude/settings.json`），或 Codex 的 hooks 文件（`~/.codex/hooks.json` 或项目的
-`.codex/hooks.json`，然后在 Codex 中用 `/hooks` 信任一次）。此后打开的每个会话都会
-作为一次运行被归档；已经打开的会话不会。
+在终端中，`agentrec setup` 会询问要记录哪个智能体（Claude Code、Codex 或两者）、是否在
+每次会话结束后运行 `.agentrec.yaml` 中固定的检查（`--verify`），以及写入你的用户文件
+（`~/.claude/settings.json`、`~/.codex/hooks.json`）还是项目文件（`.claude/settings.json`、
+`.codex/hooks.json`）。带上标志即可跳过提问。已有的 hooks 会被保留，备份会写在原文件
+旁边，再次运行不会有任何改动。Codex 需要在 Codex 内执行一次 `/hooks` 来信任新的 hook。
+`hooks print` 只显示片段而不安装。此后打开的每个会话都会作为一次运行被归档；已经打开
+的会话不会。
 
 **回读记录——在浏览器中查看，多数人会更喜欢这种方式：**
 
 ```sh
+agentrec start
+agentrec status
+agentrec stop
 agentrec view latest
 agentrec list
 agentrec show latest
 agentrec events latest --json
 ```
+
+`agentrec start` 会让查看器在后台持续运行于 `http://127.0.0.1:7788/` 并打开它；`status`
+会说明查看器是否在运行、已记录多少次运行以及 hooks 是否已安装；`stop` 会结束它。`view`
+在前台提供同样的页面。
 
 | 提供方 | 可执行文件 | 支持范围 | agentrec 注入的内容 |
 | --- | --- | --- | --- |
@@ -213,7 +223,11 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 | 命令 | 作用 |
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | 记录一次由 agentrec 启动并监管的非交互式运行。 |
-| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 输出用于记录交互式会话的 hooks 片段；它不会安装任何东西。 |
+| 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | 安装用于记录交互式会话的 hooks；不带标志在终端中运行时，会询问记录哪个智能体、是否验证以及写到哪里。 |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | 在后台启动查看器并打开它。 |
+| ⏹️ `agentrec stop` | 停止后台查看器。 |
+| ℹ️ `agentrec status` | 报告查看器状态、运行记录数量以及 hooks 是否已安装。 |
+| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 输出 `setup` 将要安装的 hooks 片段，供手动安装使用。 |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 从同一个已提交基线出发，在相互隔离的工作树中把同一任务记录两次。 |
 | ⚖️ `agentrec shadow show <group-id>` | 重新渲染一次已记录的比较，只呈现证据。 |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | 按时间倒序列出运行记录。 |
@@ -308,6 +322,8 @@ agentrec 只声称它看到的事情确实发生过。状态只按记录值展�
 | `(none)` | 未请求验证。这不表示检查已通过。 |
 | `completed` / `nonzero` / `timeout` / `interrupted` | agentrec 看到受监管进程如何结束。 |
 | `session_ended` / `session_lost` | 会话的 `SessionEnd` hook 报告了结束——或者 recorder 停止了等待。 |
+| `running` | 会话仍然打开，其 recorder 仍在运行。 |
+| `unknown` | recorder 结束时没有写下会话是如何结束的。 |
 
 | 退出码 | 含义 |
 | --- | --- |
