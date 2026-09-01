@@ -13,22 +13,32 @@ import (
 // operator's, and a recorder that edited it would be hard to tell apart from
 // the thing it records.
 
-const hooksUsage = "usage: agentrec hooks print --claude [--verify]\n"
+const hooksUsage = "usage: agentrec hooks print --claude|--codex [--verify]\n"
 
 // hookCommandTimeout bounds each hook, in seconds. The hook only dials the
 // recorder and waits for one acknowledgement; longer would hold the session on
-// a recorder that is not answering.
-const hookCommandTimeout = 5
+// a recorder that is not answering. Codex allows a SessionEnd hook three
+// seconds at most and clamps anything longer, so that one is given exactly
+// that.
+const (
+	hookCommandTimeout         = 5
+	codexSessionEndHookTimeout = 3
+)
 
-// hookEvents are the events the recorder acts on, in the order the snippet
-// lists them. No matcher is given, which Claude Code reads as every source,
-// tool or reason.
-var hookEvents = []string{
-	hookSessionStart,
-	hookUserPromptSubmit,
-	hookPostToolUse,
-	hookPostToolUseFailure,
-	hookSessionEnd,
+// hookEvents are the events the recorder acts on, per provider, in the order
+// the snippet lists them. No matcher is given, which both providers read as
+// every source, tool or reason. Codex has no PostToolUseFailure: a command
+// that failed arrives as a PostToolUse whose response says so.
+var hookEvents = map[string][]string{
+	"claude": {hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookPostToolUseFailure, hookSessionEnd},
+	"codex":  {hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookSessionEnd},
+}
+
+// hookGuidance tells the operator where the fragment goes and what else the
+// provider needs before it runs the hooks.
+var hookGuidance = map[string]string{
+	"claude": "Merge the \"hooks\" object above into ~/.claude/settings.json, or into a project's .claude/settings.json.\n",
+	"codex":  "Merge the \"hooks\" object above into ~/.codex/hooks.json, or into a project's .codex/hooks.json, then run /hooks inside Codex once to trust it: Codex skips a hook it has not been told to trust.\n",
 }
 
 // The shape of Claude Code's hooks setting, as far as this snippet uses it.
@@ -52,9 +62,12 @@ func runHooks(args []string, stdout, stderr io.Writer) int {
 	// fragment applies to every repository the operator opens, and a check is
 	// a command the repository chose.
 	verify := false
+	provider := ""
 	switch {
-	case len(args) == 2 && args[0] == "print" && args[1] == "--"+sessionProvider:
-	case len(args) == 3 && args[0] == "print" && args[1] == "--"+sessionProvider && args[2] == verifyFlag:
+	case len(args) == 2 && args[0] == "print" && strings.HasPrefix(args[1], "--") && sessionProviders[args[1][2:]]:
+		provider = args[1][2:]
+	case len(args) == 3 && args[0] == "print" && strings.HasPrefix(args[1], "--") && sessionProviders[args[1][2:]] && args[2] == verifyFlag:
+		provider = args[1][2:]
 		verify = true
 	default:
 		fmt.Fprint(stderr, hooksUsage)
@@ -65,16 +78,21 @@ func runHooks(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "cli: locate agentrec: %v\n", err)
 		return exitFailure
 	}
-	command := shellWord(exe) + " hook " + sessionProvider
+	command := shellWord(exe) + " hook " + provider
 	if verify {
 		command += " " + verifyFlag
 	}
-	settings := hookSettings{Hooks: make(map[string][]hookGroup, len(hookEvents))}
-	for _, event := range hookEvents {
+	events := hookEvents[provider]
+	settings := hookSettings{Hooks: make(map[string][]hookGroup, len(events))}
+	for _, event := range events {
+		timeout := hookCommandTimeout
+		if provider == "codex" && event == hookSessionEnd {
+			timeout = codexSessionEndHookTimeout
+		}
 		settings.Hooks[event] = []hookGroup{{Hooks: []hookCommand{{
 			Type:    "command",
 			Command: command,
-			Timeout: hookCommandTimeout,
+			Timeout: timeout,
 		}}}}
 	}
 	out, err := json.MarshalIndent(settings, "", "  ")
@@ -89,7 +107,7 @@ func runHooks(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		root = "the agentrec runs directory"
 	}
-	fmt.Fprintf(stderr, "Merge the \"hooks\" object above into ~/.claude/settings.json, or into a project's .claude/settings.json.\n"+
+	fmt.Fprintf(stderr, hookGuidance[provider]+
 		"Sessions already open are not recorded: recording starts with the next session, and each one is filed under %s.\n", root)
 	return 0
 }

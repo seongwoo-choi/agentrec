@@ -16,6 +16,30 @@ import (
 // providerName labels every action recovered from a Codex event stream.
 const providerName = "codex"
 
+// ActionType is the normalized action type for a tool name as Codex's hooks
+// report it. The event stream names actions by item type instead, so this
+// mapping exists for a run recorded from an interactive session's hooks, which
+// see the tool names Codex gives its hooks: Bash for shell commands,
+// apply_patch for file edits, mcp__<server>__<tool> for MCP calls.
+func ActionType(toolName string) string {
+	switch toolName {
+	case "Bash":
+		return action.TypeShellExec
+	case "apply_patch", "Edit", "Write":
+		return action.TypeFileEdit
+	case "Read":
+		return action.TypeFileRead
+	case "spawn_agent", "Agent":
+		return action.TypeSubagentSpawn
+	case "web_search", "WebFetch":
+		return action.TypeWebFetch
+	}
+	if len(toolName) > len("mcp__") && toolName[:len("mcp__")] == "mcp__" {
+		return action.TypeMCPCall
+	}
+	return action.TypeToolCall
+}
+
 // Action lifecycle statuses reported by this parser.
 const (
 	statusInProgress = "in_progress"

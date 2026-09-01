@@ -19,7 +19,7 @@ import (
 // and it writes nothing to stdout, because for some events stdout is injected
 // into the model's context.
 
-const hookUsage = "usage: agentrec hook claude [--verify]   (run by Claude Code hooks; the event payload arrives on stdin)\n"
+const hookUsage = "usage: agentrec hook <claude|codex> [--verify]   (run by the provider's hooks; the event payload arrives on stdin)\n"
 
 const (
 	// hookAck is what the recorder answers once a delivery is in its hands.
@@ -53,8 +53,8 @@ var (
 func runHook(args []string, _ io.Writer, stderr io.Writer) int {
 	verify := false
 	switch {
-	case len(args) == 1 && args[0] == sessionProvider:
-	case len(args) == 2 && args[0] == sessionProvider && args[1] == verifyFlag:
+	case len(args) == 1 && sessionProviders[args[0]]:
+	case len(args) == 2 && sessionProviders[args[0]] && args[1] == verifyFlag:
 		verify = true
 	default:
 		fmt.Fprint(stderr, hookUsage)
@@ -62,6 +62,7 @@ func runHook(args []string, _ io.Writer, stderr io.Writer) int {
 		// it, and 2 blocks the event on some of them.
 		return exitFailure
 	}
+	provider := args[0]
 	deadline := time.Now().Add(hookBudget)
 
 	raw, err := io.ReadAll(io.LimitReader(hookStdin, sessionReadLimit+1))
@@ -103,7 +104,7 @@ func runHook(args []string, _ io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agentrec hook: no recorder took %s for session %s; not recorded\n", env.HookEventName, env.SessionID)
 		return 0
 	}
-	if err := startSessionRecorder(env, socket, verify); err != nil {
+	if err := startSessionRecorder(env, socket, provider, verify); err != nil {
 		fmt.Fprintf(stderr, "agentrec hook: start recorder: %v\n", err)
 		return 0
 	}
@@ -154,7 +155,7 @@ func deliverHook(socket string, raw []byte, timeout time.Duration) error {
 // startSessionRecorder launches the recorder for a session in a session group
 // of its own, so it outlives the hook that started it and the terminal that
 // hook ran in. Its stderr is its log, beside the socket; its stdout is nothing.
-func startSessionRecorder(env hookEnvelope, socket string, verify bool) error {
+func startSessionRecorder(env hookEnvelope, socket, provider string, verify bool) error {
 	exe, err := sessionExecutable()
 	if err != nil {
 		return err
@@ -173,7 +174,7 @@ func startSessionRecorder(env hookEnvelope, socket string, verify bool) error {
 	}
 	defer logFile.Close()
 
-	args := []string{"session", "serve", "--session-id", env.SessionID, "--cwd", cwd, "--socket", socket}
+	args := []string{"session", "serve", "--session-id", env.SessionID, "--cwd", cwd, "--provider", provider, "--socket", socket}
 	if verify {
 		args = append(args, verifyFlag)
 	}

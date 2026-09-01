@@ -757,7 +757,7 @@ func TestHookExitsZeroWhenNothingCanBeRecorded(t *testing.T) {
 		t.Errorf("hook exit %d, stdout %q, stderr %q for a non-payload; want 0, nothing, and a note", code, stdout, stderr)
 	}
 
-	for _, args := range [][]string{{"hook", "codex"}, {"hook", "claude", "--transcript"}} {
+	for _, args := range [][]string{{"hook", "gemini"}, {"hook", "claude", "--transcript"}} {
 		if code, _, _ := run(t, args...); code != exitFailure {
 			t.Errorf("%v exit code = %d, want %d", args, code, exitFailure)
 		}
@@ -817,5 +817,119 @@ func TestHookStartsARecorderOnSessionStart(t *testing.T) {
 	}
 	if _, err := os.Stat(sessionLogPath(socket)); err != nil {
 		t.Errorf("recorder log beside the socket: %v", err)
+	}
+}
+
+// Codex delivers the same hooks under the same fields, minus
+// PostToolUseFailure, names its tools differently, and allows a SessionEnd hook
+// three seconds at most: the fragment and the recorder follow it.
+func TestHooksPrintEmitsTheCodexHooksFragment(t *testing.T) {
+	home(t)
+	restore := sessionExecutable
+	t.Cleanup(func() { sessionExecutable = restore })
+	sessionExecutable = func() (string, error) { return "/usr/local/bin/agentrec", nil }
+
+	code, stdout, stderr := run(t, "hooks", "print", "--codex", verifyFlag)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	var settings hookSettings
+	if err := json.Unmarshal([]byte(stdout), &settings); err != nil {
+		t.Fatalf("stdout is not a hooks fragment: %v\n%s", err, stdout)
+	}
+	want := map[string]int{hookSessionStart: 5, hookUserPromptSubmit: 5, hookPostToolUse: 5, hookSessionEnd: 3}
+	if len(settings.Hooks) != len(want) {
+		t.Errorf("events = %v, want %v", settings.Hooks, want)
+	}
+	for event, timeout := range want {
+		groups := settings.Hooks[event]
+		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+			t.Fatalf("%s: groups = %+v, want one command", event, groups)
+		}
+		if h := groups[0].Hooks[0]; h.Command != "/usr/local/bin/agentrec hook codex --verify" || h.Timeout != timeout {
+			t.Errorf("%s: hook = %+v, want hook codex --verify with timeout %d", event, h, timeout)
+		}
+	}
+	if _, registered := settings.Hooks[hookPostToolUseFailure]; registered {
+		t.Errorf("the Codex fragment registers PostToolUseFailure, which Codex never sends")
+	}
+	if !strings.Contains(stderr, "/hooks") || !strings.Contains(stderr, ".codex/hooks.json") {
+		t.Errorf("stderr = %q, want the hooks file named and the trust step", stderr)
+	}
+}
+
+// A Codex session files under its own provider and tool names: Bash is a shell
+// command, apply_patch a file edit whose paths come from the patch headers,
+// mcp__ prefixes an MCP call.
+func TestSessionServeRecordsACodexSession(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "codex-thread-0001"
+
+	socket, done, stderr := serveInProcess(t, sessionID, repo, "--provider", "codex")
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup", "model": "gpt-test", "permission_mode": "default"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "write a note", "turn_id": "turn-1"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{
+		"tool_name": "Bash", "tool_input": map[string]any{"command": "echo hi"}, "tool_use_id": "exec-1", "tool_response": "hi\n", "turn_id": "turn-1",
+	}))
+	writeFile(t, filepath.Join(repo, "notes.txt"), "probe\n")
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{
+		"tool_name":     "apply_patch",
+		"tool_input":    map[string]any{"command": "*** Begin Patch\n*** Add File: notes.txt\n+probe\n*** End Patch\n"},
+		"tool_use_id":   "exec-2",
+		"tool_response": "Exit code: 0\nOutput:\nSuccess. Updated the following files:\nA notes.txt\n",
+		"turn_id":       "turn-1",
+	}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{
+		"tool_name": "mcp__fs__read", "tool_input": map[string]any{"path": "x"}, "tool_use_id": "exec-3", "tool_response": map[string]any{"ok": true},
+	}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+
+	dir := onlyRunDir(t, root)
+	if m := readManifestFile(t, dir); m.Provider != "codex" || m.Mode != storage.ModeSession || m.ExitReason != reasonSessionEnded {
+		t.Errorf("manifest = %+v, want a codex session that ended", m)
+	}
+	actions := readActionsFile(t, dir)
+	if len(actions) != 3 {
+		t.Fatalf("actions = %d, want 3", len(actions))
+	}
+	want := []struct{ id, typ string }{{"exec-1", action.TypeShellExec}, {"exec-2", action.TypeFileEdit}, {"exec-3", action.TypeMCPCall}}
+	for i, w := range want {
+		if a := actions[i]; a.ID != w.id || a.Type != w.typ || a.Provider != "codex" {
+			t.Errorf("action %d = %s %s %s, want %s %s codex", i, a.ID, a.Type, a.Provider, w.id, w.typ)
+		}
+	}
+	if got := actions[1].RepositoryPaths; len(got) != 1 || got[0] != "notes.txt" {
+		t.Errorf("apply_patch repository paths = %v, want [notes.txt] from the patch header", got)
+	}
+	if _, stdout, _ := run(t, "show", "latest"); !strings.Contains(stdout, "Provider     codex") {
+		t.Errorf("show output does not name the provider:\n%s", stdout)
+	}
+}
+
+func TestParseSessionOptionsProvider(t *testing.T) {
+	if opts, ok := parseSessionOptions([]string{"--session-id", "s", "--cwd", "/tmp"}); !ok || opts.provider != defaultSessionProvider {
+		t.Errorf("default provider = %q, %v; want %s", opts.provider, ok, defaultSessionProvider)
+	}
+	if opts, ok := parseSessionOptions([]string{"--session-id", "s", "--cwd", "/tmp", "--provider", "codex"}); !ok || opts.provider != "codex" {
+		t.Errorf("provider codex = %q, %v; want codex", opts.provider, ok)
+	}
+	if _, ok := parseSessionOptions([]string{"--session-id", "s", "--cwd", "/tmp", "--provider", "gemini"}); ok {
+		t.Errorf("an unknown provider was accepted")
+	}
+}
+
+func TestPatchFilePaths(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: a/new.go\n+package a\n*** Update File: b/old.go\n@@\n-x\n+y\n*** Delete File: c/gone.go\n*** Update File: d/from.go\n*** Move to: d/to.go\n*** End Patch\n"
+	got, ok := patchFilePaths(patch)
+	if want := []string{"a/new.go", "b/old.go", "c/gone.go", "d/from.go", "d/to.go"}; !ok || strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("patchFilePaths = %v, %v; want %v", got, ok, want)
+	}
+	if got, ok := patchFilePaths("echo hi"); got != nil || !ok {
+		t.Errorf("a shell command was read as a patch: %v, %v", got, ok)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/seongwoo-choi/agentrec/internal/action"
 	"github.com/seongwoo-choi/agentrec/internal/evidence"
 	"github.com/seongwoo-choi/agentrec/internal/provider/claude"
+	"github.com/seongwoo-choi/agentrec/internal/provider/codex"
 	"github.com/seongwoo-choi/agentrec/internal/runner"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
@@ -33,11 +34,15 @@ import (
 // to the operator throughout, and the session's end is reported by a hook
 // rather than observed.
 
-const sessionServeUsage = "usage: agentrec session serve --session-id <id> --cwd <path> [--verify] [--socket <path>] [--idle-timeout <duration>]\n"
+const sessionServeUsage = "usage: agentrec session serve --session-id <id> --cwd <path> [--provider <claude|codex>] [--verify] [--socket <path>] [--idle-timeout <duration>]\n"
+
+// sessionProviders are the providers whose hooks are understood: both deliver
+// the same events with the same fields, and differ in what they call their
+// tools. Claude Code is the default because it came first.
+var sessionProviders = map[string]bool{"claude": true, "codex": true}
 
 const (
-	// sessionProvider is the one provider whose hooks are understood so far.
-	sessionProvider = "claude"
+	defaultSessionProvider = "claude"
 
 	// defaultSessionIdleTimeout ends a session whose SessionEnd never arrives —
 	// a terminal closed, a machine asleep past the hook — so the recorder does
@@ -131,16 +136,17 @@ type hookActionResult struct {
 type sessionOptions struct {
 	sessionID string
 	cwd       string
+	provider  string
 	socket    string
 	verify    bool
 	idle      time.Duration
 }
 
-// parseSessionOptions reads the recorder's own flags. An unknown flag is
-// refused, and the session and its directory are required: a recorder that
-// guessed either would file a session under the wrong name.
+// parseSessionOptions reads the recorder's own flags. An unknown flag or
+// provider is refused, and the session and its directory are required: a
+// recorder that guessed either would file a session under the wrong name.
 func parseSessionOptions(args []string) (sessionOptions, bool) {
-	opts := sessionOptions{idle: defaultSessionIdleTimeout}
+	opts := sessionOptions{provider: defaultSessionProvider, idle: defaultSessionIdleTimeout}
 	for i := 0; i < len(args); i++ {
 		if args[i] == verifyFlag {
 			opts.verify = true
@@ -155,6 +161,11 @@ func parseSessionOptions(args []string) (sessionOptions, bool) {
 			opts.sessionID = value
 		case "--cwd":
 			opts.cwd = value
+		case "--provider":
+			if !sessionProviders[value] {
+				return sessionOptions{}, false
+			}
+			opts.provider = value
 		case "--socket":
 			opts.socket = value
 		case "--idle-timeout":
@@ -261,7 +272,7 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 	// There is no invocation to record: the operator started the provider, not
 	// agentrec, and what they typed is not known here.
 	bundle, err := storage.Create(root, runID, storage.Manifest{
-		Provider:     sessionProvider,
+		Provider:     opts.provider,
 		Mode:         storage.ModeSession,
 		SessionID:    opts.sessionID,
 		Argv:         []string{},
@@ -298,6 +309,7 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 		bundle:       bundle,
 		runID:        runID,
 		sessionID:    opts.sessionID,
+		provider:     opts.provider,
 		cwd:          opts.cwd,
 		canonicalCWD: manifestCWD,
 		repoRoot:     manifestRepoRoot,
@@ -465,6 +477,7 @@ type sessionRecorder struct {
 	bundle       *storage.Bundle
 	runID        string
 	sessionID    string
+	provider     string
 	cwd          string
 	canonicalCWD string
 	repoRoot     string
@@ -618,8 +631,8 @@ func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
 	now := time.Now()
 	act := action.Action{
 		ID:         id,
-		Type:       claude.ActionType(env.ToolName),
-		Provider:   sessionProvider,
+		Type:       hookActionType(s.provider, env.ToolName),
+		Provider:   s.provider,
 		Assurance:  action.AssuranceProviderReported,
 		FinishedAt: now,
 		Status:     hookStatusCompleted,
@@ -649,6 +662,16 @@ func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
 		act.RepositoryPathsRecorded = true
 	}
 	s.store(s.bundle.WriteAction(act))
+}
+
+// hookActionType maps a tool name onto an action type the way the provider's
+// own stream parser would, so a session's actions file under the same types a
+// traced run's do.
+func hookActionType(provider, toolName string) string {
+	if provider == "codex" {
+		return codex.ActionType(toolName)
+	}
+	return claude.ActionType(toolName)
 }
 
 // store keeps the first storage failure. The bundle refuses every later write

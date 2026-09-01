@@ -272,16 +272,22 @@ between them, so a later leg may observe what an earlier one left.
 ```bash
 agentrec hooks print --claude
 agentrec hooks print --claude --verify
+agentrec hooks print --codex
+agentrec hooks print --codex --verify
 ```
 
-该片段为 `SessionStart`、`UserPromptSubmit`、`PostToolUse`、`PostToolUseFailure` 和 `SessionEnd` 注册 `agentrec hook claude`。会话的第一个 hook 会为该会话启动一个 recorder；recorder 固定 baseline，接收 hook 送达的每个事件，并在会话结束时收尾这次运行。证据包的结构与 trace 记录的运行相同，报告会说明其中的差异：
+该片段为 `SessionStart`、`UserPromptSubmit`、`PostToolUse`、`PostToolUseFailure` 和 `SessionEnd` 注册 `agentrec hook claude`（Codex 为 `hook codex`）。会话的第一个 hook 会为该会话启动一个 recorder；recorder 固定 baseline，接收 hook 送达的每个事件，并在会话结束时收尾这次运行。证据包的结构与 trace 记录的运行相同，报告会说明其中的差异：
 
 - **没有受监管的进程。** `SUPERVISOR-OBSERVED RESULT` 显示为 `UNAVAILABLE`：agentrec 不是父进程，因此退出码和信号未知；`Ended By` 会说明是会话的 `SessionEnd` hook 报告了结束，还是 recorder 放弃等待（`session_lost`，默认在 8 小时没有 hook 之后）。
 - **更晚、更宽的观测窗口。** baseline 在 `SessionStart` hook 到达时固定，也就是在进程已启动、workspace 已被信任之后，而这期间检出目录一直对操作者开放。有未提交变更的检出目录和并发会话会被记录而不是拒绝，`Window` 行会说明这一点。
 - **仅在被要求时运行检查，且只运行已提交的检查。** 只有用 `--verify` 输出的片段才会执行验证，并且只在 `.agentrec.yaml` 已被跟踪且与 `HEAD` 一致时执行：检出目录是智能体可以编辑的地方。
 - **由 provider 通过 hook 报告。** 操作来自 `PostToolUse` 的 payload，带有 provider 的 `tool_use_id` 和 `duration_ms`，子智能体的调用带有其 `agent_id`。被会话禁用的 hook 只会留下空白，而不代表什么都没发生。
 
-安装片段之前已经打开的会话不会被记录。Codex 会话暂不记录。
+安装片段之前已经打开的会话不会被记录。
+
+对于 Codex，把用 `--codex` 输出的片段合并到 `~/.codex/hooks.json`（或仓库的 `.codex/hooks.json`），然后在 Codex 中用 `/hooks` 信任一次；Codex 会跳过未被信任的 hook。Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注明失败的已完成操作出现；其 `apply_patch` 编辑在补丁头中写明文件名，仓库路径即由此而来。payload 的形状已在 Codex 0.150.1 的 `codex exec` 中确认，交互式 TUI 中的 hook 遵循同一份文档化契约。
+
+用 `agentrec list` 和 `agentrec show latest` 回看会话，或在浏览器中用 `agentrec view` 查看——多数人会更喜欢浏览器。
 
 ## 运行记录存放在哪里
 

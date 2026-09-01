@@ -16,13 +16,14 @@ Usage:
   agentrec show <run-id>|latest
   agentrec events <run-id>|latest [--json]
   agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open]
-  agentrec hooks print --claude
+  agentrec hooks print --claude|--codex [--verify]
   agentrec version
 
 Recording an interactive session: paste the output of 'agentrec hooks print
---claude' into your Claude Code settings. Each new session is then recorded by
-'agentrec hook claude' (run by Claude Code) and 'agentrec session serve' (started
-by the first hook), neither of which is meant to be typed by hand.
+--claude' into your Claude Code settings, or of '--codex' into your Codex hooks
+file. Each new session is then recorded by 'agentrec hook <provider>' (run by the
+provider) and 'agentrec session serve' (started by the first hook), neither of
+which is meant to be typed by hand.
 `
 
 // Run executes the CLI with args (os.Args[1:]) and returns the process exit code.

@@ -400,11 +400,13 @@ session opened afterwards is filed as a run.
 ```bash
 agentrec hooks print --claude
 agentrec hooks print --claude --verify
+agentrec hooks print --codex
+agentrec hooks print --codex --verify
 ```
 
-The fragment registers `agentrec hook claude` for `SessionStart`,
-`UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure` and `SessionEnd`. The
-first hook of a session starts a recorder for it; the recorder pins the
+The fragment registers `agentrec hook claude` (or `hook codex`) for
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure` and
+`SessionEnd`. The first hook of a session starts a recorder for it; the recorder pins the
 baseline, takes every event the hooks deliver, and closes the run out when the
 session ends. The bundle has the same shape as a traced run's, and the report
 states what differs:
@@ -427,8 +429,20 @@ states what differs:
   subagent's calls carry its `agent_id`. A hook the session disabled leaves a
   gap, not an absence.
 
-Sessions already open when the fragment is installed are not recorded. Codex
-sessions are not recorded yet.
+Sessions already open when the fragment is installed are not recorded.
+
+For Codex, merge the `--codex` fragment into `~/.codex/hooks.json` (or a
+repository's `.codex/hooks.json`) and trust it once with `/hooks` inside Codex;
+Codex skips a hook it has not been told to trust. Codex sends no
+`PostToolUseFailure`, so a command that failed appears as a completed action
+whose response says so, and its `apply_patch` edits name their files in the
+patch headers, which is where the repository paths come from. The payload
+shapes were confirmed against Codex 0.150.1 in `codex exec`; hooks in the
+interactive TUI follow the same documented contract.
+
+Read sessions back with `agentrec list` and `agentrec show latest`, or in the
+browser with `agentrec view`, which is where most people will want to read
+them.
 
 ## Where runs are stored
 

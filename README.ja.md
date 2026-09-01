@@ -376,10 +376,12 @@ drift も観測された実行が中断された場合は `130` です。**プ�
 ```bash
 agentrec hooks print --claude
 agentrec hooks print --claude --verify
+agentrec hooks print --codex
+agentrec hooks print --codex --verify
 ```
 
 この断片は `SessionStart`、`UserPromptSubmit`、`PostToolUse`、`PostToolUseFailure`、
-`SessionEnd` に `agentrec hook claude` を登録します。セッション最初の hook がその
+`SessionEnd` に `agentrec hook claude`（Codex では `hook codex`）を登録します。セッション最初の hook がその
 セッションの recorder を起動し、recorder は baseline を固定してから hook が届ける
 すべてのイベントを受け取り、セッションが終わると run を締めくくります。バンドルの
 形は trace で記録した run と同じで、何が異なるかはレポートが明示します。
@@ -400,8 +402,18 @@ agentrec hooks print --claude --verify
   呼び出しには `agent_id` が付きます。セッションが無効にした hook は空白を残すだけで、
   何も起きなかったことを意味しません。
 
-断片を導入する前に開いていたセッションは記録されません。Codex のセッションはまだ
-記録しません。
+断片を導入する前に開いていたセッションは記録されません。
+
+Codex では `--codex` で出力した断片を `~/.codex/hooks.json`（またはリポジトリの
+`.codex/hooks.json`）に統合し、Codex 内で `/hooks` を使って一度信頼してください。
+Codex は信頼していない hook をスキップします。Codex は `PostToolUseFailure` を送らない
+ため、失敗したコマンドは応答に失敗が記された完了アクションとして残り、`apply_patch`
+の編集はパッチヘッダにファイル名を書くので、リポジトリのパスはそこから得られます。
+payload の形は Codex 0.150.1 の `codex exec` で確認しており、対話型 TUI の hook も
+同じ文書化された契約に従います。
+
+記録は `agentrec list` と `agentrec show latest` で、ブラウザでは `agentrec view` で
+読めます。多くの場合ブラウザの方が読みやすいでしょう。
 
 ## 実行の保存場所
 

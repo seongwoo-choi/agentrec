@@ -401,10 +401,12 @@ agentrec이 즉시 종료되면, 예를 들어 `SIGKILL`을 받거나 머신이 
 ```bash
 agentrec hooks print --claude
 agentrec hooks print --claude --verify
+agentrec hooks print --codex
+agentrec hooks print --codex --verify
 ```
 
 이 조각은 `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`,
-`SessionEnd`에 `agentrec hook claude`를 등록합니다. 세션의 첫 hook이 그 세션의
+`SessionEnd`에 `agentrec hook claude`(Codex는 `hook codex`)를 등록합니다. 세션의 첫 hook이 그 세션의
 recorder를 띄우고, recorder는 baseline을 고정한 뒤 hook이 전달하는 모든 이벤트를
 받아 두었다가 세션이 끝나면 run을 마무리합니다. 번들의 모양은 trace로 기록한
 run과 같고, 무엇이 다른지는 리포트가 밝힙니다.
@@ -424,8 +426,18 @@ run과 같고, 무엇이 다른지는 리포트가 밝힙니다.
   `tool_use_id`와 `duration_ms`를 담고, 서브에이전트의 호출에는 `agent_id`가 붙습니다.
   세션이 비활성화한 hook은 공백을 남길 뿐, 아무 일도 없었다는 뜻이 아닙니다.
 
-조각을 설치하기 전에 이미 열려 있던 세션은 기록되지 않습니다. Codex 세션은 아직
-기록하지 않습니다.
+조각을 설치하기 전에 이미 열려 있던 세션은 기록되지 않습니다.
+
+Codex는 `--codex`로 출력한 조각을 `~/.codex/hooks.json`(또는 레포의
+`.codex/hooks.json`)에 병합한 뒤, Codex 안에서 `/hooks`로 한 번 신뢰해 주면 됩니다.
+Codex는 신뢰하지 않은 hook을 건너뜁니다. Codex는 `PostToolUseFailure`를 보내지
+않으므로 실패한 명령은 응답에 실패가 적힌 완료 액션으로 남고, `apply_patch` 편집은
+패치 헤더에 파일을 적으므로 repository 경로는 거기서 옵니다. payload 형태는 Codex
+0.150.1의 `codex exec`에서 확인했고, 대화형 TUI의 hook도 같은 문서화된 계약을
+따릅니다.
+
+기록은 `agentrec list`와 `agentrec show latest`로, 브라우저에서는 `agentrec view`로
+읽습니다. 대부분은 브라우저 쪽이 편할 것입니다.
 
 ## 실행이 저장되는 위치
 
