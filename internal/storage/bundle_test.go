@@ -1154,7 +1154,15 @@ func TestWriteProviderEventRejectsMoreJSONTokensThanBundleReadersAccept(t *testi
 
 func TestWriteProviderEventRollsBackAPartialAppend(t *testing.T) {
 	if os.Getenv("AGENTREC_PARTIAL_WRITE_HELPER") == "1" {
-		b, err := Create(t.TempDir(), "run-1", testManifest())
+		// Not t.TempDir: this branch leaves through os.Exit, which skips cleanups.
+		// The deferred removal covers the failing paths, which leave through
+		// Goexit instead.
+		dir, err := os.MkdirTemp("", "agentrec-partial-write")
+		if err != nil {
+			t.Fatalf("temp dir: %v", err)
+		}
+		defer os.RemoveAll(dir)
+		b, err := Create(dir, "run-1", testManifest())
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
@@ -1179,7 +1187,15 @@ func TestWriteProviderEventRollsBackAPartialAppend(t *testing.T) {
 		if string(got) != "{}\n" {
 			t.Fatalf("event stream after partial write = %q, want intact prefix", got)
 		}
-		return
+		// The file-size limit outlives the test, and a -cover build of this binary
+		// writes a coverage meta file at teardown that the limit refuses, failing
+		// the child for a reason that is not the one under test. Exiting here skips
+		// that teardown; a failure above still reaches the parent as FAIL output
+		// and a non-zero exit. Exiting 0 from inside a test is only allowed
+		// because the parent below forwards none of its own flags: with
+		// -test.paniconexit0, which `go test` always passes, it would panic.
+		os.RemoveAll(dir)
+		os.Exit(0)
 	}
 
 	cmd := exec.Command(os.Args[0], "-test.run=^TestWriteProviderEventRollsBackAPartialAppend$")
