@@ -17,6 +17,9 @@ Usage:
   agentrec events <run-id>|latest [--json]
   agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open]
   agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]
+  agentrec start [--listen <loopback-address>] [--no-open]
+  agentrec stop
+  agentrec status
   agentrec hooks print --claude|--codex [--verify]
   agentrec version
 
@@ -52,6 +55,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runView(args[1:], stdout, stderr)
 	case "setup":
 		return runSetup(args[1:], stdout, stderr)
+	case "start":
+		return runStart(args[1:], stdout, stderr)
+	case "stop":
+		return runStop(args[1:], stdout, stderr)
+	case "status":
+		return runStatus(args[1:], stdout, stderr)
 	case "hooks":
 		return runHooks(args[1:], stdout, stderr)
 	case "hook":

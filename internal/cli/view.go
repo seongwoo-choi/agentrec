@@ -144,19 +144,26 @@ func runView(args []string, stdout, stderr io.Writer) int {
 	}
 	if runID == latestRun {
 		runID, err = newestRunID(root)
-		if err != nil {
+		switch {
+		case errors.Is(err, errNoRuns):
+			// Nothing recorded yet is a state the viewer shows, not a reason
+			// to refuse: the list is empty until the first session ends.
+			runID = ""
+		case err != nil:
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 	}
-	runRoot, err := openRunRoot(root, runID)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if err := runRoot.Close(); err != nil {
-		fmt.Fprintf(stderr, "cli: close run %s: %v\n", runID, err)
-		return 1
+	if runID != "" {
+		runRoot, err := openRunRoot(root, runID)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := runRoot.Close(); err != nil {
+			fmt.Fprintf(stderr, "cli: close run %s: %v\n", runID, err)
+			return 1
+		}
 	}
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
