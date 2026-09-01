@@ -197,10 +197,9 @@ func TestRedactJSONStopsUnquotedValueAtPunctuation(t *testing.T) {
 			want: `{"cmd":"eval ${API_KEY=[REDACTED:1]}"}`,
 		},
 		{
-			// encoding/json escapes the angle brackets it writes back out.
 			name: "closing angle bracket",
 			raw:  `{"cmd":"send <PASSWORD=synthetic-punct-secret-1>"}`,
-			want: `{"cmd":"send \u003cPASSWORD=[REDACTED:1]\u003e"}`,
+			want: `{"cmd":"send <PASSWORD=[REDACTED:1]>"}`,
 		},
 	}
 
