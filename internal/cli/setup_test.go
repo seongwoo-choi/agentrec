@@ -22,7 +22,21 @@ func setupHome(t *testing.T, dirs ...string) string {
 	restore := sessionExecutable
 	t.Cleanup(func() { sessionExecutable = restore })
 	sessionExecutable = func() (string, error) { return "/usr/local/bin/agentrec", nil }
+	// Whether the test runner's stdin is a terminal is no business of setup's.
+	restoreInteractive := setupInteractive
+	t.Cleanup(func() { setupInteractive = restoreInteractive })
+	setupInteractive = func() bool { return false }
 	return home
+}
+
+// answerSetup makes setup believe it is on a terminal and gives it these
+// lines as its answers.
+func answerSetup(t *testing.T, answers string) {
+	t.Helper()
+	restoreIn, restoreInteractive := setupStdin, setupInteractive
+	t.Cleanup(func() { setupStdin, setupInteractive = restoreIn, restoreInteractive })
+	setupStdin = strings.NewReader(answers)
+	setupInteractive = func() bool { return true }
 }
 
 func readJSON(t *testing.T, path string) map[string]any {
@@ -255,5 +269,58 @@ func TestIsAgentrecHookCommand(t *testing.T) {
 		if got := isAgentrecHookCommand(tc.command, tc.provider); got != tc.want {
 			t.Errorf("isAgentrecHookCommand(%q, %s) = %v, want %v", tc.command, tc.provider, got, tc.want)
 		}
+	}
+}
+
+// On a terminal with no flags, setup asks which agent, whether to verify and
+// whose file, and the answers do exactly what the flags would have done.
+func TestSetupAsksOnATerminalWhenNoFlagsAreGiven(t *testing.T) {
+	home := setupHome(t, ".claude", ".codex")
+	answerSetup(t, "2\ny\n1\n")
+
+	code, stdout, stderr := run(t, "setup")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)\n%s", code, stderr, stdout)
+	}
+	for _, want := range []string{"1) Claude Code  (found)", "2) Codex  (found)", "Choice [3]: ", "Verify [n]: ", "Running: agentrec setup --codex --verify"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, stdout)
+		}
+	}
+	codexHooks, err := os.ReadFile(filepath.Join(home, ".codex", "hooks.json"))
+	if err != nil || !strings.Contains(string(codexHooks), "--verify") {
+		t.Errorf("codex hooks = %q, %v; want the verifying hook command", codexHooks, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
+		t.Errorf("claude settings were written although only Codex was chosen: %v", err)
+	}
+
+	// Enter alone takes every default: the one detected agent, no verify, the user's file.
+	home = setupHome(t, ".claude")
+	answerSetup(t, "\n\n\n")
+	if code, stdout, _ := run(t, "setup"); code != 0 || !strings.Contains(stdout, "Choice [1]: ") || !strings.Contains(stdout, "Running: agentrec setup --claude\n") {
+		t.Errorf("defaults: exit %d\n%s", code, stdout)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err != nil {
+		t.Errorf("claude settings were not written on defaults: %v", err)
+	}
+
+	// End of input before an answer, or an answer that is not a choice, changes nothing.
+	for _, answers := range []string{"", "9\n"} {
+		home = setupHome(t, ".claude")
+		answerSetup(t, answers)
+		if code, _, stderr := run(t, "setup"); code != exitFailure || !strings.Contains(stderr, "setup cancelled; nothing was changed") {
+			t.Errorf("answers %q: exit %d, stderr %q", answers, code, stderr)
+		}
+		if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
+			t.Errorf("answers %q: a hooks file was written anyway: %v", answers, err)
+		}
+	}
+
+	// Flags skip the questions even on a terminal.
+	setupHome(t, ".claude")
+	answerSetup(t, "")
+	if code, stdout, _ := run(t, "setup", "--claude"); code != 0 || strings.Contains(stdout, "Choice [") {
+		t.Errorf("--claude on a terminal: exit %d\n%s", code, stdout)
 	}
 }

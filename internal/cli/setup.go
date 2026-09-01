@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -8,9 +9,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 // `agentrec setup` installs the hooks that record interactive sessions, into
@@ -83,6 +87,17 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, setupUsage)
 		return exitUsage
 	}
+	if len(args) == 0 && setupInteractive() {
+		detected, err := detectedProviders(false)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitFailure
+		}
+		if opts, ok = promptSetupOptions(bufio.NewReader(setupStdin), stdout, detected); !ok {
+			fmt.Fprintln(stderr, "cli: setup cancelled; nothing was changed")
+			return exitFailure
+		}
+	}
 	providers := []string{}
 	if opts.claude {
 		providers = append(providers, "claude")
@@ -91,23 +106,16 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		providers = append(providers, "codex")
 	}
 	if len(providers) == 0 {
-		// Nothing named: every provider that has a configuration directory
-		// where the file would go. A provider that was never set up on this
-		// machine is not given a hooks file it would be surprised by.
-		for _, provider := range []string{"claude", "codex"} {
-			path, err := hooksFile(provider, opts.project)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return exitFailure
-			}
-			if info, err := os.Stat(filepath.Dir(path)); err == nil && info.IsDir() {
-				providers = append(providers, provider)
-			}
+		detected, err := detectedProviders(opts.project)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitFailure
 		}
-		if len(providers) == 0 {
+		if len(detected) == 0 {
 			fmt.Fprintln(stderr, "cli: neither a Claude Code nor a Codex configuration directory was found; pass --claude or --codex to create one")
 			return exitFailure
 		}
+		providers = detected
 	}
 	exe, err := sessionExecutable()
 	if err != nil {
@@ -150,6 +158,162 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Sessions already open are not recorded: recording starts with the next session, and each one is filed under %s.\n", root)
 	}
 	return 0
+}
+
+// detectedProviders lists the providers that have a configuration directory
+// where their hooks file would go. A provider that was never set up on this
+// machine is not given a hooks file it would be surprised by.
+func detectedProviders(project bool) ([]string, error) {
+	var detected []string
+	for _, provider := range []string{"claude", "codex"} {
+		path, err := hooksFile(provider, project)
+		if err != nil {
+			return nil, err
+		}
+		if info, err := os.Stat(filepath.Dir(path)); err == nil && info.IsDir() {
+			detected = append(detected, provider)
+		}
+	}
+	return detected, nil
+}
+
+// setupStdin and setupInteractive are replaced in tests, which answer the
+// prompts from a reader and decide whether there is a terminal to ask on.
+var (
+	setupStdin       io.Reader = os.Stdin
+	setupInteractive           = stdinIsTerminal
+)
+
+// stdinIsTerminal asks the kernel for terminal attributes rather than checking
+// for a character device: /dev/null is a character device too, and a scripted
+// `agentrec setup </dev/null` must not be asked questions.
+func stdinIsTerminal() bool {
+	var termios syscall.Termios
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, os.Stdin.Fd(), ioctlReadTermios, uintptr(unsafe.Pointer(&termios)))
+	return errno == 0
+}
+
+// promptSetupOptions asks, on a terminal with no flags given, what the flags
+// would have said: which agent to record, whether to run the pinned checks,
+// and whose file to write. Every question has a default that matches what the
+// flags do on their own, so Enter alone is never a surprise, and the flags
+// the answers amount to are printed so the next run can skip the questions.
+func promptSetupOptions(in *bufio.Reader, out io.Writer, detected []string) (setupOptions, bool) {
+	var opts setupOptions
+	fmt.Fprintln(out, "agentrec setup: record interactive sessions")
+	fmt.Fprintln(out)
+
+	agentDefault := "3"
+	switch {
+	case slices.Equal(detected, []string{"claude"}):
+		agentDefault = "1"
+	case slices.Equal(detected, []string{"codex"}):
+		agentDefault = "2"
+	}
+	fmt.Fprintf(out, "Which agent should be recorded?\n  1) Claude Code%s\n  2) Codex%s\n  3) both\n",
+		detectedMark("claude", detected), detectedMark("codex", detected))
+	answer, ok := ask(in, out, "Choice", agentDefault)
+	if !ok {
+		return opts, false
+	}
+	switch answer {
+	case "1":
+		opts.claude = true
+	case "2":
+		opts.codex = true
+	case "3":
+		opts.claude, opts.codex = true, true
+	default:
+		fmt.Fprintf(out, "%q is not one of 1, 2 or 3.\n", answer)
+		return opts, false
+	}
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Run the checks pinned in .agentrec.yaml after each session? (--verify)")
+	fmt.Fprintln(out, "  Only repositories whose .agentrec.yaml is committed and unchanged are checked.")
+	answer, ok = ask(in, out, "Verify", "n")
+	if !ok {
+		return opts, false
+	}
+	opts.verify = answer == "y" || answer == "Y" || answer == "yes"
+
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "Where should the hooks go?\n  1) this user (%s, %s)\n  2) this project only (./.claude, ./.codex)\n",
+		displayPath(claudeUserHooksHint()), displayPath(codexUserHooksHint()))
+	answer, ok = ask(in, out, "Choice", "1")
+	if !ok {
+		return opts, false
+	}
+	switch answer {
+	case "1":
+	case "2":
+		opts.project = true
+	default:
+		fmt.Fprintf(out, "%q is not one of 1 or 2.\n", answer)
+		return opts, false
+	}
+
+	fmt.Fprintf(out, "\nRunning: agentrec setup %s\n\n", strings.Join(opts.flags(), " "))
+	return opts, true
+}
+
+func detectedMark(provider string, detected []string) string {
+	if slices.Contains(detected, provider) {
+		return "  (found)"
+	}
+	return ""
+}
+
+// ask prints a question with its default and reads one line. An empty line is
+// the default; end of input before any answer cancels.
+func ask(in *bufio.Reader, out io.Writer, label, fallback string) (string, bool) {
+	fmt.Fprintf(out, "%s [%s]: ", label, fallback)
+	line, err := in.ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(out)
+		return "", false
+	}
+	if line = strings.TrimSpace(line); line == "" {
+		return fallback, true
+	}
+	return line, true
+}
+
+// flags spells the options back as the command line that would set them.
+func (o setupOptions) flags() []string {
+	var flags []string
+	if o.claude {
+		flags = append(flags, "--claude")
+	}
+	if o.codex {
+		flags = append(flags, "--codex")
+	}
+	if o.verify {
+		flags = append(flags, verifyFlag)
+	}
+	if o.project {
+		flags = append(flags, "--project")
+	}
+	if o.uninstall {
+		flags = append(flags, "--uninstall")
+	}
+	return flags
+}
+
+func claudeUserHooksHint() string {
+	path, err := hooksFile("claude", false)
+	if err != nil {
+		return "~/.claude/settings.json"
+	}
+	return path
+}
+
+func codexUserHooksHint() string {
+	path, err := hooksFile("codex", false)
+	if err != nil {
+		return "~/.codex/hooks.json"
+	}
+	return path
 }
 
 func providerTitle(provider string) string {
