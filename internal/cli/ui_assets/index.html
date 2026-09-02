@@ -46,7 +46,10 @@
             <h1 id="run-title">Select a recorded run</h1>
             <div class="run-subtitle" id="run-subtitle"></div>
           </div>
-          <div class="verdict" id="run-verdict">UNKNOWN</div>
+          <div class="run-header-side">
+            <div class="verdict" id="run-verdict">UNKNOWN</div>
+            <div class="run-actions" id="run-actions"></div>
+          </div>
         </section>
 
         <div id="timeline-warning" class="timeline-warning hidden" role="alert"></div>
@@ -83,7 +86,11 @@
     </section>
   </main>
 
-  <div id="error" class="error-toast hidden" role="alert"></div>
+  <div class="toasts">
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <div id="error" class="error-toast hidden" role="alert"></div>
+  </div>
+  <template id="trash-icon"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.5 7v4M9.5 7v4"/></svg></template>
   <script src="/assets/app.js"></script>
 </body>
 </html>

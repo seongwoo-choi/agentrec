@@ -130,7 +130,7 @@ h1 { margin: 6px 0; font: 600 20px/1.3 var(--mono); letter-spacing: -.01em; over
 .metric.pass .metric-value { color: var(--pass); }
 .metric.fail .metric-value { color: var(--fail); }
 .metric.warn .metric-value { color: var(--warn); }
-.metric-detail { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.metric-detail { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; word-break: keep-all; }
 
 /* timeline + inspector panels */
 .content-grid { display: grid; grid-template-columns: minmax(0,1.6fr) minmax(320px,.85fr); gap: 14px; }
@@ -200,6 +200,10 @@ h1 { margin: 6px 0; font: 600 20px/1.3 var(--mono); letter-spacing: -.01em; over
 .load-more:hover:not(:disabled) { background: var(--surface); }
 .load-more:disabled { color: var(--quiet); cursor: default; }
 .pager-label { color: var(--muted); font: 12px var(--mono); font-variant-numeric: tabular-nums; }
+/* stream tail: sentinel that pages on scroll, fallback button, loaded count */
+.stream-tail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; }
+.stream-sentinel { width: 100%; height: 1px; }
+.event-row .action-dot.fail { background: var(--fail); }
 
 /* inspector */
 .inspector-panel { padding: 14px 16px; overflow: auto; }
@@ -226,7 +230,21 @@ h1 { margin: 6px 0; font: 600 20px/1.3 var(--mono); letter-spacing: -.01em; over
 .field-value { color: var(--secondary); font: 12px/1.5 var(--mono); overflow-wrap: anywhere; }
 .field-span { grid-column: 1 / -1; }
 .field-caption { display: block; margin-top: 2px; color: var(--muted); font: 12px/1.45 var(--sans); }
-.error-toast { position: fixed; right: 20px; bottom: 20px; max-width: 440px; border: 1px solid var(--fail); background: var(--panel); color: var(--fail); border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.45; box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+.toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 10; }
+.toast, .error-toast { max-width: 440px; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.45; box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+.toast { display: flex; align-items: center; gap: 8px; }
+.toast-action { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 600; }
+.toast-action:hover { text-decoration: underline; }
+.toast-sep { color: var(--quiet); }
+.error-toast { border-color: var(--fail); color: var(--fail); }
+
+/* run header: verdict pill above the delete control; confirmation replaces the control inline */
+.run-header-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.run-actions { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.confirm-text { color: var(--secondary); font-size: 12px; }
+.danger-button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--fail); padding: 5px 10px; font-size: 12px; font-weight: 500; }
+.danger-button:hover:not(:disabled) { background: var(--fail-bg); border-color: var(--fail); }
+.danger-button:disabled { color: var(--quiet); background: var(--surface); cursor: not-allowed; }
 
 /* below 1024px: stack, let the page scroll */
 @media (max-width: 1023px) {

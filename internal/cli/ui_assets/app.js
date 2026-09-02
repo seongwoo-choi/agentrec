@@ -2,7 +2,7 @@
   'use strict';
 
   const POLL_MS = 5000;
-  const state = { lang: 'en', runs: [], run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '' };
+  const state = { lang: 'en', runs: [], run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, token: '' };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -13,7 +13,8 @@
 
   // ── Localization ──────────────────────────────────────────────────────────
   // English strings are the keys. Only page-authored copy and the server sentences special-cased below are translated;
-  // provider content (commands, paths, prompts, ids) and the documented status tokens (UNAVAILABLE, PASS, …) never are.
+  // provider content (commands, paths, prompts, ids) never is. The documented status tokens (NOT RUN, PASS, …) are shown
+  // as words through STATUS_WORDS, with the English token kept in the element's title.
   const LANGS = ['en', 'ko', 'ja', 'zh-CN'];
   const STRINGS = {
     ko: {
@@ -86,7 +87,9 @@
       'The run ended with {label}.': '실행이 {label}(으)로 끝났습니다.',
       'Previous page': '이전 페이지',
       'Next page': '다음 페이지',
-      '{n} items on this page': '이 페이지 {n}개',
+      'Loaded {loaded} of {total}': '{total}개 중 {loaded}개 불러옴',
+      'Load more': '더 불러오기',
+      'Loading…': '불러오는 중…',
       'bounded patch page': '패치 페이지(크기 제한)',
       'Could not load actions: {error}': '액션을 불러오지 못했습니다: {error}',
       'No loaded actions match this filter.': '필터에 맞는 액션이 없습니다.',
@@ -147,6 +150,17 @@
       'Stored Text': '저장된 텍스트',
       Baseline: '기준점',
       Attribution: '출처',
+      Source: '자료 출처',
+      completed: '완료',
+      failed: '실패',
+      in_progress: '진행 중',
+      Model: '모델',
+      'Input Tokens': '입력 토큰',
+      'Cached Input Tokens': '캐시 읽기 입력 토큰',
+      'Cache Creation Input Tokens': '캐시 생성 입력 토큰',
+      'Output Tokens': '출력 토큰',
+      'Cost USD': '비용(USD)',
+      "the provider's transcript, read at session end (the provider's own format, undocumented)": 'provider의 transcript를 세션 종료 시 읽음 (provider 고유 형식, 비문서화)',
       Window: '측정 구간',
       Pinned: '고정',
       Reason: '사유',
@@ -171,7 +185,17 @@
       'Run {run} · Verify {verify}': '실행 {run} · 검증 {verify}',
       'unknown cwd': '알 수 없는 작업 디렉터리',
       '{provider} {version} is unsupported; this timeline may be incomplete.': '{provider} {version}은(는) 지원하지 않는 버전입니다. 이 타임라인은 불완전할 수 있습니다.',
-      'unknown version': '알 수 없는 버전'
+      'unknown version': '알 수 없는 버전',
+      'Delete run': '실행 삭제',
+      'Delete this run?': '이 실행을 삭제하시겠습니까?',
+      Delete: '삭제',
+      Cancel: '취소',
+      'Run deleted': '실행을 삭제했습니다',
+      Undo: '실행 취소',
+      'Cannot delete: {error}': '삭제할 수 없습니다: {error}',
+      'Cannot restore: {error}': '복원할 수 없습니다: {error}',
+      'This run is still open; it can be deleted after the session ends.': '이 실행은 아직 열려 있습니다. 세션이 끝난 뒤 삭제할 수 있습니다.',
+      'Move this run to the trash': '이 실행을 휴지통으로 이동'
     },
     ja: {
       'Action Timeline': 'アクションタイムライン',
@@ -243,7 +267,9 @@
       'The run ended with {label}.': '実行は {label} で終了しました。',
       'Previous page': '前のページ',
       'Next page': '次のページ',
-      '{n} items on this page': 'このページ {n} 件',
+      'Loaded {loaded} of {total}': '{total} 件中 {loaded} 件を読み込み済み',
+      'Load more': 'さらに読み込む',
+      'Loading…': '読み込んでいます…',
       'bounded patch page': 'パッチページ（サイズ上限あり）',
       'Could not load actions: {error}': 'アクションを読み込めませんでした: {error}',
       'No loaded actions match this filter.': 'フィルターに一致するアクションはありません。',
@@ -304,6 +330,17 @@
       'Stored Text': '保存済みテキスト',
       Baseline: 'ベースライン',
       Attribution: '出典',
+      Source: '取得元',
+      completed: '完了',
+      failed: '失敗',
+      in_progress: '進行中',
+      Model: 'モデル',
+      'Input Tokens': '入力トークン',
+      'Cached Input Tokens': 'キャッシュ読み取り入力トークン',
+      'Cache Creation Input Tokens': 'キャッシュ作成入力トークン',
+      'Output Tokens': '出力トークン',
+      'Cost USD': 'コスト (USD)',
+      "the provider's transcript, read at session end (the provider's own format, undocumented)": 'プロバイダーのトランスクリプトをセッション終了時に読み取り（プロバイダー独自の形式、非公開仕様）',
       Window: '計測区間',
       Pinned: '固定',
       Reason: '理由',
@@ -328,7 +365,17 @@
       'Run {run} · Verify {verify}': '実行 {run} · 検証 {verify}',
       'unknown cwd': '不明な作業ディレクトリ',
       '{provider} {version} is unsupported; this timeline may be incomplete.': '{provider} {version} は未対応のバージョンです。このタイムラインは不完全な可能性があります。',
-      'unknown version': '不明なバージョン'
+      'unknown version': '不明なバージョン',
+      'Delete run': '実行を削除',
+      'Delete this run?': 'この実行を削除しますか?',
+      Delete: '削除',
+      Cancel: 'キャンセル',
+      'Run deleted': '実行を削除しました',
+      Undo: '元に戻す',
+      'Cannot delete: {error}': '削除できません: {error}',
+      'Cannot restore: {error}': '復元できません: {error}',
+      'This run is still open; it can be deleted after the session ends.': 'この実行はまだ開いています。セッション終了後に削除できます。',
+      'Move this run to the trash': 'この実行をごみ箱へ移動'
     },
     'zh-CN': {
       'Action Timeline': '操作时间线',
@@ -400,7 +447,9 @@
       'The run ended with {label}.': '运行以 {label} 结束。',
       'Previous page': '上一页',
       'Next page': '下一页',
-      '{n} items on this page': '本页 {n} 项',
+      'Loaded {loaded} of {total}': '已加载 {loaded} / {total}',
+      'Load more': '加载更多',
+      'Loading…': '正在加载…',
       'bounded patch page': '补丁分页（有大小上限）',
       'Could not load actions: {error}': '无法加载操作：{error}',
       'No loaded actions match this filter.': '没有符合筛选条件的操作。',
@@ -461,6 +510,17 @@
       'Stored Text': '已存储文本',
       Baseline: '基线',
       Attribution: '归属',
+      Source: '来源',
+      completed: '已完成',
+      failed: '失败',
+      in_progress: '进行中',
+      Model: '模型',
+      'Input Tokens': '输入 token',
+      'Cached Input Tokens': '缓存读取输入 token',
+      'Cache Creation Input Tokens': '缓存创建输入 token',
+      'Output Tokens': '输出 token',
+      'Cost USD': '费用（USD）',
+      "the provider's transcript, read at session end (the provider's own format, undocumented)": '提供方的会话记录，在会话结束时读取（提供方自有格式，未文档化）',
       Window: '测量窗口',
       Pinned: '固定',
       Reason: '原因',
@@ -485,9 +545,50 @@
       'Run {run} · Verify {verify}': '运行 {run} · 验证 {verify}',
       'unknown cwd': '未知工作目录',
       '{provider} {version} is unsupported; this timeline may be incomplete.': '不支持 {provider} {version}；此时间线可能不完整。',
-      'unknown version': '未知版本'
+      'unknown version': '未知版本',
+      'Delete run': '删除运行',
+      'Delete this run?': '删除此运行？',
+      Delete: '删除',
+      Cancel: '取消',
+      'Run deleted': '运行已删除',
+      Undo: '撤销',
+      'Cannot delete: {error}': '无法删除：{error}',
+      'Cannot restore: {error}': '无法恢复：{error}',
+      'This run is still open; it can be deleted after the session ends.': '此运行仍在进行中；会话结束后才能删除。',
+      'Move this run to the trash': '将此运行移至回收站'
     }
   };
+
+  // The documented status tokens, shown as words in the other UI languages. statusNode keeps the English token in the title.
+  const STATUS_WORDS = {
+    ko: { PASS: '통과', FAIL: '실패', RUNNING: '실행 중', ENDED: '종료', LOST: '유실', UNKNOWN: '알 수 없음', 'NOT RUN': '미실행', 'NOT OBSERVED': '미관측', 'NOT RECORDED': '미기록', PENDING: '측정 대기', AVAILABLE: '측정됨', TIMEOUT: '시간 초과', ERROR: '오류', TAINTED: '오염됨' },
+    ja: { PASS: '合格', FAIL: '不合格', RUNNING: '実行中', ENDED: '終了', LOST: '消失', UNKNOWN: '不明', 'NOT RUN': '未検証', 'NOT OBSERVED': '未観測', 'NOT RECORDED': '未記録', PENDING: '計測待ち', AVAILABLE: '計測済み', TIMEOUT: 'タイムアウト', ERROR: 'エラー', TAINTED: '汚染あり' },
+    'zh-CN': { PASS: '通过', FAIL: '失败', RUNNING: '运行中', ENDED: '已结束', LOST: '已丢失', UNKNOWN: '未知', 'NOT RUN': '未运行', 'NOT OBSERVED': '未观测', 'NOT RECORDED': '未记录', PENDING: '待测量', AVAILABLE: '已测量', TIMEOUT: '超时', ERROR: '错误', TAINTED: '已污染' }
+  };
+  const STATUS_TOKENS = new Set(Object.keys(STATUS_WORDS.ko));
+
+  function statusWord(token) {
+    const table = STATUS_WORDS[state.lang];
+    return (table && table[token]) || token;
+  }
+
+  // statusToken maps a server label to its documented token: session outcomes and the legacy UNAVAILABLE (now NOT RUN) included.
+  function statusToken(label) {
+    const raw = String(label || '');
+    const known = OUTCOMES[raw.toLowerCase()];
+    if (known && known.value) return known.value;
+    const upper = raw.toUpperCase();
+    if (upper === 'UNAVAILABLE') return 'NOT RUN';
+    return STATUS_TOKENS.has(upper) ? upper : raw;
+  }
+
+  function statusNode(tag, className, token, explanation) {
+    const word = statusWord(token);
+    const el = node(tag, className, word);
+    const title = [word === token ? '' : token, explanation || ''].filter(Boolean).join(': ');
+    if (title) el.title = title;
+    return el;
+  }
 
   // t looks up page-authored copy by its English key; English and missing entries fall back to the key itself.
   function t(key, vars) {
@@ -631,8 +732,12 @@
     TIMEOUT: 'A check was still running when its time limit ran out.',
     ERROR: 'A check could not be run to completion.',
     TAINTED: 'The pinned configuration changed under the run, so no checks were executed.',
-    UNAVAILABLE: NO_VERIFICATION
+    'NOT RUN': NO_VERIFICATION
   };
+  // Old bundles and servers still say UNAVAILABLE where the current words are NOT RUN (verification) and NOT RECORDED (repository).
+  const verdictWord = (value) => (value === 'UNAVAILABLE' ? 'NOT RUN' : value);
+  const repositoryWord = (value) => (value === 'UNAVAILABLE' ? 'NOT RECORDED' : value);
+  const EMPTY_WORD = { Verification: 'NOT RUN', 'Repository delta': 'NOT RECORDED' };
   const TYPE_LABELS = { 'user.prompt': 'prompt', 'agent.message': 'reply' };
 
   function humanAttribution(raw, provider) {
@@ -664,9 +769,9 @@
   }
 
   function verificationSummary(fields) {
-    if (!fields || fields.length === 0) return { value: 'UNAVAILABLE', tone: '', detail: t(NO_VERIFICATION) };
+    if (!fields || fields.length === 0) return { value: 'NOT RUN', tone: '', detail: t(NO_VERIFICATION) };
     const map = fieldsMap(fields);
-    const status = String(map.get('Status') || 'UNAVAILABLE').toUpperCase();
+    const status = verdictWord(String(map.get('Status') || 'NOT RUN').toUpperCase());
     const checks = fields.filter((field) => field.name === 'Check');
     const passed = checks.filter((field) => String(field.value).startsWith('PASS ')).length;
     const failed = checks.filter((field) => String(field.value).startsWith('FAIL ')).length;
@@ -682,13 +787,13 @@
       return { value: String(changes.total || 0), detail: t('{tracked} tracked · {untracked} untracked · +{additions}/−{deletions} · {binary} binary', { tracked: changes.tracked || 0, untracked: changes.untracked || 0, additions: changes.additions || 0, deletions: changes.deletions || 0, binary: changes.binary || 0 }) };
     }
     if (status === 'PENDING' || fields.get('Status') === 'PENDING') return { value: 'PENDING', detail: t(REPOSITORY_PENDING) };
-    return { value: 'UNAVAILABLE', detail: sentence(changes.reason) || t(REPOSITORY_NONE) };
+    return { value: 'NOT RECORDED', detail: sentence(changes.reason) || t(REPOSITORY_NONE) };
   }
 
   // explainStatus is the hover text for the server-classified run-list chip.
   function explainStatus(label) {
-    const v = String(label || '').toUpperCase();
-    if (v === 'UNAVAILABLE') return t('No checks were run for this session.');
+    const v = verdictWord(String(label || '').toUpperCase());
+    if (v === 'NOT RUN') return t('No checks were run for this session.');
     if (v === 'PASS') return t('Verification checks passed.');
     if (v === 'FAIL') return t('Verification checks failed.');
     const known = OUTCOMES[String(label || '').toLowerCase()];
@@ -713,8 +818,7 @@
       const head = node('div', 'run-item-head');
       head.append(node('span', 'run-project', run.project || t('unknown project')), node('span', 'run-time', relativeTime(run.startedAt)));
       const foot = node('div', 'run-item-foot');
-      const status = node('span', `mini-status ${run.statusClass}`, run.statusLabel);
-      status.title = explainStatus(run.statusLabel);
+      const status = statusNode('span', `mini-status ${run.statusClass}`, statusToken(run.statusLabel), explainStatus(run.statusLabel));
       foot.append(node('span', 'run-provider', run.provider || t('unknown')), status);
       button.append(head, node('div', 'run-id', shortID(run.id)), foot);
       button.addEventListener('click', () => loadRun(run.id));
@@ -800,6 +904,8 @@
 
   function renderTypeFilters(items, typeOf) {
     const holder = $('type-filters');
+    // Chips are rebuilt whenever a page lands; the focused chip stays focused.
+    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.type : undefined;
     holder.replaceChildren();
     const counts = new Map();
     for (const item of items) {
@@ -809,6 +915,7 @@
     for (const [type, count] of [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
       const chip = node('button', `filter-chip${state.activeTypes.size === 0 || state.activeTypes.has(type) ? ' active' : ''}`, `${t(TYPE_LABELS[type] || type)} ${count}`);
       chip.type = 'button';
+      chip.dataset.type = type;
       chip.setAttribute('aria-pressed', String(state.activeTypes.size === 0 || state.activeTypes.has(type)));
       chip.addEventListener('click', () => {
         if (state.activeTypes.size === 0) for (const key of counts.keys()) state.activeTypes.add(key);
@@ -817,6 +924,7 @@
         renderTimeline();
       });
       holder.append(chip);
+      if (focused === type) chip.focus({ preventScroll: true });
     }
   }
 
@@ -826,23 +934,95 @@
     return text.toLowerCase().includes(state.query);
   }
 
-  function appendPager(timeline, streamName) {
+  // Hook-delivered session events carry hook_event_name instead of type; stubs carry agentrec_dropped.
+  const eventType = (event) => (typeof event.type === 'string' && event.type) || (typeof event.hook_event_name === 'string' && event.hook_event_name) || '(untyped)';
+  const HOOK_DETAIL = { PostToolUse: 'tool_name', PostToolUseFailure: 'tool_name', UserPromptSubmit: 'prompt', Stop: 'last_assistant_message', SessionStart: 'source', SessionEnd: 'reason' };
+
+  function eventDetail(event) {
+    const text = (value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 180) : '');
+    if (text(event.agentrec_dropped)) return [text(event.tool_name), text(event.agentrec_dropped)].filter(Boolean).join(' · ');
+    const field = HOOK_DETAIL[event.hook_event_name];
+    return field ? text(event[field]) : '';
+  }
+
+  // ── Infinite scroll ───────────────────────────────────────────────────────
+  // The tail of the timeline holds a sentinel; when it enters the scroll container the next page is appended.
+  // ponytail: one observer for the one scroll container; every tail render re-observes a fresh sentinel, which also
+  // re-fires when the appended rows still do not fill the container (the filter hid them, or the page was short).
+  const observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
+    for (const entry of entries) if (entry.isIntersecting) loadMore(entry.target.dataset.stream);
+  }, { root: $('timeline'), rootMargin: '200px 0px' }) : null;
+
+  // loadMore appends the next page; a failed page is retried only from the button, never from the sentinel.
+  function loadMore(streamName, manual = false) {
+    const stream = state.streams && state.streams[streamName];
+    if (!stream || stream.loading || stream.nextCursor === null || (stream.error && !manual)) return;
+    loadStreamPage(streamName, stream.nextCursor, true, state.loadGeneration, manual);
+  }
+
+  function renderTail(streamName) {
+    const timeline = $('timeline');
     const stream = state.streams[streamName];
-    if (!stream || (stream.history.length === 0 && stream.nextCursor === null)) return;
-    const controls = node('div', 'stream-pager');
-    const previous = node('button', 'load-more', t('Previous page'));
-    previous.type = 'button';
-    previous.disabled = stream.loading || stream.history.length === 0;
-    previous.addEventListener('click', () => {
-      const cursor = stream.history[stream.history.length - 1];
-      loadStreamPage(streamName, cursor, false, state.loadGeneration, true);
-    });
-    const next = node('button', 'load-more', t('Next page'));
-    next.type = 'button';
-    next.disabled = stream.loading || stream.nextCursor === null;
-    next.addEventListener('click', () => loadStreamPage(streamName, stream.nextCursor, true));
-    controls.append(previous, node('span', 'pager-label', t('{n} items on this page', { n: stream.items.length })), next);
-    timeline.append(controls);
+    if (observer) observer.disconnect();
+    timeline.querySelectorAll('.stream-tail').forEach((el) => el.remove());
+    if (!stream.loaded && !stream.error) return;
+    const tail = node('div', 'stream-tail');
+    if (stream.loading) {
+      tail.append(node('div', 'timeline-note', t('Loading…')));
+    } else if (stream.nextCursor !== null) {
+      const sentinel = node('div', 'stream-sentinel');
+      sentinel.dataset.stream = streamName;
+      const more = node('button', 'load-more', t('Load more'));
+      more.type = 'button';
+      more.addEventListener('click', () => loadMore(streamName, true));
+      // The button is the fallback: no IntersectionObserver, rows that do not overflow the container, or a failed page.
+      if (observer && !stream.error && timeline.scrollHeight > timeline.clientHeight) more.classList.add('hidden');
+      tail.append(sentinel, more);
+    }
+    if (stream.items.length) tail.append(node('div', 'pager-label', t('Loaded {loaded} of {total}', { loaded: stream.items.length, total: MODES[streamName].total(stream) })));
+    timeline.append(tail);
+    const sentinel = tail.querySelector('.stream-sentinel');
+    if (observer && sentinel) observer.observe(sentinel);
+    if (!observer && !stream.loading && !stream.error && stream.nextCursor !== null && timeline.scrollHeight <= timeline.clientHeight) loadMore(streamName);
+  }
+
+  // renderEmpty explains an empty timeline once nothing more can arrive; while pages remain the tail speaks instead.
+  function renderEmpty(timeline, streamName) {
+    const stream = state.streams[streamName];
+    timeline.querySelectorAll('.timeline-empty:not(.stream-error):not(.change-evidence-warning)').forEach((el) => el.remove());
+    if (stream.shown > 0 || stream.error) return;
+    const message = stream.loaded ? (stream.nextCursor === null ? MODES[streamName].empty(stream) : '') : MODES[streamName].loading;
+    if (message) timeline.append(node('div', 'timeline-empty', t(message)));
+  }
+
+  // renderRows appends the rows for items[from…] that pass the filter and returns the first one.
+  function renderRows(timeline, streamName, from) {
+    const mode = MODES[streamName];
+    const stream = state.streams[streamName];
+    const context = mode.context ? mode.context(stream.items) : null;
+    let first = null;
+    for (let index = from; index < stream.items.length; index += 1) {
+      const row = mode.row(stream.items[index], index, context);
+      if (!row) continue;
+      stream.shown += 1;
+      timeline.append(row);
+      first = first || row;
+    }
+    return first;
+  }
+
+  // appendTimeline adds one page's rows below what is shown; selection, focus and scroll position stay.
+  function appendTimeline(streamName, from, focusNew) {
+    const timeline = $('timeline');
+    timeline.querySelectorAll('.stream-tail, .timeline-empty:not(.stream-error):not(.change-evidence-warning)').forEach((el) => el.remove());
+    const first = renderRows(timeline, streamName, from);
+    renderTypeFilters(state.streams[streamName].items, MODES[streamName].typeOf);
+    renderEmpty(timeline, streamName);
+    renderTail(streamName);
+    if (focusNew) {
+      const target = first || timeline.querySelector('.stream-tail .load-more:not(.hidden)');
+      if (target) target.focus();
+    }
   }
 
   // One focusable, keyboard-activatable timeline row; shared by actions, changes and events.
@@ -885,137 +1065,134 @@
     return block;
   }
 
+  // ── Timeline rows ─────────────────────────────────────────────────────────
+  function actionRow(action, index, byID) {
+    const type = action.type || 'unknown';
+    const speech = conversationText(action);
+    const detail = speech === null ? (firstDetail(action.input) || firstDetail(action.result)) : speech.slice(0, 180);
+    const searchable = `${type} ${action.provider || ''} ${action.status || ''} ${detail} ${JSON.stringify(action.input || {})}`;
+    if (!matches(action, type, searchable)) return null;
+    const family = actionFamily(type);
+    const row = timelineRow(`action-row${speech === null ? '' : ` conversation-row ${family}`}`, () => selectItem(row, { kind: 'action', value: action }));
+    row.style.setProperty('--depth', String(actionDepth(action, byID)));
+    row.dataset.index = String(index);
+    const time = node('div', 'action-time', clock(action.startedAt));
+    if (speech !== null) {
+      const body = node('div', 'speech-body');
+      body.append(node('div', 'speaker', type === 'user.prompt' ? t('You') : (action.provider || t('provider'))), speechBlock(speech));
+      row.append(time, body);
+      return row;
+    }
+    const rail = node('div', 'action-rail');
+    rail.append(node('span', `action-dot ${family} ${statusClass(action.status)}`));
+    const body = node('div', 'action-body');
+    const head = node('div', 'action-head');
+    head.append(node('span', 'action-type', type), node('span', 'action-summary', detail || action.id));
+    const meta = node('div', 'action-meta');
+    meta.append(node('span', 'source-badge', action.provider || t('provider')), node('span', '', t(action.status || 'reported')));
+    const elapsed = duration(action);
+    if (elapsed) meta.append(node('span', '', elapsed));
+    if (action.parentId) meta.append(node('span', '', `↳ ${shortID(action.parentId)}`));
+    const observedPaths = action.samePathObserved || [];
+    if (observedPaths.length) meta.append(node('span', 'path-correlation', t('same path observed — not causal proof')));
+    body.append(head, meta);
+    row.append(time, rail, body);
+    return row;
+  }
+
+  function changeRow(change) {
+    const type = changeFamily(change);
+    const counts = change.binary ? t('binary') : [change.additions === undefined ? '' : `+${change.additions}`, change.deletions === undefined ? '' : `-${change.deletions}`].filter(Boolean).join(' ');
+    if (!matches(change, type, `${type} ${change.path} ${change.kind || ''} ${counts}`)) return null;
+    const row = timelineRow('action-row change-row', () => {
+      selectItem(row, { kind: 'change', value: change, patch: null, patchCursor: 0, patchNextCursor: null, patchHistory: [], patchLoading: false });
+      if (change.tracked) loadPatchPage(change.path, 0, false, state.loadGeneration);
+    });
+    const marker = node('div', `change-marker ${type}`, change.tracked ? (change.binary ? 'B' : 'M') : '?');
+    const rail = node('div', 'action-rail');
+    rail.append(node('span', `action-dot ${type}`));
+    const body = node('div', 'action-body');
+    const head = node('div', 'action-head');
+    head.append(node('span', 'action-type', change.path));
+    const meta = node('div', 'action-meta');
+    meta.append(node('span', '', t(type)));
+    if (counts) meta.append(node('span', 'change-counts', counts));
+    body.append(head, meta);
+    row.append(marker, rail, body);
+    return row;
+  }
+
+  function eventRow(event, index) {
+    const type = eventType(event);
+    const detail = eventDetail(event) || firstDetail(event) || firstDetail(event.message) || event.subtype || event.event || t('event {n}', { n: index + 1 });
+    if (!matches(event, type, `${type} ${detail} ${JSON.stringify(event)}`)) return null;
+    const row = timelineRow('action-row event-row', () => selectItem(row, { kind: 'event', value: event, index }));
+    const time = node('div', 'action-time', clock(event.timestamp || event.created_at || event.createdAt));
+    const rail = node('div', 'action-rail');
+    rail.append(node('span', `action-dot${event.hook_event_name === 'PostToolUseFailure' ? ' fail' : ''}`));
+    const body = node('div', 'action-body');
+    const head = node('div', 'action-head');
+    head.append(node('span', 'action-type', t(type)), node('span', 'action-summary', detail));
+    const meta = node('div', 'action-meta');
+    meta.append(node('span', 'source-badge', t('provider event')), node('span', '', `#${index + 1}`));
+    body.append(head, meta);
+    row.append(time, rail, body);
+    return row;
+  }
+
+  // MODES is what differs per stream: how a row is typed and built, the stream's size, and the words for an empty timeline.
+  const MODES = {
+    actions: {
+      typeOf: (action) => action.type || 'unknown',
+      context: (items) => new Map(items.map((action) => [action.id, action])),
+      row: actionRow,
+      total: () => state.run.actionCount || 0,
+      error: 'Could not load actions: {error}',
+      loading: 'Loading actions…',
+      empty: (stream) => (stream.items.length ? 'No loaded actions match this filter.' : 'No actions were recorded for this run.')
+    },
+    changes: {
+      typeOf: changeFamily,
+      row: changeRow,
+      total: (stream) => stream.total,
+      error: 'Could not load repository changes: {error}',
+      loading: 'Loading repository changes…',
+      empty: (stream) => (stream.status === 'unavailable' ? '' : (stream.total === 0 ? 'No repository changes were observed.' : 'No loaded changes match this filter.'))
+    },
+    events: {
+      typeOf: eventType,
+      row: eventRow,
+      total: () => state.run.eventCount || 0,
+      error: 'Could not load provider events: {error}',
+      loading: 'Loading provider events…',
+      empty: (stream) => (stream.items.length ? 'No loaded provider events match this filter.' : 'This run has no sanitized provider-event artifact.')
+    }
+  };
+
   function renderTimeline() {
     if (!state.run) return;
     const timeline = $('timeline');
     timeline.replaceChildren();
+    timeline.scrollTop = 0;
     state.selected = null;
     renderInspector();
-
-    if (state.mode === 'actions') {
-      const stream = state.streams.actions;
-      const actions = stream.items;
-      if (stream.error) timeline.append(node('div', 'timeline-empty stream-error', t('Could not load actions: {error}', { error: stream.error })));
-      renderTypeFilters(actions, (item) => item.type || 'unknown');
-      const byID = new Map(actions.map((action) => [action.id, action]));
-      let shown = 0;
-      actions.forEach((action, index) => {
-        const type = action.type || 'unknown';
-        const speech = conversationText(action);
-        const detail = speech === null ? (firstDetail(action.input) || firstDetail(action.result)) : speech.slice(0, 180);
-        const searchable = `${type} ${action.provider || ''} ${action.status || ''} ${detail} ${JSON.stringify(action.input || {})}`;
-        if (!matches(action, type, searchable)) return;
-        shown += 1;
-        const family = actionFamily(type);
-        const row = timelineRow(`action-row${speech === null ? '' : ` conversation-row ${family}`}`, () => selectItem(row, { kind: 'action', value: action }));
-        row.style.setProperty('--depth', String(actionDepth(action, byID)));
-        row.dataset.index = String(index);
-        const time = node('div', 'action-time', clock(action.startedAt));
-        if (speech !== null) {
-          const body = node('div', 'speech-body');
-          body.append(node('div', 'speaker', type === 'user.prompt' ? t('You') : (action.provider || t('provider'))), speechBlock(speech));
-          row.append(time, body);
-          timeline.append(row);
-          return;
-        }
-        const rail = node('div', 'action-rail');
-        rail.append(node('span', `action-dot ${family} ${statusClass(action.status)}`));
-        const body = node('div', 'action-body');
-        const head = node('div', 'action-head');
-        head.append(node('span', 'action-type', type), node('span', 'action-summary', detail || action.id));
-        const meta = node('div', 'action-meta');
-        meta.append(node('span', 'source-badge', action.provider || t('provider')), node('span', '', action.status || t('reported')));
-        const elapsed = duration(action);
-        if (elapsed) meta.append(node('span', '', elapsed));
-        if (action.parentId) meta.append(node('span', '', `↳ ${shortID(action.parentId)}`));
-        const observedPaths = action.samePathObserved || [];
-        if (observedPaths.length) meta.append(node('span', 'path-correlation', t('same path observed — not causal proof')));
-        body.append(head, meta);
-        row.append(time, rail, body);
-        timeline.append(row);
-      });
-      if (shown === 0 && !stream.error) {
-        const message = stream.loaded ? (actions.length ? 'No loaded actions match this filter.' : 'No actions were recorded for this run.') : 'Loading actions…';
-        timeline.append(node('div', 'timeline-empty', t(message)));
-      }
-      appendPager(timeline, 'actions');
-      return;
-    }
-
-    if (state.mode === 'changes') {
-      const stream = state.streams.changes;
-      const changes = stream.items;
-      const source = stream.attribution || 'observed during run, not causal proof';
-      if (stream.error) timeline.append(node('div', 'timeline-empty stream-error', t('Could not load repository changes: {error}', { error: stream.error })));
-      renderTypeFilters(changes, changeFamily);
+    const streamName = state.mode;
+    const stream = state.streams[streamName];
+    stream.shown = 0;
+    if (stream.error) timeline.append(node('div', 'timeline-empty stream-error', t(MODES[streamName].error, { error: stream.error })));
+    if (streamName === 'changes') {
       if (stream.loaded && stream.status === 'unavailable') {
         const pending = fieldsMap(state.run.evidence.repository).get('Status') === 'PENDING';
         const reason = pending ? t(REPOSITORY_PENDING) : sentence(stream.reason);
         timeline.append(node('div', 'timeline-empty change-evidence-warning', `${t('Repository change evidence is unavailable.')}${reason ? ` ${reason}` : ''}`));
       }
-      if (changes.length) timeline.append(labelled('div', 'timeline-note', humanAttribution(source), source));
-      let shown = 0;
-      changes.forEach((change) => {
-        const type = changeFamily(change);
-        const counts = change.binary ? t('binary') : [change.additions === undefined ? '' : `+${change.additions}`, change.deletions === undefined ? '' : `-${change.deletions}`].filter(Boolean).join(' ');
-        if (!matches(change, type, `${type} ${change.path} ${change.kind || ''} ${counts}`)) return;
-        shown += 1;
-        const row = timelineRow('action-row change-row', () => {
-          selectItem(row, { kind: 'change', value: change, patch: null, patchCursor: 0, patchNextCursor: null, patchHistory: [], patchLoading: false });
-          if (change.tracked) loadPatchPage(change.path, 0, false, state.loadGeneration);
-        });
-        const marker = node('div', `change-marker ${type}`, change.tracked ? (change.binary ? 'B' : 'M') : '?');
-        const rail = node('div', 'action-rail');
-        rail.append(node('span', `action-dot ${type}`));
-        const body = node('div', 'action-body');
-        const head = node('div', 'action-head');
-        head.append(node('span', 'action-type', change.path));
-        const meta = node('div', 'action-meta');
-        meta.append(node('span', '', t(type)));
-        if (counts) meta.append(node('span', 'change-counts', counts));
-        body.append(head, meta);
-        row.append(marker, rail, body);
-        timeline.append(row);
-      });
-      if (shown === 0 && !stream.error && !(stream.loaded && stream.status === 'unavailable')) {
-        let message = 'Loading repository changes…';
-        if (stream.loaded && stream.total === 0) message = 'No repository changes were observed.';
-        else if (stream.loaded) message = 'No loaded changes match this filter.';
-        timeline.append(node('div', 'timeline-empty', t(message)));
-      }
-      appendPager(timeline, 'changes');
-      return;
+      const source = stream.attribution || 'observed during run, not causal proof';
+      if (stream.items.length) timeline.append(labelled('div', 'timeline-note', humanAttribution(source), source));
     }
-
-    const stream = state.streams.events;
-    const events = stream.items;
-    if (stream.error) timeline.append(node('div', 'timeline-empty stream-error', t('Could not load provider events: {error}', { error: stream.error })));
-    const eventType = (event) => typeof event.type === 'string' && event.type ? event.type : '(untyped)';
-    renderTypeFilters(events, eventType);
-    let shown = 0;
-    events.forEach((event, index) => {
-      const type = eventType(event);
-      const detail = firstDetail(event) || firstDetail(event.message) || event.subtype || event.event || t('event {n}', { n: index + 1 });
-      if (!matches(event, type, `${type} ${detail} ${JSON.stringify(event)}`)) return;
-      shown += 1;
-      const row = timelineRow('action-row event-row', () => selectItem(row, { kind: 'event', value: event, index }));
-      const time = node('div', 'action-time', clock(event.timestamp || event.created_at || event.createdAt));
-      const rail = node('div', 'action-rail');
-      rail.append(node('span', 'action-dot'));
-      const body = node('div', 'action-body');
-      const head = node('div', 'action-head');
-      head.append(node('span', 'action-type', t(type)), node('span', 'action-summary', detail));
-      const meta = node('div', 'action-meta');
-      meta.append(node('span', 'source-badge', t('provider event')), node('span', '', `#${index + 1}`));
-      body.append(head, meta);
-      row.append(time, rail, body);
-      timeline.append(row);
-    });
-    if (shown === 0 && !stream.error) {
-      const message = stream.loaded ? (events.length ? 'No loaded provider events match this filter.' : 'This run has no sanitized provider-event artifact.') : 'Loading provider events…';
-      timeline.append(node('div', 'timeline-empty', t(message)));
-    }
-    appendPager(timeline, 'events');
+    renderTypeFilters(stream.items, MODES[streamName].typeOf);
+    renderRows(timeline, streamName, 0);
+    renderEmpty(timeline, streamName);
+    renderTail(streamName);
   }
 
   function selectItem(row, selected) {
@@ -1025,7 +1202,7 @@
     row.classList.add('selected');
     state.selected = selected;
     renderInspector();
-    const label = selected.kind === 'change' ? selected.value.path : (selected.value.type || selected.kind);
+    const label = selected.kind === 'change' ? selected.value.path : (selected.kind === 'event' ? eventType(selected.value) : (selected.value.type || selected.kind));
     announceInspector(t('{kind} selected: {label}', { kind: selected.kind, label }));
   }
 
@@ -1060,13 +1237,14 @@
     }
     holder.className = '';
     const { kind, value } = state.selected;
-    const title = kind === 'action' ? value.type : (kind === 'change' ? value.path : (value.type || t('(untyped event)')));
+    const title = kind === 'action' ? value.type : (kind === 'change' ? value.path : (value.type || value.hook_event_name || t('(untyped event)')));
     holder.append(node('div', 'inspector-title', title));
     const meta = node('div', 'inspector-meta');
     if (kind === 'action') {
       if (value.provider) meta.append(node('span', 'pill', value.provider));
       if (value.assurance) meta.append(labelled('span', 'pill', humanAttribution(value.assurance, value.provider), value.assurance));
-      [value.status, value.id].filter(Boolean).forEach((item) => meta.append(node('span', 'pill', item)));
+      if (value.status) meta.append(labelled('span', 'pill', t(value.status), value.status));
+      if (value.id) meta.append(node('span', 'pill', value.id));
       const observedPaths = value.samePathObserved || [];
       if (observedPaths.length) meta.append(node('span', 'pill path-correlation', t('same path observed — not causal proof')));
       holder.append(meta);
@@ -1131,15 +1309,23 @@
   // Server sentences are translated only by exact match through t(); anything else is shown verbatim.
   function describeField(section, name, value, fields, provider) {
     if (name === 'Attribution') return { text: humanAttribution(value, provider), title: value };
-    if (section === 'Process result' && name === 'Status' && value.startsWith('UNAVAILABLE (interactive session')) {
+    if (section === 'Process result' && name === 'Status' && /^(UNAVAILABLE|NOT OBSERVED) \(interactive session/.test(value)) {
       const ended = fields.get('Exit Reason') === 'session_ended';
-      return { text: 'NOT OBSERVED', caption: ended ? `${t(NOT_OBSERVED)} ${t(ENDED_BY_HOOK)}` : t(NOT_OBSERVED), title: value };
+      return { text: statusWord('NOT OBSERVED'), caption: ended ? `${t(NOT_OBSERVED)} ${t(ENDED_BY_HOOK)}` : t(NOT_OBSERVED), title: value };
     }
     if (section === 'Repository delta' && name === 'Status') {
-      if (value === 'PENDING') return { text: value, caption: t(REPOSITORY_PENDING) };
-      if (value === 'UNAVAILABLE') return { text: value, caption: sentence(fields.get('Reason')) || t(REPOSITORY_NONE) };
+      const token = repositoryWord(value);
+      if (token === 'PENDING') return { text: statusWord(token), caption: t(REPOSITORY_PENDING), title: value };
+      if (token === 'NOT RECORDED') return { text: statusWord(token), caption: sentence(fields.get('Reason')) || t(REPOSITORY_NONE), title: value };
     }
-    if (section === 'Verification' && name === 'Status' && VERDICTS[value]) return { text: value, caption: sentence(fields.get('Reason')) || t(VERDICTS[value]) };
+    if (section === 'Verification' && name === 'Status' && VERDICTS[verdictWord(value)]) {
+      const token = verdictWord(value);
+      return { text: statusWord(token), caption: sentence(fields.get('Reason')) || t(VERDICTS[token]), title: value };
+    }
+    // A check line starts with its verdict ("PASS go test …"); only that word is translated.
+    const check = name === 'Check' ? /^([A-Z]+) /.exec(value) : null;
+    if (check && statusWord(check[1]) !== check[1]) return { text: statusWord(check[1]) + value.slice(check[1].length), title: value };
+    if (name === 'Status') return { text: statusWord(value), title: value };
     return { text: t(value), title: value };
   }
 
@@ -1167,7 +1353,7 @@
       block.append(heading);
       const grid = node('div', 'evidence-fields');
       if (fields.length === 0) {
-        const empty = fieldValue({ text: t('Unavailable'), caption: t(EMPTY_SECTION[title]) });
+        const empty = fieldValue({ text: EMPTY_WORD[title] ? statusWord(EMPTY_WORD[title]) : t('Unavailable'), title: EMPTY_WORD[title], caption: t(EMPTY_SECTION[title]) });
         empty.classList.add('field-span');
         grid.append(empty);
       } else {
@@ -1179,10 +1365,10 @@
     }
   }
 
-  // tone is one of '', 'pass', 'fail', 'warn'; UNAVAILABLE and RUNNING stay neutral on purpose.
+  // tone is one of '', 'pass', 'fail', 'warn'; NOT RUN and RUNNING stay neutral on purpose.
   function metric(label, value, detail = '', tone = '') {
     const card = node('div', `metric${tone ? ` ${tone}` : ''}`);
-    card.append(node('div', 'metric-label', t(label)), node('div', 'metric-value', String(value)));
+    card.append(node('div', 'metric-label', t(label)), statusNode('div', 'metric-value', String(value)));
     if (detail) card.append(node('div', 'metric-detail', detail));
     return card;
   }
@@ -1196,7 +1382,10 @@
     $('run-subtitle').textContent = `${run.cwd || t('unknown cwd')} · ${new Date(run.startedAt).toLocaleString(state.lang)}`;
     $('run-prompt').textContent = run.prompt || t('No recorded request.');
     $('action-count').textContent = String(data.actionCount || 0);
-    $('change-count').textContent = '0';
+    // A language switch re-renders the run without refetching its streams:
+    // a change count already loaded is kept, not zeroed.
+    const loadedChanges = state.streams && state.streams.changes && state.streams.changes.loaded ? state.streams.changes : null;
+    $('change-count').textContent = loadedChanges ? (loadedChanges.status === 'unavailable' ? (loadedChanges.total === 0 ? '?' : `${loadedChanges.total}+?`) : String(loadedChanges.total)) : '0';
     $('event-count').textContent = String(data.eventCount || 0);
     $('top-meta').textContent = `${run.provider || t('unknown')} · ${run.exitReason || 'running'} · ${run.id}`;
     document.title = `${run.project || run.id} · agentrec`;
@@ -1205,12 +1394,14 @@
     const process = outcome(run.exitReason, supervisor);
     const verification = verificationSummary(data.evidence.verification);
     const tones = [process.tone, verification.tone];
-    // ponytail: a run reads as passed only when both the process and the checks did; UNAVAILABLE never borrows green.
+    // ponytail: a run reads as passed only when both the process and the checks did; NOT RUN never borrows green.
     const runStatus = tones.includes('fail') ? 'fail' : (tones.includes('warn') ? 'warn' : (process.tone === 'pass' && verification.tone === 'pass' ? 'pass' : ''));
     const verdict = $('run-verdict');
-    verdict.textContent = t('Run {run} · Verify {verify}', { run: process.value, verify: verification.value });
-    verdict.title = `${process.detail} ${verification.detail}`.trim();
+    verdict.textContent = t('Run {run} · Verify {verify}', { run: statusWord(process.value), verify: statusWord(verification.value) });
+    const tokens = `Run ${process.value} · Verify ${verification.value}`;
+    verdict.title = [verdict.textContent === tokens ? '' : tokens, `${process.detail} ${verification.detail}`.trim()].filter(Boolean).join('\n');
     verdict.className = `verdict ${runStatus}`;
+    renderRunActions();
     $('provider-dot').className = `status-dot ${runStatus}`;
     const timelineWarning = $('timeline-warning');
     if (run.versionUnverified) {
@@ -1270,21 +1461,22 @@
     }
   }
 
-  async function loadStreamPage(streamName, cursor = 0, rememberCurrent = false, generation = state.loadGeneration, consumeHistory = false, signal) {
+  // loadStreamPage fetches one page: append=false starts the stream over from cursor, append=true adds the page to what is loaded.
+  // focusNew moves focus onto the first appended row, for a "Load more" button that is gone once its page lands.
+  async function loadStreamPage(streamName, cursor = 0, append = false, generation = state.loadGeneration, focusNew = false, signal) {
     if (generation !== state.loadGeneration) return;
     const stream = state.streams && state.streams[streamName];
     if (!stream || stream.loading || cursor === null) return;
     stream.loading = true;
-    renderTimeline();
+    stream.currentCursor = cursor;
+    const from = append ? stream.items.length : 0;
+    if (streamName === state.mode) renderTail(streamName);
     try {
       const page = await getJSON(`/api/snapshots/${encodeURIComponent(state.run.snapshotId)}/${streamName}?cursor=${cursor}`, signal);
-      if (generation !== state.loadGeneration) return;
-      if (cursor !== stream.currentCursor) state.activeTypes.clear();
-      if (rememberCurrent) stream.history.push(stream.currentCursor);
-      if (consumeHistory) stream.history.pop();
-      stream.items = page.items || [];
+      // A page for a cursor this stream no longer waits on is stale and dropped.
+      if (generation !== state.loadGeneration || cursor !== stream.currentCursor) return;
+      stream.items = append ? stream.items.concat(page.items || []) : (page.items || []);
       stream.error = '';
-      stream.currentCursor = cursor;
       stream.nextCursor = page.nextCursor === undefined ? null : page.nextCursor;
       stream.loaded = true;
       if (streamName === 'changes') {
@@ -1302,8 +1494,114 @@
       }
     } finally {
       stream.loading = false;
-      if (generation === state.loadGeneration) renderTimeline();
+      if (generation === state.loadGeneration && streamName === state.mode) {
+        if (append && from > 0) {
+          appendTimeline(streamName, from, focusNew);
+        } else {
+          renderTimeline();
+          const first = focusNew ? $('timeline').querySelector('.action-row') : null;
+          if (first) first.focus();
+        }
+      }
     }
+  }
+
+  // ── Delete a run ──────────────────────────────────────────────────────────
+  // A deleted run goes to the trash (agentrec trash lists, restores and empties it); the toast's Undo restores it from here.
+  // The token is fetched once; a failed fetch leaves it empty so the next mutation tries again, and a 403 drops it the same way.
+  async function mutate(method, path) {
+    if (!state.token) state.token = (await getJSON('/api/token')).token || '';
+    const response = await fetch(path, { method, headers: { Accept: 'application/json', 'X-Agentrec-Token': state.token } });
+    if (response.status === 204) return;
+    if (response.status === 403) state.token = '';
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${response.status}`);
+  }
+
+  function showToast(message, actionLabel, action) {
+    const toast = $('toast');
+    toast.replaceChildren(node('span', '', message));
+    window.clearTimeout(state.toastTimer);
+    const button = node('button', 'toast-action', actionLabel);
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      toast.classList.add('hidden');
+      action();
+    });
+    toast.append(node('span', 'toast-sep', '·'), button);
+    toast.classList.remove('hidden');
+    state.toastTimer = window.setTimeout(() => toast.classList.add('hidden'), 10000);
+    return button;
+  }
+
+  // The control is one button until it is activated; then the same spot holds the question and its two answers.
+  function renderRunActions() {
+    const holder = $('run-actions');
+    holder.replaceChildren();
+    if (!state.run) return;
+    const run = state.run.run;
+    if (state.confirmDelete) {
+      const yes = node('button', 'danger-button', t('Delete'));
+      yes.type = 'button';
+      yes.addEventListener('click', () => deleteRun(run.id));
+      const no = node('button', 'load-more', t('Cancel'));
+      no.type = 'button';
+      no.addEventListener('click', () => {
+        state.confirmDelete = false;
+        renderRunActions();
+        $('delete-run').focus();
+      });
+      holder.append(node('span', 'confirm-text', t('Delete this run?')), yes, no);
+      yes.focus();
+      return;
+    }
+    const button = node('button', 'danger-button');
+    button.type = 'button';
+    button.id = 'delete-run';
+    button.append($('trash-icon').content.firstElementChild.cloneNode(true), node('span', '', t('Delete run')));
+    const open = !run.exitReason || run.exitReason === 'running';
+    button.disabled = open;
+    button.title = t(open ? 'This run is still open; it can be deleted after the session ends.' : 'Move this run to the trash');
+    button.addEventListener('click', () => {
+      state.confirmDelete = true;
+      renderRunActions();
+    });
+    holder.append(button);
+  }
+
+  async function deleteRun(id) {
+    try {
+      await mutate('DELETE', `/api/runs/${encodeURIComponent(id)}`);
+    } catch (error) {
+      showError(t('Cannot delete: {error}', { error: error instanceof Error ? error.message : String(error) }));
+      return;
+    }
+    state.confirmDelete = false;
+    const index = state.runs.findIndex((run) => run.id === id);
+    const summary = state.runs[index];
+    state.runs = state.runs.filter((run) => run.id !== id);
+    const next = state.runs[Math.min(Math.max(index, 0), state.runs.length - 1)];
+    if (state.run && state.run.run.id === id) {
+      state.run = null;
+      state.streams = null;
+      state.selected = null;
+    }
+    renderRunList();
+    renderWorkspaceState();
+    if (next) loadRun(next.id);
+    showToast(t('Run deleted'), t('Undo'), () => restoreRun(id, summary, index)).focus();
+  }
+
+  async function restoreRun(id, summary, index) {
+    try {
+      await mutate('POST', `/api/runs/${encodeURIComponent(id)}/restore`);
+    } catch (error) {
+      showError(t('Cannot restore: {error}', { error: error instanceof Error ? error.message : String(error) }));
+      return;
+    }
+    if (summary && !state.runs.some((run) => run.id === id)) state.runs.splice(Math.min(Math.max(index, 0), state.runs.length), 0, summary);
+    renderRunList();
+    loadRun(id);
   }
 
   // quiet loads (auto-selection) report failure in the empty state rather than a toast, so the poll can retry without nagging.
@@ -1316,10 +1614,12 @@
       const run = await getJSON(`/api/runs/${encodeURIComponent(id)}`, controller.signal);
       if (generation !== state.loadGeneration) return;
       state.run = run;
+      state.confirmDelete = false;
+      // shown counts the rows the filter lets through, across every page loaded so far.
       state.streams = {
-        actions: { items: [], currentCursor: 0, nextCursor: state.run.actionCount === 0 ? null : 0, history: [], loading: false, loaded: state.run.actionCount === 0, error: '' },
-        changes: { items: [], currentCursor: 0, nextCursor: 0, history: [], loading: false, loaded: false, error: '', total: 0, attribution: '', baseline: '', status: '', reason: '' },
-        events: { items: [], currentCursor: 0, nextCursor: state.run.eventCount === 0 ? null : 0, history: [], loading: false, loaded: state.run.eventCount === 0, error: '' }
+        actions: { items: [], currentCursor: 0, nextCursor: state.run.actionCount === 0 ? null : 0, loading: false, loaded: state.run.actionCount === 0, error: '', shown: 0 },
+        changes: { items: [], currentCursor: 0, nextCursor: 0, loading: false, loaded: false, error: '', shown: 0, total: 0, attribution: '', baseline: '', status: '', reason: '' },
+        events: { items: [], currentCursor: 0, nextCursor: state.run.eventCount === 0 ? null : 0, loading: false, loaded: state.run.eventCount === 0, error: '', shown: 0 }
       };
       state.activeTypes.clear();
       state.selected = null;
@@ -1428,6 +1728,12 @@
     if (state.run) renderRun(); else { renderRunList(); renderWorkspaceState(); }
   });
   $('run-search').addEventListener('input', renderRunList);
+  $('run-actions').addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !state.confirmDelete) return;
+    state.confirmDelete = false;
+    renderRunActions();
+    $('delete-run').focus();
+  });
   $('timeline-search').addEventListener('input', (event) => {
     window.clearTimeout(state.searchTimer);
     state.searchTimer = window.setTimeout(() => {
