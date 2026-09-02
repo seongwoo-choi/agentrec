@@ -2,6 +2,8 @@
   'use strict';
 
   const POLL_MS = 5000;
+  const LIVE_MS = 3000;
+  const SEARCH_MS = 400;
   const state = { lang: 'en', runs: [], run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, token: '' };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
@@ -220,7 +222,20 @@
       'Comparison log': '비교 로그',
       'Older output was dropped to keep the log under 1 MiB.': '로그를 1 MiB 이하로 유지하기 위해 오래된 출력을 버렸습니다.',
       'The server truncated the output.': '서버가 출력을 잘라냈습니다.',
-      'A comparison needs both runners': '비교에는 두 러너가 모두 필요합니다'
+      'A comparison needs both runners': '비교에는 두 러너가 모두 필요합니다',
+      'Search all runs': '모든 실행 검색',
+      'Search results': '검색 결과',
+      'Searching…': '검색 중…',
+      'Search failed: {error}': '검색에 실패했습니다: {error}',
+      'No matches for this search.': '검색 결과가 없습니다.',
+      '{n} hit(s) in {m} run(s)': '실행 {m}개에서 {n}건 일치',
+      'Results truncated': '결과가 잘렸습니다',
+      action: '액션',
+      run: '실행',
+      'Live · updated {time}': '실시간 · {time} 갱신',
+      'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '현재 작업 트리 — {time} 측정, 실행 중에 관측된 것으로 에이전트가 원인이라는 증명은 아닙니다',
+      'Working tree': '작업 트리',
+      'WORKING TREE STATUS': '작업 트리 상태'
     },
     ja: {
       'Action Timeline': 'アクションタイムライン',
@@ -425,7 +440,20 @@
       'Comparison log': '比較ログ',
       'Older output was dropped to keep the log under 1 MiB.': 'ログを 1 MiB 以下に保つため、古い出力を破棄しました。',
       'The server truncated the output.': 'サーバーが出力を切り詰めました。',
-      'A comparison needs both runners': '比較には両方のランナーが必要です'
+      'A comparison needs both runners': '比較には両方のランナーが必要です',
+      'Search all runs': 'すべての実行を検索',
+      'Search results': '検索結果',
+      'Searching…': '検索しています…',
+      'Search failed: {error}': '検索に失敗しました: {error}',
+      'No matches for this search.': '検索に一致するものはありません。',
+      '{n} hit(s) in {m} run(s)': '{m} 件の実行で {n} 件が一致',
+      'Results truncated': '結果は切り詰められています',
+      action: 'アクション',
+      run: '実行',
+      'Live · updated {time}': 'ライブ · {time} 更新',
+      'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '現在の作業ツリー — {time} に計測。実行中に観測されたもので、エージェントが原因であることの証明ではありません',
+      'Working tree': '作業ツリー',
+      'WORKING TREE STATUS': '作業ツリーの状態'
     },
     'zh-CN': {
       'Action Timeline': '操作时间线',
@@ -630,7 +658,20 @@
       'Comparison log': '比较日志',
       'Older output was dropped to keep the log under 1 MiB.': '为使日志保持在 1 MiB 以下，已丢弃较早的输出。',
       'The server truncated the output.': '服务器截断了输出。',
-      'A comparison needs both runners': '比较需要两个运行器'
+      'A comparison needs both runners': '比较需要两个运行器',
+      'Search all runs': '搜索所有运行',
+      'Search results': '搜索结果',
+      'Searching…': '正在搜索…',
+      'Search failed: {error}': '搜索失败：{error}',
+      'No matches for this search.': '没有匹配的结果。',
+      '{n} hit(s) in {m} run(s)': '在 {m} 个运行中找到 {n} 条匹配',
+      'Results truncated': '结果已截断',
+      action: '操作',
+      run: '运行',
+      'Live · updated {time}': '实时 · {time} 更新',
+      'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '当前工作树 — 测量于 {time}，在运行期间观测到，并非代理造成的证明',
+      'Working tree': '工作树',
+      'WORKING TREE STATUS': '工作树状态'
     }
   };
 
@@ -717,6 +758,19 @@
     const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     return body;
+  }
+
+  // getJSONRetrying re-asks a few times when the server says its snapshot lost a race with the recorder ("…; retry"):
+  // a run that is still being written changes under the capture, and the next attempt usually lands between writes.
+  async function getJSONRetrying(path, signal, attempts = 3) {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await getJSON(path, signal);
+      } catch (error) {
+        if (attempt >= attempts || error.name === 'AbortError' || !/retry/.test(error.message)) throw error;
+        await new Promise((resolve) => window.setTimeout(resolve, 300 * attempt));
+      }
+    }
   }
 
   function showError(error) {
@@ -1198,6 +1252,62 @@
     return row;
   }
 
+  // liveChangeRow is one working-tree entry of a running run: git's porcelain status code, no counts, no patch.
+  function liveChangeRow(file) {
+    const status = String(file.status || '').trim() || '?';
+    if (!matches(file, status, `${status} ${file.path}`)) return null;
+    const untracked = status.startsWith('?');
+    const row = timelineRow('action-row change-row', () => selectItem(row, { kind: 'live', value: file }));
+    row.dataset.path = file.path;
+    const rail = node('div', 'action-rail');
+    rail.append(node('span', `action-dot ${untracked ? 'untracked' : 'tracked'}`));
+    const body = node('div', 'action-body');
+    const head = node('div', 'action-head');
+    head.append(node('span', 'action-type', file.path));
+    const meta = node('div', 'action-meta');
+    meta.append(node('span', '', t(untracked ? 'untracked' : 'tracked')), node('span', 'source-badge', t('Working tree')));
+    body.append(head, meta);
+    row.append(node('div', `change-marker${untracked ? ' untracked' : ''}`, status), rail, body);
+    return row;
+  }
+
+  // renderLiveChanges draws the working tree of a running run. A tick redraws it in place: selection, focus and scroll
+  // are kept by path, and a selected file that is no longer listed clears the inspector.
+  function renderLiveChanges() {
+    const timeline = $('timeline');
+    const files = live.changes ? live.changes.files || [] : [];
+    const selectedPath = state.selected && state.selected.kind === 'live' ? state.selected.value.path : '';
+    const focusedPath = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.path : undefined;
+    const scrollTop = timeline.scrollTop;
+    timeline.replaceChildren();
+    renderTypeFilters(files, (file) => String(file.status || '').trim() || '?');
+    if (live.error) timeline.append(node('div', 'timeline-empty stream-error', t('Could not load repository changes: {error}', { error: live.error })));
+    if (!live.changes) {
+      if (!live.error) timeline.append(node('div', 'timeline-empty', t('Loading repository changes…')));
+      return;
+    }
+    timeline.append(labelled('div', 'timeline-note live-caption', t('Working tree now — measured at {time}, observed during the run, not proof the agent caused it', { time: clock(live.changes.measuredAt) }), live.changes.note));
+    let shown = 0;
+    let found = false;
+    for (const file of files) {
+      const row = liveChangeRow(file);
+      if (!row) continue;
+      shown += 1;
+      if (file.path === selectedPath) {
+        row.classList.add('selected');
+        found = true;
+      }
+      timeline.append(row);
+      if (file.path === focusedPath) row.focus({ preventScroll: true });
+    }
+    if (selectedPath && !found) {
+      state.selected = null;
+      renderInspector();
+    }
+    if (shown === 0) timeline.append(node('div', 'timeline-empty', t(files.length ? 'No loaded changes match this filter.' : 'No repository changes were observed.')));
+    timeline.scrollTop = scrollTop;
+  }
+
   function eventRow(event, index) {
     const type = eventType(event);
     const detail = eventDetail(event) || firstDetail(event) || firstDetail(event.message) || event.subtype || event.event || t('event {n}', { n: index + 1 });
@@ -1253,6 +1363,10 @@
     state.selected = null;
     renderInspector();
     const streamName = state.mode;
+    if (streamName === 'changes' && isLive()) {
+      renderLiveChanges();
+      return;
+    }
     const stream = state.streams[streamName];
     stream.shown = 0;
     if (stream.error) timeline.append(node('div', 'timeline-empty stream-error', t(MODES[streamName].error, { error: stream.error })));
@@ -1278,8 +1392,8 @@
     row.classList.add('selected');
     state.selected = selected;
     renderInspector();
-    const label = selected.kind === 'change' ? selected.value.path : (selected.kind === 'event' ? eventType(selected.value) : (selected.value.type || selected.kind));
-    announceInspector(t('{kind} selected: {label}', { kind: selected.kind, label }));
+    const label = selected.kind === 'change' || selected.kind === 'live' ? selected.value.path : (selected.kind === 'event' ? eventType(selected.value) : (selected.value.type || selected.kind));
+    announceInspector(t('{kind} selected: {label}', { kind: selected.kind === 'live' ? 'change' : selected.kind, label }));
   }
 
   function addPayload(holder, label, value) {
@@ -1313,7 +1427,7 @@
     }
     holder.className = '';
     const { kind, value } = state.selected;
-    const title = kind === 'action' ? value.type : (kind === 'change' ? value.path : (value.type || value.hook_event_name || t('(untyped event)')));
+    const title = kind === 'action' ? value.type : (kind === 'change' || kind === 'live' ? value.path : (value.type || value.hook_event_name || t('(untyped event)')));
     holder.append(node('div', 'inspector-title', title));
     const meta = node('div', 'inspector-meta');
     if (kind === 'action') {
@@ -1370,6 +1484,10 @@
           holder.append(controls);
         }
       }
+    } else if (kind === 'live') {
+      meta.append(node('span', 'pill', value.status), labelled('span', 'pill', t('Working tree'), live.changes ? live.changes.note : ''));
+      holder.append(meta);
+      addPayload(holder, 'WORKING TREE STATUS', { path: value.path, status: value.status, measuredAt: live.changes ? live.changes.measuredAt : undefined });
     } else {
       meta.append(labelled('span', 'pill', humanAttribution('provider_reported', state.run.run.provider), 'provider_reported'), node('span', 'pill', t('event #{n}', { n: state.selected.index + 1 })));
       holder.append(meta);
@@ -1449,7 +1567,8 @@
     return card;
   }
 
-  function renderRun() {
+  // renderRunHeader draws everything above the timeline from state.run; a live tick redraws it without touching the timeline.
+  function renderRunHeader() {
     const data = state.run;
     const run = data.run;
     $('run-provider').textContent = run.provider || t('unknown');
@@ -1461,7 +1580,7 @@
     // A language switch re-renders the run without refetching its streams:
     // a change count already loaded is kept, not zeroed.
     const loadedChanges = state.streams && state.streams.changes && state.streams.changes.loaded ? state.streams.changes : null;
-    $('change-count').textContent = loadedChanges ? (loadedChanges.status === 'unavailable' ? (loadedChanges.total === 0 ? '?' : `${loadedChanges.total}+?`) : String(loadedChanges.total)) : '0';
+    $('change-count').textContent = isLive() && live.changes ? String((live.changes.files || []).length) : (loadedChanges ? (loadedChanges.status === 'unavailable' ? (loadedChanges.total === 0 ? '?' : `${loadedChanges.total}+?`) : String(loadedChanges.total)) : '0');
     $('event-count').textContent = String(data.eventCount || 0);
     $('top-meta').textContent = `${run.provider || t('unknown')} · ${run.exitReason || 'running'} · ${run.id}`;
     document.title = `${run.project || run.id} · agentrec`;
@@ -1500,6 +1619,11 @@
       metric('Warnings', warnings, '', warnings > 0 ? 'warn' : '')
     );
     renderEvidence();
+    renderLivePill();
+  }
+
+  function renderRun() {
+    renderRunHeader();
     renderTimeline();
     renderRunList();
     renderWorkspaceState();
@@ -1554,6 +1678,7 @@
       stream.items = append ? stream.items.concat(page.items || []) : (page.items || []);
       stream.error = '';
       stream.nextCursor = page.nextCursor === undefined ? null : page.nextCursor;
+      if (page.endCursor !== undefined) stream.endCursor = page.endCursor;
       stream.loaded = true;
       if (streamName === 'changes') {
         stream.total = page.total || 0;
@@ -1917,29 +2042,257 @@
     }
   });
 
+  // ── Live run ──────────────────────────────────────────────────────────────
+  // A run that is still recording is re-read every LIVE_MS: the header redraws when its facts changed, each fully loaded
+  // stream fetches only the rows after its endCursor from the new snapshot (the files are append-only, so offsets hold),
+  // and the Changes tab shows the working tree as it is now. One tick at a time; none while the tab is hidden.
+  const live = { timer: null, busy: false, updatedAt: null, signature: '', changes: null, error: '' };
+  const isLive = () => Boolean(state.run) && (!state.run.run.exitReason || state.run.run.exitReason === 'running');
+  const runSignature = (run) => JSON.stringify([run.actionCount, run.eventCount, run.changes, run.evidence, run.run]);
+
+  function renderLivePill() {
+    $('live-pill').classList.toggle('hidden', !isLive());
+    $('live-text').textContent = t('Live · updated {time}', { time: live.updatedAt ? clock(live.updatedAt.toISOString()) : '—' });
+  }
+
+  function stopLive() {
+    window.clearTimeout(live.timer);
+    live.timer = null;
+  }
+
+  function startLive() {
+    if (live.timer || live.busy || !isLive() || document.visibilityState === 'hidden') return;
+    live.timer = window.setTimeout(liveTick, LIVE_MS);
+  }
+
+  // loadTail appends the rows recorded since the stream's last page; the view follows only when it was already at the bottom.
+  async function loadTail(streamName, generation) {
+    const stream = state.streams && state.streams[streamName];
+    if (!stream || !stream.loaded || stream.loading || stream.nextCursor !== null) return;
+    const timeline = $('timeline');
+    const follow = streamName === state.mode && timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 12;
+    await loadStreamPage(streamName, stream.endCursor || 0, true, generation);
+    if (follow && streamName === state.mode && generation === state.loadGeneration) timeline.scrollTop = timeline.scrollHeight;
+  }
+
+  async function loadLiveChanges(generation) {
+    if (!state.run) return;
+    try {
+      const fresh = await getJSON(`/api/runs/${encodeURIComponent(state.run.run.id)}/live`);
+      if (generation !== state.loadGeneration) return;
+      live.changes = fresh;
+      live.error = '';
+    } catch (error) {
+      if (generation !== state.loadGeneration) return;
+      // A 409 means the run ended between ticks; the next tick loads the measured diff instead.
+      live.error = errorText(error);
+    }
+    $('change-count').textContent = live.changes ? String((live.changes.files || []).length) : '?';
+    if (state.mode === 'changes' && isLive()) renderLiveChanges();
+  }
+
+  async function liveTick() {
+    live.timer = null;
+    if (live.busy || !isLive() || document.visibilityState === 'hidden') return;
+    live.busy = true;
+    const generation = state.loadGeneration;
+    try {
+      const fresh = await getJSON(`/api/runs/${encodeURIComponent(state.run.run.id)}`);
+      if (generation !== state.loadGeneration) return;
+      const grew = { actions: (fresh.actionCount || 0) > (state.run.actionCount || 0), events: (fresh.eventCount || 0) > (state.run.eventCount || 0) };
+      const signature = runSignature(fresh);
+      state.run = fresh;
+      live.updatedAt = new Date();
+      const running = isLive();
+      if (signature !== live.signature) {
+        live.signature = signature;
+        renderRunHeader();
+        // The visible stream's "Loaded n of total" reads the new total; pages still to come are fetched from the new snapshot.
+        const label = $('timeline').querySelector('.stream-tail .pager-label');
+        if (label && MODES[state.mode] && state.streams[state.mode].items.length) label.textContent = t('Loaded {loaded} of {total}', { loaded: state.streams[state.mode].items.length, total: MODES[state.mode].total(state.streams[state.mode]) });
+      } else {
+        renderLivePill();
+      }
+      for (const name of ['actions', 'events']) if (grew[name] || !running) await loadTail(name, generation);
+      if (!running) {
+        // The session ended: the repository diff is measured now, so the Changes tab moves from the working tree to the snapshot.
+        live.changes = null;
+        await loadStreamPage('changes', 0, false, generation);
+        refreshRuns();
+        return;
+      }
+      if (state.mode === 'changes') await loadLiveChanges(generation);
+    } catch (error) {
+      // ponytail: a failed tick stays quiet; the next one retries and user-initiated loads still surface errors.
+    } finally {
+      live.busy = false;
+      startLive();
+    }
+  }
+
+  // ── Search all runs ───────────────────────────────────────────────────────
+  // The newest query wins: a keystroke restarts the idle timer and aborts the request in flight. Hits stay grouped by run
+  // in the server's order (newest run first); the field keeps its text when the panel closes.
+  const search = { timer: null, controller: null, hits: [], query: '', truncated: false, active: -1, open: false };
+
+  function closeSearch() {
+    window.clearTimeout(search.timer);
+    search.open = false;
+    search.active = -1;
+    $('search-results').classList.add('hidden');
+    $('search-all').setAttribute('aria-expanded', 'false');
+    $('search-all').removeAttribute('aria-activedescendant');
+  }
+
+  function scheduleSearch() {
+    window.clearTimeout(search.timer);
+    const query = $('search-all').value.trim();
+    if (query.length < 2) {
+      closeSearch();
+      return;
+    }
+    search.timer = window.setTimeout(() => runSearch(query), SEARCH_MS);
+  }
+
+  async function runSearch(query) {
+    window.clearTimeout(search.timer);
+    if (search.controller) search.controller.abort();
+    const controller = new AbortController();
+    search.controller = controller;
+    search.query = query;
+    renderSearch(t('Searching…'));
+    try {
+      const result = await getJSON(`/api/search?q=${encodeURIComponent(query)}&limit=100`, controller.signal);
+      if (controller !== search.controller) return;
+      search.hits = result.hits || [];
+      search.truncated = Boolean(result.truncated);
+      search.active = -1;
+      renderSearch();
+    } catch (error) {
+      if (error.name === 'AbortError' || controller !== search.controller) return;
+      renderSearch(t('Search failed: {error}', { error: errorText(error) }));
+    } finally {
+      if (controller === search.controller) search.controller = null;
+    }
+  }
+
+  // highlighted renders the snippet as text with the first match wrapped in a mark; no markup comes from the payload.
+  function highlighted(text, needle) {
+    const holder = node('div', 'search-snippet');
+    const index = needle ? text.toLowerCase().indexOf(needle.toLowerCase()) : -1;
+    if (index < 0) {
+      holder.textContent = text;
+      return holder;
+    }
+    holder.append(text.slice(0, index), node('mark', 'search-match', text.slice(index, index + needle.length)), text.slice(index + needle.length));
+    return holder;
+  }
+
+  function renderSearch(message) {
+    const panel = $('search-results');
+    const field = $('search-all');
+    panel.replaceChildren();
+    panel.classList.remove('hidden');
+    field.setAttribute('aria-expanded', 'true');
+    field.removeAttribute('aria-activedescendant');
+    search.open = true;
+    if (message) {
+      panel.append(node('div', 'search-status', message));
+      return;
+    }
+    const groups = new Map();
+    search.hits.forEach((hit, index) => {
+      if (!groups.has(hit.runId)) groups.set(hit.runId, { hit, entries: [] });
+      groups.get(hit.runId).entries.push(index);
+    });
+    const summary = node('div', 'search-status');
+    summary.append(node('span', '', search.hits.length ? t('{n} hit(s) in {m} run(s)', { n: search.hits.length, m: groups.size }) : t('No matches for this search.')));
+    if (search.truncated) summary.append(node('span', 'search-truncated', t('Results truncated')));
+    panel.append(summary);
+    for (const { hit, entries } of groups.values()) {
+      const group = node('div', 'search-group');
+      const head = node('div', 'search-group-head');
+      head.append(node('span', 'search-group-project', hit.project || t('unknown project')), node('span', '', relativeTime(hit.startedAt)), node('span', 'search-group-id', shortID(hit.runId)));
+      head.title = hit.runId;
+      group.append(head);
+      for (const index of entries) {
+        const entry = search.hits[index];
+        const row = node('div', `search-hit${index === search.active ? ' active' : ''}`);
+        row.id = `search-hit-${index}`;
+        row.setAttribute('role', 'option');
+        row.setAttribute('aria-selected', String(index === search.active));
+        row.append(node('span', `search-kind kind-${entry.kind}`, t(entry.kind)));
+        if (entry.type) row.append(node('span', 'search-type', entry.type));
+        row.append(highlighted(entry.snippet || '', search.query));
+        row.addEventListener('click', () => openHit(index));
+        group.append(row);
+      }
+      panel.append(group);
+    }
+  }
+
+  function moveSearchActive(delta) {
+    const count = search.hits.length;
+    if (count === 0) return;
+    search.active = (search.active + delta + count) % count;
+    const field = $('search-all');
+    $('search-results').querySelectorAll('.search-hit').forEach((row) => {
+      const active = row.id === `search-hit-${search.active}`;
+      row.classList.toggle('active', active);
+      row.setAttribute('aria-selected', String(active));
+      if (active) {
+        field.setAttribute('aria-activedescendant', row.id);
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+
+  // openHit opens the hit's run; an action hit loads the actions page that starts at the hit's offset and selects that row.
+  async function openHit(index) {
+    const hit = search.hits[index];
+    if (!hit) return;
+    closeSearch();
+    if (hit.kind === 'action') $('timeline-tab-actions').click();
+    await loadRun(hit.runId, false, hit.kind === 'action' ? hit.offset || 0 : 0);
+    if (hit.kind !== 'action' || !state.run || state.run.run.id !== hit.runId || state.mode !== 'actions') return;
+    const items = state.streams.actions.items;
+    const at = Math.max(0, items.findIndex((action) => action.id === hit.actionId));
+    const row = $('timeline').querySelector(`.action-row[data-index="${at}"]`);
+    if (!row || !items[at]) return;
+    selectItem(row, { kind: 'action', value: items[at] });
+    row.scrollIntoView({ block: 'center' });
+    row.focus({ preventScroll: true });
+  }
+
   // quiet loads (auto-selection) report failure in the empty state rather than a toast, so the poll can retry without nagging.
-  async function loadRun(id, quiet = false) {
+  // cursor starts the first actions page at a byte offset, for a search hit: the page there begins with the hit's action.
+  async function loadRun(id, quiet = false, cursor = 0) {
+    stopLive();
     if (state.runAbortController) state.runAbortController.abort();
     const controller = new AbortController();
     state.runAbortController = controller;
     const generation = ++state.loadGeneration;
     try {
-      const run = await getJSON(`/api/runs/${encodeURIComponent(id)}`, controller.signal);
+      const run = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`, controller.signal);
       if (generation !== state.loadGeneration) return;
       state.run = run;
       state.confirmDelete = false;
+      Object.assign(live, { updatedAt: new Date(), signature: runSignature(run), changes: null, error: '' });
       // shown counts the rows the filter lets through, across every page loaded so far.
       state.streams = {
-        actions: { items: [], currentCursor: 0, nextCursor: state.run.actionCount === 0 ? null : 0, loading: false, loaded: state.run.actionCount === 0, error: '', shown: 0 },
+        actions: { items: [], currentCursor: 0, nextCursor: state.run.actionCount === 0 ? null : 0, endCursor: 0, loading: false, loaded: state.run.actionCount === 0, error: '', shown: 0 },
         changes: { items: [], currentCursor: 0, nextCursor: 0, loading: false, loaded: false, error: '', shown: 0, total: 0, attribution: '', baseline: '', status: '', reason: '' },
-        events: { items: [], currentCursor: 0, nextCursor: state.run.eventCount === 0 ? null : 0, loading: false, loaded: state.run.eventCount === 0, error: '', shown: 0 }
+        events: { items: [], currentCursor: 0, nextCursor: state.run.eventCount === 0 ? null : 0, endCursor: 0, loading: false, loaded: state.run.eventCount === 0, error: '', shown: 0 }
       };
       state.activeTypes.clear();
       state.selected = null;
       renderRun();
-      await loadStreamPage(state.mode, 0, false, generation, false, controller.signal);
+      await loadStreamPage(state.mode, state.mode === 'actions' ? cursor : 0, false, generation, false, controller.signal);
       if (state.mode !== 'actions') await loadStreamPage('actions', 0, false, generation, false, controller.signal);
       if (state.mode !== 'changes') await loadStreamPage('changes', 0, false, generation, false, controller.signal);
+      if (generation !== state.loadGeneration) return;
+      if (isLive() && state.mode === 'changes') await loadLiveChanges(generation);
+      startLive();
     } catch (error) {
       if (error.name === 'AbortError' || generation !== state.loadGeneration) return;
       if (quiet && !state.run) {
@@ -2029,9 +2382,11 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       stopPolling();
+      stopLive();
     } else {
       refreshRuns();
       startPolling();
+      startLive();
     }
   });
 
@@ -2041,8 +2396,31 @@
     if (state.run) renderRun(); else { renderRunList(); renderWorkspaceState(); }
     renderCompareForm();
     renderCompareJob();
+    if (search.open) renderSearch();
   });
   $('run-search').addEventListener('input', renderRunList);
+  const searchAll = $('search-all');
+  searchAll.addEventListener('input', scheduleSearch);
+  searchAll.addEventListener('focus', () => { if (search.hits.length && searchAll.value.trim() === search.query) renderSearch(); });
+  searchAll.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      // Escape closes the panel and keeps the text; the native search control would clear it.
+      event.preventDefault();
+      closeSearch();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!search.open) {
+        if (!search.hits.length) return;
+        renderSearch();
+      }
+      moveSearchActive(event.key === 'ArrowDown' ? 1 : -1);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (search.open && search.active >= 0) openHit(search.active);
+      else if (searchAll.value.trim().length >= 2) runSearch(searchAll.value.trim());
+    }
+  });
+  document.addEventListener('click', (event) => { if (search.open && !$('global-search').contains(event.target)) closeSearch(); });
   $('run-actions').addEventListener('keydown', (event) => {
     if (event.key !== 'Escape' || !state.confirmDelete) return;
     state.confirmDelete = false;
@@ -2068,7 +2446,11 @@
       state.mode = tab.dataset.mode;
       state.activeTypes.clear();
       renderTimeline();
-      if (state.streams && !state.streams[state.mode].loaded) await loadStreamPage(state.mode);
+      if (isLive() && state.mode === 'changes') {
+        if (!live.changes) await loadLiveChanges(state.loadGeneration);
+      } else if (state.streams && !state.streams[state.mode].loaded) {
+        await loadStreamPage(state.mode);
+      }
     });
     tab.addEventListener('keydown', (event) => {
       let next = index;
