@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/seongwoo-choi/agentrec/internal/runner"
 	"io"
 	"net"
 	"os"
@@ -61,6 +62,12 @@ func runHook(args []string, _ io.Writer, stderr io.Writer) int {
 		// Not exitUsage: a hook's exit status is read by the session that ran
 		// it, and 2 blocks the event on some of them.
 		return exitFailure
+	}
+	// A provider agentrec itself launched — a traced run, a shadow leg — is
+	// already being recorded by the process that launched it. Its hooks say
+	// nothing, so the run is not filed twice.
+	if os.Getenv(runner.HooksOffEnv) != "" {
+		return 0
 	}
 	provider := args[0]
 	deadline := time.Now().Add(hookBudget)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/runner"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
@@ -1214,5 +1215,24 @@ func TestDroppedPayloadIsBounded(t *testing.T) {
 	stub := droppedPayload(hookEnvelope{SessionID: "s", HookEventName: hookPostToolUseFailure, Error: strings.Repeat("e", 5<<20), CWD: strings.Repeat("/d", 4000)}, "note")
 	if len(stub) > 3*droppedFieldLimit || !json.Valid(stub) || !strings.Contains(string(stub), "…") {
 		t.Errorf("droppedPayload = %d bytes (valid %v), want a bounded, valid stub with the cuts marked", len(stub), json.Valid(stub))
+	}
+}
+
+// A provider agentrec launched is recorded by the process that launched it:
+// the hook command it inherits the environment from says nothing.
+func TestHookIsSilentForAProviderAgentrecLaunched(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	t.Setenv(runner.HooksOffEnv, "1")
+	restore := hookStdin
+	t.Cleanup(func() { hookStdin = restore })
+	hookStdin = bytes.NewReader(sessionEvent(t, "session-traced", repo, hookSessionStart, map[string]any{"source": "startup"}))
+	if code, stdout, stderr := run(t, "hook", "claude"); code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("hook exit %d, stdout %q, stderr %q; want 0 and silence", code, stdout, stderr)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if dirs := runDirs(t, root); len(dirs) != 0 {
+		t.Errorf("a recorder was started for a traced provider: %v", dirs)
 	}
 }

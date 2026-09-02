@@ -129,6 +129,11 @@ type processResult struct {
 // run that was executed and recorded end to end; a provider that merely exited
 // nonzero is one of those, because a failed agent run is a recorded fact and
 // not a failure of the recorder.
+// HooksOffEnv, set in a provider's environment, tells agentrec's own hook
+// command that the process is already being recorded by the one that
+// launched it.
+const HooksOffEnv = "AGENTREC_HOOKS"
+
 func Run(ctx context.Context, req Request) (Result, error) {
 	// A nil bundle is the one rejection with nowhere to be recorded, so it alone
 	// stays a plain validation failure. Every other unusable request has a bundle
@@ -149,6 +154,10 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	cmd := exec.Command(req.Command.Executable, req.Command.Args...)
+	// The provider's own hooks would file this run a second time, through a
+	// session recorder, if agentrec's hook command were installed: told here
+	// that agentrec is already recording, that command says nothing.
+	cmd.Env = append(os.Environ(), HooksOffEnv+"=1")
 	cmd.Dir = req.CWD
 	// A nil stdin is /dev/null. This MVP records non-interactive runs only, so a
 	// provider that asks for input reads EOF instead of the operator's terminal.
