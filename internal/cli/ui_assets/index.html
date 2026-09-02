@@ -12,6 +12,7 @@
     <div class="brand"><span class="mark" aria-hidden="true"></span><strong>agentrec</strong><span class="product" data-i18n="Action Timeline">Action Timeline</span></div>
     <div class="top-right">
       <div class="top-meta" id="top-meta">Loading recorded evidence…</div>
+      <button id="compare-open" class="compare-open" type="button" data-i18n="Compare runners">Compare runners</button>
       <select id="lang" class="lang" aria-label="Language">
         <option value="en">English</option>
         <option value="ko">한국어</option>
@@ -90,6 +91,36 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
     <div id="error" class="error-toast hidden" role="alert"></div>
   </div>
+  <div id="compare-backdrop" class="compare-backdrop hidden"></div>
+  <aside id="compare-panel" class="compare-panel hidden" role="dialog" aria-modal="true" aria-labelledby="compare-title">
+    <div class="compare-head">
+      <h2 id="compare-title" data-i18n="Compare runners">Compare runners</h2>
+      <button id="compare-close" class="compare-close" type="button" aria-label="Close" data-i18n-label="Close">×</button>
+    </div>
+    <div class="compare-body">
+      <p class="compare-intro" data-i18n="Records one task once per runner, each in a private checkout of the same committed baseline.">Records one task once per runner, each in a private checkout of the same committed baseline.</p>
+      <label class="compare-field"><span data-i18n="Repository path">Repository path</span><input id="compare-cwd" type="text" autocomplete="off" spellcheck="false" placeholder="/absolute/path/to/repository"></label>
+      <label class="compare-field"><span data-i18n="Task">Task</span><textarea id="compare-task" rows="5" placeholder="Describe the task for the runners" data-i18n-placeholder="Describe the task for the runners"></textarea></label>
+      <fieldset class="compare-field"><legend data-i18n="Runners">Runners</legend><div id="compare-runners" class="compare-runners"></div><p id="compare-runner-hint" class="compare-caption hidden" data-i18n="A comparison needs both runners">A comparison needs both runners</p></fieldset>
+      <div class="compare-field">
+        <span data-i18n="Equivalent command">Equivalent command</span>
+        <div class="compare-command"><code id="compare-command">agentrec shadow run task.md --runner claude --runner codex</code><button id="compare-copy" class="load-more" type="button" data-i18n="Copy">Copy</button></div>
+        <p class="compare-caption" data-i18n="Run it inside the repository with the task saved as task.md.">Run it inside the repository with the task saved as task.md.</p>
+      </div>
+      <p id="compare-allow-note" class="compare-note hidden"></p>
+      <p id="compare-error" class="compare-error hidden" role="alert"></p>
+      <div class="compare-actions">
+        <button id="compare-run" class="primary-button" type="button" data-i18n="Run">Run</button>
+        <button id="compare-cancel" class="danger-button hidden" type="button" data-i18n="Cancel">Cancel</button>
+      </div>
+      <section id="compare-job" class="compare-job hidden">
+        <div class="compare-job-head" role="status" aria-live="polite"><span id="compare-status" class="mini-status"></span><span id="compare-elapsed"></span><span id="compare-exit"></span></div>
+        <p id="compare-log-note" class="compare-note hidden"></p>
+        <pre id="compare-log" class="compare-log" tabindex="0" aria-label="Comparison log" data-i18n-label="Comparison log"></pre>
+        <div id="compare-links" class="compare-links"></div>
+      </section>
+    </div>
+  </aside>
   <template id="trash-icon"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.5 7v4M9.5 7v4"/></svg></template>
   <script src="/assets/app.js"></script>
 </body>

@@ -195,7 +195,32 @@
       'Cannot delete: {error}': '삭제할 수 없습니다: {error}',
       'Cannot restore: {error}': '복원할 수 없습니다: {error}',
       'This run is still open; it can be deleted after the session ends.': '이 실행은 아직 열려 있습니다. 세션이 끝난 뒤 삭제할 수 있습니다.',
-      'Move this run to the trash': '이 실행을 휴지통으로 이동'
+      'Move this run to the trash': '이 실행을 휴지통으로 이동',
+      'Compare runners': '러너 비교',
+      Close: '닫기',
+      'Records one task once per runner, each in a private checkout of the same committed baseline.': '하나의 작업을 러너별로 한 번씩, 같은 커밋 기준점의 독립된 체크아웃에서 기록합니다.',
+      'Repository path': '저장소 경로',
+      Task: '작업',
+      'Describe the task for the runners': '러너에게 줄 작업 설명',
+      Runners: '러너',
+      unavailable: '사용 불가',
+      'Equivalent command': '동일한 명령',
+      'Run it inside the repository with the task saved as task.md.': '작업을 task.md로 저장한 뒤 저장소 안에서 실행합니다.',
+      Copy: '복사',
+      Copied: '복사됨',
+      Run: '실행',
+      'Start the viewer with `agentrec start --allow-run` to run comparisons from here': '여기에서 비교를 실행하려면 뷰어를 `agentrec start --allow-run`으로 시작합니다',
+      'Cannot run comparison: {error}': '비교를 실행할 수 없습니다: {error}',
+      'Cannot cancel: {error}': '취소할 수 없습니다: {error}',
+      'Could not load comparison status: {error}': '비교 상태를 불러오지 못했습니다: {error}',
+      running: '실행 중',
+      cancelled: '취소됨',
+      'Elapsed {time}': '경과 {time}',
+      'Open run {id}': '실행 {id} 열기',
+      'Comparison log': '비교 로그',
+      'Older output was dropped to keep the log under 1 MiB.': '로그를 1 MiB 이하로 유지하기 위해 오래된 출력을 버렸습니다.',
+      'The server truncated the output.': '서버가 출력을 잘라냈습니다.',
+      'A comparison needs both runners': '비교에는 두 러너가 모두 필요합니다'
     },
     ja: {
       'Action Timeline': 'アクションタイムライン',
@@ -375,7 +400,32 @@
       'Cannot delete: {error}': '削除できません: {error}',
       'Cannot restore: {error}': '復元できません: {error}',
       'This run is still open; it can be deleted after the session ends.': 'この実行はまだ開いています。セッション終了後に削除できます。',
-      'Move this run to the trash': 'この実行をごみ箱へ移動'
+      'Move this run to the trash': 'この実行をごみ箱へ移動',
+      'Compare runners': 'ランナー比較',
+      Close: '閉じる',
+      'Records one task once per runner, each in a private checkout of the same committed baseline.': '1つのタスクをランナーごとに1回ずつ、同じコミット済みベースラインの専用チェックアウトで記録します。',
+      'Repository path': 'リポジトリのパス',
+      Task: 'タスク',
+      'Describe the task for the runners': 'ランナーに与えるタスクの説明',
+      Runners: 'ランナー',
+      unavailable: '利用不可',
+      'Equivalent command': '同等のコマンド',
+      'Run it inside the repository with the task saved as task.md.': 'タスクを task.md として保存し、リポジトリ内で実行します。',
+      Copy: 'コピー',
+      Copied: 'コピーしました',
+      Run: '実行',
+      'Start the viewer with `agentrec start --allow-run` to run comparisons from here': 'ここから比較を実行するには、ビューアを `agentrec start --allow-run` で起動します',
+      'Cannot run comparison: {error}': '比較を実行できません: {error}',
+      'Cannot cancel: {error}': 'キャンセルできません: {error}',
+      'Could not load comparison status: {error}': '比較の状態を読み込めませんでした: {error}',
+      running: '実行中',
+      cancelled: 'キャンセル済み',
+      'Elapsed {time}': '経過 {time}',
+      'Open run {id}': '実行 {id} を開く',
+      'Comparison log': '比較ログ',
+      'Older output was dropped to keep the log under 1 MiB.': 'ログを 1 MiB 以下に保つため、古い出力を破棄しました。',
+      'The server truncated the output.': 'サーバーが出力を切り詰めました。',
+      'A comparison needs both runners': '比較には両方のランナーが必要です'
     },
     'zh-CN': {
       'Action Timeline': '操作时间线',
@@ -555,7 +605,32 @@
       'Cannot delete: {error}': '无法删除：{error}',
       'Cannot restore: {error}': '无法恢复：{error}',
       'This run is still open; it can be deleted after the session ends.': '此运行仍在进行中；会话结束后才能删除。',
-      'Move this run to the trash': '将此运行移至回收站'
+      'Move this run to the trash': '将此运行移至回收站',
+      'Compare runners': '比较运行器',
+      Close: '关闭',
+      'Records one task once per runner, each in a private checkout of the same committed baseline.': '对同一任务按运行器各记录一次，每次都在同一已提交基线的独立检出中进行。',
+      'Repository path': '仓库路径',
+      Task: '任务',
+      'Describe the task for the runners': '给运行器的任务描述',
+      Runners: '运行器',
+      unavailable: '不可用',
+      'Equivalent command': '等效命令',
+      'Run it inside the repository with the task saved as task.md.': '将任务保存为 task.md 后在仓库内运行。',
+      Copy: '复制',
+      Copied: '已复制',
+      Run: '运行',
+      'Start the viewer with `agentrec start --allow-run` to run comparisons from here': '要从这里运行比较，请使用 `agentrec start --allow-run` 启动查看器',
+      'Cannot run comparison: {error}': '无法运行比较：{error}',
+      'Cannot cancel: {error}': '无法取消：{error}',
+      'Could not load comparison status: {error}': '无法加载比较状态：{error}',
+      running: '运行中',
+      cancelled: '已取消',
+      'Elapsed {time}': '已用时 {time}',
+      'Open run {id}': '打开运行 {id}',
+      'Comparison log': '比较日志',
+      'Older output was dropped to keep the log under 1 MiB.': '为使日志保持在 1 MiB 以下，已丢弃较早的输出。',
+      'The server truncated the output.': '服务器截断了输出。',
+      'A comparison needs both runners': '比较需要两个运行器'
     }
   };
 
@@ -621,6 +696,7 @@
       el.placeholder = t(el.dataset.i18nPlaceholder);
       el.setAttribute('aria-label', el.placeholder);
     });
+    document.querySelectorAll('[data-i18n-label]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nLabel)); });
     $('lang').setAttribute('aria-label', t('Language'));
   }
 
@@ -1509,13 +1585,18 @@
   // ── Delete a run ──────────────────────────────────────────────────────────
   // A deleted run goes to the trash (agentrec trash lists, restores and empties it); the toast's Undo restores it from here.
   // The token is fetched once; a failed fetch leaves it empty so the next mutation tries again, and a 403 drops it the same way.
-  async function mutate(method, path) {
+  async function mutate(method, path, body) {
     if (!state.token) state.token = (await getJSON('/api/token')).token || '';
-    const response = await fetch(path, { method, headers: { Accept: 'application/json', 'X-Agentrec-Token': state.token } });
-    if (response.status === 204) return;
+    const headers = { Accept: 'application/json', 'X-Agentrec-Token': state.token };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    if (response.status === 204) return undefined;
     if (response.status === 403) state.token = '';
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${response.status}`);
+    const parsed = await response.json().catch(() => ({}));
+    if (response.ok) return parsed;
+    const error = new Error(parsed.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
 
   function showToast(message, actionLabel, action) {
@@ -1603,6 +1684,238 @@
     renderRunList();
     loadRun(id);
   }
+
+  // ── Compare runners ───────────────────────────────────────────────────────
+  // `agentrec shadow run` from the viewer: the form posts a job, the panel polls it once a second and appends its output.
+  // Only the last job is kept, in memory; reopening the panel (or reloading) adopts the newest job the server lists.
+  const COMPARE_LOG_LIMIT = 1024 * 1024;
+  const compare = { info: null, job: null, poll: null, cwdTouched: false, returnFocus: null };
+  const errorText = (error) => (error instanceof Error ? error.message : String(error));
+
+  function compareRunners() {
+    return Array.from($('compare-runners').querySelectorAll('input:checked')).map((box) => box.value);
+  }
+
+  function renderCompareCommand() {
+    const names = compareRunners();
+    $('compare-command').textContent = ['agentrec shadow run task.md', ...names.map((name) => `--runner ${name}`)].join(' ');
+    // shadow run compares, so it needs every runner the server knows; a partial set only shapes the copyable command.
+    const all = ((compare.info && compare.info.runners) || []).every((runner) => names.includes(runner.name));
+    $('compare-runner-hint').classList.toggle('hidden', all);
+    const running = Boolean(compare.job && compare.job.status === 'running');
+    $('compare-run').disabled = !(compare.info && compare.info.allowRun) || running || !all;
+  }
+
+  function showCompareError(message) {
+    const el = $('compare-error');
+    el.textContent = message;
+    el.classList.remove('hidden');
+  }
+
+  function renderCompareForm() {
+    if (!compare.info) return;
+    const holder = $('compare-runners');
+    const runners = compare.info.runners || [];
+    const checked = new Set(holder.childElementCount ? compareRunners() : runners.filter((runner) => runner.available).map((runner) => runner.name));
+    holder.replaceChildren();
+    for (const runner of runners) {
+      const label = node('label', 'compare-runner');
+      const box = node('input');
+      box.type = 'checkbox';
+      box.value = runner.name;
+      box.checked = checked.has(runner.name);
+      box.addEventListener('change', renderCompareCommand);
+      label.append(box, node('span', '', runner.name));
+      if (!runner.available) label.append(node('span', 'hint', t('unavailable')));
+      holder.append(label);
+    }
+    const note = $('compare-allow-note');
+    note.textContent = t('Start the viewer with `agentrec start --allow-run` to run comparisons from here');
+    note.classList.toggle('hidden', Boolean(compare.info.allowRun));
+    $('compare-cancel').classList.toggle('hidden', !(compare.job && compare.job.status === 'running'));
+    renderCompareCommand();
+  }
+
+  function renderCompareJob() {
+    const job = compare.job;
+    $('compare-job').classList.toggle('hidden', !job);
+    if (!job) return;
+    const pill = $('compare-status');
+    pill.className = `mini-status ${job.status === 'completed' ? 'pass' : (job.status === 'failed' ? 'fail' : '')}`;
+    pill.textContent = t(job.status);
+    pill.title = job.status;
+    const seconds = Math.max(0, Math.round(((job.endedAt ? new Date(job.endedAt) : new Date()) - new Date(job.startedAt)) / 1000));
+    $('compare-elapsed').textContent = Number.isFinite(seconds) ? t('Elapsed {time}', { time: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` }) : '';
+    $('compare-exit').textContent = typeof job.exitCode === 'number' ? t('exit code {n}', { n: job.exitCode }) : '';
+    const notes = [];
+    if (job.dropped) notes.push(t('Older output was dropped to keep the log under 1 MiB.'));
+    if (job.truncated) notes.push(t('The server truncated the output.'));
+    const note = $('compare-log-note');
+    note.textContent = notes.join(' ');
+    note.classList.toggle('hidden', notes.length === 0);
+    const links = $('compare-links');
+    links.replaceChildren();
+    for (const id of job.runIds || []) {
+      const link = node('button', 'show-more', t('Open run {id}', { id: shortID(id) }));
+      link.type = 'button';
+      link.title = id;
+      link.addEventListener('click', () => {
+        closeCompare();
+        loadRun(id);
+      });
+      links.append(link);
+    }
+  }
+
+  // The log is one string bounded to ~1 MiB: over the bound the oldest whole lines go and the note says so.
+  function appendCompareLog(chunk) {
+    const job = compare.job;
+    job.log += chunk;
+    if (job.log.length > COMPARE_LOG_LIMIT) {
+      const cut = job.log.indexOf('\n', job.log.length - COMPARE_LOG_LIMIT);
+      job.log = job.log.slice(cut === -1 ? job.log.length - COMPARE_LOG_LIMIT : cut + 1);
+      job.dropped = true;
+    }
+    const pre = $('compare-log');
+    const stick = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 12;
+    pre.textContent = job.log;
+    if (stick) pre.scrollTop = pre.scrollHeight;
+  }
+
+  function stopComparePolling() {
+    window.clearTimeout(compare.poll);
+    compare.poll = null;
+  }
+
+  async function pollCompareJob() {
+    const job = compare.job;
+    stopComparePolling();
+    if (!job) return;
+    try {
+      const page = await getJSON(`/api/shadow/jobs/${encodeURIComponent(job.id)}?since=${job.offset}`);
+      if (compare.job !== job) return;
+      Object.assign(job, { status: page.status, startedAt: page.startedAt, endedAt: page.endedAt, exitCode: page.exitCode, runIds: page.runIds || [], offset: page.offset, truncated: job.truncated || Boolean(page.truncated), errors: 0 });
+      if (page.chunk) appendCompareLog(page.chunk);
+      renderCompareJob();
+      if (job.status === 'running') {
+        compare.poll = window.setTimeout(pollCompareJob, 1000);
+        return;
+      }
+      renderCompareForm();
+      refreshRuns();
+    } catch (error) {
+      if (compare.job !== job || error.name === 'AbortError') return;
+      showCompareError(t('Could not load comparison status: {error}', { error: errorText(error) }));
+      // ponytail: a few retries cover a viewer restart; a job that stays unreachable is picked up again on the next open.
+      job.errors = (job.errors || 0) + 1;
+      if (job.errors < 5) compare.poll = window.setTimeout(pollCompareJob, 3000);
+    }
+  }
+
+  function adoptCompareJob(job) {
+    compare.job = Object.assign({}, job, { log: '', offset: 0, dropped: false, truncated: false, errors: 0 });
+    $('compare-log').textContent = '';
+    renderCompareJob();
+    pollCompareJob();
+  }
+
+  async function loadShadow() {
+    try {
+      compare.info = await getJSON('/api/shadow');
+    } catch (error) {
+      compare.info = { allowRun: false, runners: [{ name: 'claude', available: true }, { name: 'codex', available: true }], jobs: [] };
+      showCompareError(t('Could not load comparison status: {error}', { error: errorText(error) }));
+    }
+    const latest = (compare.info.jobs || [])[0];
+    if (latest && (!compare.job || compare.job.id !== latest.id)) adoptCompareJob(latest);
+    else if (compare.job && compare.job.status === 'running' && !compare.poll) pollCompareJob();
+    renderCompareForm();
+    renderCompareJob();
+  }
+
+  async function runCompare() {
+    $('compare-error').classList.add('hidden');
+    const body = { cwd: $('compare-cwd').value.trim(), task: $('compare-task').value, runners: compareRunners() };
+    $('compare-run').disabled = true;
+    try {
+      const { id } = await mutate('POST', '/api/shadow/jobs', body);
+      adoptCompareJob({ id, status: 'running', cwd: body.cwd, runners: body.runners, startedAt: new Date().toISOString(), runIds: [] });
+      renderCompareForm();
+    } catch (error) {
+      showCompareError(t('Cannot run comparison: {error}', { error: errorText(error) }));
+      // 403 means the viewer is not allowed to run, 409 that a job is already running: re-read the overview so the panel shows which.
+      if (error.status === 403 || error.status === 409) loadShadow(); else renderCompareForm();
+    }
+  }
+
+  async function cancelCompare() {
+    if (!compare.job) return;
+    $('compare-error').classList.add('hidden');
+    try {
+      await mutate('POST', `/api/shadow/jobs/${encodeURIComponent(compare.job.id)}/cancel`);
+    } catch (error) {
+      showCompareError(t('Cannot cancel: {error}', { error: errorText(error) }));
+    }
+  }
+
+  async function copyCompareCommand() {
+    const code = $('compare-command');
+    try {
+      await navigator.clipboard.writeText(code.textContent);
+      $('compare-copy').textContent = t('Copied');
+      window.setTimeout(() => { $('compare-copy').textContent = t('Copy'); }, 1500);
+    } catch (error) {
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }
+
+  function openCompare() {
+    compare.returnFocus = document.activeElement;
+    const cwd = $('compare-cwd');
+    if (!compare.cwdTouched && state.run && state.run.run.cwd) cwd.value = state.run.run.cwd;
+    $('compare-backdrop').classList.remove('hidden');
+    $('compare-panel').classList.remove('hidden');
+    loadShadow();
+    cwd.focus();
+  }
+
+  function closeCompare() {
+    $('compare-backdrop').classList.add('hidden');
+    $('compare-panel').classList.add('hidden');
+    if (compare.returnFocus && compare.returnFocus.focus) compare.returnFocus.focus();
+  }
+
+  $('compare-open').addEventListener('click', openCompare);
+  $('compare-close').addEventListener('click', closeCompare);
+  $('compare-backdrop').addEventListener('click', closeCompare);
+  $('compare-run').addEventListener('click', runCompare);
+  $('compare-cancel').addEventListener('click', cancelCompare);
+  $('compare-copy').addEventListener('click', copyCompareCommand);
+  $('compare-cwd').addEventListener('input', () => { compare.cwdTouched = true; });
+  // Escape closes; Tab stays inside the sheet while it is open.
+  $('compare-panel').addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeCompare();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const items = Array.from($('compare-panel').querySelectorAll('button:not(:disabled), input:not(:disabled), textarea, [tabindex="0"]')).filter((el) => el.offsetParent !== null);
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
 
   // quiet loads (auto-selection) report failure in the empty state rather than a toast, so the poll can retry without nagging.
   async function loadRun(id, quiet = false) {
@@ -1726,6 +2039,8 @@
   $('lang').addEventListener('change', (event) => {
     setLang(event.target.value);
     if (state.run) renderRun(); else { renderRunList(); renderWorkspaceState(); }
+    renderCompareForm();
+    renderCompareJob();
   });
   $('run-search').addEventListener('input', renderRunList);
   $('run-actions').addEventListener('keydown', (event) => {
