@@ -41,7 +41,7 @@ comes from a different observer, and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.5.0.md) ·
+[Release notes](docs/releases/v0.6.0.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,16 +55,16 @@ version starts from what was observed rather than from a summary.
 
 ## Quick start
 
-> **Status:** v0.5.0 is the latest release. A run can be deleted from the viewer
-> (into a trash the CLI restores from or empties), the timeline scrolls instead
-> of paging, a session's token usage, model and provider version are read from
-> the provider's transcript, three plain words replace `UNAVAILABLE`, and —
-> behind `--allow-run` — a comparison of two runners can be launched from the
-> page.
+> **Status:** v0.6.0 is the latest release. The viewer follows a session while
+> it runs — new actions, prompts and replies appear as they are filed, and the
+> Changes tab shows the working tree as it is now — and a search field finds a
+> word across every run: where it happened, what was asked, what was done.
 >
-> v0.4.0 added prompts and replies to the recording, `agentrec setup` and
-> `agentrec start`, and the viewer's four languages; v0.3.0 added interactive
-> session recording
+> v0.5.0 added deleting runs into a trash, infinite scroll, usage and model
+> from the transcript, three plain words for `UNAVAILABLE`, and comparisons
+> launched from the page behind `--allow-run`; v0.4.0 added prompts and
+> replies, `agentrec setup` and `agentrec start`, and the viewer's four
+> languages; v0.3.0 added interactive session recording
 > for Claude Code and Codex, pins repository evidence to Git's defaults, and keeps
 > redaction from growing a line past the stream limit.
 
@@ -76,14 +76,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.5.0_darwin_arm64.tar.gz
+archive=agentrec_0.6.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.5.0_darwin_arm64/agentrec version
+./agentrec_0.6.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.5.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.6.0
 ```
 
 Each tagged release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -165,7 +165,10 @@ lists, restores from, or empties. Started with `--allow-run`, the viewer can als
 run a comparison: the Compare runners panel takes a repository, a task and the
 runners, launches `agentrec shadow run` for you, and shows its output and the two
 runs it recorded. Without the flag the panel only writes the command for you to
-copy.
+copy. While a run is still going, its page keeps up on its own and shows the
+working tree as it is now; the search field in the top bar looks for a word in
+every run — where it happened, its prompt, its actions — and opens the run at
+the matching action.
 
 | Provider | Executable | Supported range | What agentrec injects |
 | --- | --- | --- | --- |
@@ -445,7 +448,7 @@ and lock under the system temporary directory.
 
 ## Documentation
 
-- [Release notes for v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [Release notes for v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed
@@ -464,7 +467,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.5.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.6.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the release archives locally and publishes

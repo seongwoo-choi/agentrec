@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.5.0.md) ·
+[发布说明](docs/releases/v0.6.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -52,14 +52,15 @@
 
 ## 快速开始
 
-> **状态：** v0.5.0 是最新发布版本。运行记录可以从查看器中删除（进入回收站，CLI 可以
-> 从中恢复或将其清空），时间线改为滚动而非分页，会话的 token 用量、模型和提供方版本会从
-> 提供方的 transcript 中读取，`UNAVAILABLE` 被三个直白的词取代，并且在启用 `--allow-run`
-> 时，可以从页面上发起两个运行器的比较。
+> **状态：** v0.6.0 是最新发布版本。查看器会跟随正在运行的会话——新的操作、提示词和
+> 回复一经记录就会出现，“变更”标签页展示的是此刻的工作树——搜索框则能在每一条运行
+> 记录中找到一个词：它发生在哪里、问了什么、做了什么。
 >
-> v0.4.0 新增了对提示词和回复的记录、`agentrec setup` 与 `agentrec start`，以及查看器的
-> 四种语言；v0.3.0 新增了 Claude Code 与 Codex 的交互式会话记录，把仓库证据固定到 Git
-> 默认值，并防止脱敏把一行放大到超过流上限。
+> v0.5.0 新增了把运行记录删除到回收站、无限滚动、从 transcript 读取用量和模型、取代
+> `UNAVAILABLE` 的三个直白的词，以及在启用 `--allow-run` 时从页面发起比较；v0.4.0 新增了
+> 对提示词和回复的记录、`agentrec setup` 与 `agentrec start`，以及查看器的四种语言；
+> v0.3.0 新增了 Claude Code 与 Codex 的交互式会话记录，把仓库证据固定到 Git 默认值，
+> 并防止脱敏把一行放大到超过流上限。
 
 **任选一种安装方式。Homebrew 最简单。**
 
@@ -69,14 +70,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.5.0_darwin_arm64.tar.gz
+archive=agentrec_0.6.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.5.0_darwin_arm64/agentrec version
+./agentrec_0.6.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.5.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.6.0
 ```
 
 每个已打标签的发布版本都包含 `darwin_amd64`、`darwin_arm64`、`linux_amd64` 和
@@ -152,7 +153,9 @@ agentrec events latest --json
 在前台提供同样的页面。在查看器中删除的运行记录会进入回收站，`agentrec trash` 可以列出、
 恢复或清空它。以 `--allow-run` 启动时，查看器还能运行比较：在“比较运行器”面板里填入
 仓库、任务和运行器，它会替你启动 `agentrec shadow run`，并展示其输出以及记录下的两条
-运行记录。没有该标志时，面板只会把命令写出来供你复制。
+运行记录。没有该标志时，面板只会把命令写出来供你复制。当一次运行仍在进行时，它的页面
+会自行跟进，并展示此刻的工作树；顶栏的搜索框会在每一条运行记录中查找一个词——它发生在
+哪里、它的提示词、它的操作——并在匹配的操作处打开该运行记录。
 
 | 提供方 | 可执行文件 | 支持范围 | agentrec 注入的内容 |
 | --- | --- | --- | --- |
@@ -410,7 +413,7 @@ agentrec 不声称什么：
 
 ## 文档
 
-- [v0.5.0 发布说明](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.6.0 发布说明](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [飞行记录仪设计](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——recorder](docs/dogfood/2026-07-28-evidence.md)：一个固定的 20 次
@@ -428,7 +431,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.5.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.6.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 在本地构建发布归档，不发布任何内容；其输出目录必须

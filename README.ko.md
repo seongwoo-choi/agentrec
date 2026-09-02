@@ -40,7 +40,7 @@
 이를 섞지 않습니다. 그래서 코드 리뷰, 장애 조사, 인수인계, 새 에이전트 버전을
 믿을지에 대한 판단이 요약이 아니라 관측된 사실에서 출발합니다.
 
-[릴리스 노트](docs/releases/v0.5.0.md) ·
+[릴리스 노트](docs/releases/v0.6.0.md) ·
 [설계 노트](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 증거](docs/dogfood/2026-07-28-evidence.md) ·
@@ -54,14 +54,15 @@
 
 ## 빠른 시작
 
-> **상태:** v0.5.0이 최신 릴리스입니다. viewer에서 run을 삭제할 수 있고(휴지통으로,
-> CLI로 복원·비우기), 타임라인은 페이지 대신 스크롤로 이어지며, 세션의 토큰 사용량·
-> 모델·provider 버전을 provider의 transcript에서 읽고, `UNAVAILABLE` 대신 세 개의
-> 분명한 단어를 쓰며, `--allow-run`을 켜면 두 러너의 비교 실행을 화면에서 시작할 수
-> 있습니다.
+> **상태:** v0.6.0이 최신 릴리스입니다. viewer가 실행 중인 세션을 따라갑니다. 새
+> 액션·프롬프트·응답이 기록되는 대로 화면에 나타나고, 변경 탭은 지금의 작업 트리를
+> 보여줍니다. 상단 검색창은 모든 run에서 단어를 찾습니다. 어디서 실행됐는지, 무엇을
+> 요청했는지, 무엇을 했는지.
 >
-> v0.4.0에서는 프롬프트와 응답 기록, `agentrec setup`과 `agentrec start`, viewer의 네
-> 개 언어가 추가됐고, v0.3.0에서는 Claude Code와 Codex의 대화형 세션 기록이
+> v0.5.0에서는 휴지통으로의 삭제, 무한 스크롤, transcript 기반 사용량·모델, `UNAVAILABLE`
+> 대신 세 단어, `--allow-run` 뒤의 화면 비교 실행이 추가됐고, v0.4.0에서는 프롬프트와
+> 응답 기록, `agentrec setup`과 `agentrec start`, viewer의 네 개 언어가 추가됐으며,
+> v0.3.0에서는 Claude Code와 Codex의 대화형 세션 기록이
 > 추가됐고, 저장소 증거를 Git 기본값에 고정하며, redaction이 스트림 한도를 넘게
 > 줄을 키우지 않습니다.
 
@@ -73,14 +74,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.5.0_darwin_arm64.tar.gz
+archive=agentrec_0.6.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.5.0_darwin_arm64/agentrec version
+./agentrec_0.6.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.5.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.6.0
 ```
 
 태그된 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`
@@ -161,7 +162,9 @@ agentrec events latest --json
 나열·복원·비우기를 할 수 있습니다. `--allow-run`으로 시작하면 viewer에서 비교 실행도
 할 수 있습니다. "러너 비교" 패널에 저장소·작업·러너를 적으면 `agentrec shadow run`을
 대신 실행하고, 출력과 기록된 두 run을 보여줍니다. 플래그가 없으면 패널은 복사할
-명령만 만들어 줍니다.
+명령만 만들어 줍니다. run이 아직 진행 중이면 그 페이지는 스스로 따라가며 지금의
+작업 트리를 보여주고, 상단 검색창은 모든 run에서 단어를 찾아(어디서 실행됐는지,
+프롬프트, 액션) 일치하는 액션 위치로 run을 엽니다.
 
 | Provider | 실행 파일 | 지원 범위 | agentrec이 주입하는 것 |
 | --- | --- | --- | --- |
@@ -435,7 +438,7 @@ recorder는 소켓과 lock을 시스템 임시 디렉터리 아래에 둡니다.
 
 ## 문서
 
-- [v0.5.0 릴리스 노트](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.6.0 릴리스 노트](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [플라이트 레코더 설계](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 증거 — recorder](docs/dogfood/2026-07-28-evidence.md): 고정된 20회
@@ -453,7 +456,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.5.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.6.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 릴리스 아카이브를 로컬에서 빌드할 뿐 아무것도
