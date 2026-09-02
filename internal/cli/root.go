@@ -20,6 +20,7 @@ Usage:
   agentrec start [--listen <loopback-address>] [--no-open]
   agentrec stop
   agentrec status
+  agentrec trash [restore <run-id> | empty]
   agentrec hooks print --claude|--codex [--verify]
   agentrec version
 
@@ -61,6 +62,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runStop(args[1:], stdout, stderr)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
+	case "trash":
+		return runTrash(args[1:], stdout, stderr)
 	case "hooks":
 		return runHooks(args[1:], stdout, stderr)
 	case "hook":

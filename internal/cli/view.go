@@ -2,7 +2,10 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -260,13 +263,36 @@ func openViewBrowser(target string) error {
 type viewHandler struct {
 	http.Handler
 	snapshots *viewSnapshotStore
+	// token is what a request that changes the store must carry, in a
+	// header only this page's own script can send: a page on any other
+	// origin cannot read it (no CORS) and cannot set the header without a
+	// preflight this server refuses.
+	token string
 }
 
 func (h *viewHandler) Close() error { return h.snapshots.Close() }
 
 func newViewHandler(root, initialRunID string) *viewHandler {
 	snapshots := newViewSnapshotStore(root)
+	token := newViewToken()
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/token", func(w http.ResponseWriter, _ *http.Request) {
+		writeViewJSON(w, map[string]string{"token": token})
+	})
+	mux.HandleFunc("DELETE /api/runs/{runID}", func(w http.ResponseWriter, r *http.Request) {
+		if !viewMutationAllowed(r, token) {
+			writeViewError(w, http.StatusForbidden, errors.New("a request that changes the store must come from this page"))
+			return
+		}
+		writeViewMutation(w, trashRun(root, r.PathValue("runID")))
+	})
+	mux.HandleFunc("POST /api/runs/{runID}/restore", func(w http.ResponseWriter, r *http.Request) {
+		if !viewMutationAllowed(r, token) {
+			writeViewError(w, http.StatusForbidden, errors.New("a request that changes the store must come from this page"))
+			return
+		}
+		writeViewMutation(w, restoreRun(root, r.PathValue("runID")))
+	})
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 		serveViewAsset(w, "ui_assets/index.html", "text/html; charset=utf-8")
 	})
@@ -291,7 +317,17 @@ func newViewHandler(root, initialRunID string) *viewHandler {
 				StatusClass: statusClass, StatusLabel: statusLabel,
 			})
 		}
-		writeViewJSON(w, viewRunListResponse{1, initialRunID, unreadable, out})
+		initial := initialRunID
+		if initial != "" && initial != latestRun {
+			initial = ""
+			for _, run := range out {
+				if run.ID == initialRunID {
+					initial = initialRunID
+					break
+				}
+			}
+		}
+		writeViewJSON(w, viewRunListResponse{1, initial, unreadable, out})
 	})
 	mux.HandleFunc("GET /api/runs/{runID}", func(w http.ResponseWriter, r *http.Request) {
 		runID := r.PathValue("runID")
@@ -364,7 +400,50 @@ func newViewHandler(root, initialRunID string) *viewHandler {
 			writeViewError(w, http.StatusBadRequest, err)
 		}
 	})
-	return &viewHandler{Handler: viewSecurity(mux), snapshots: snapshots}
+	return &viewHandler{Handler: viewSecurity(mux), snapshots: snapshots, token: token}
+}
+
+func newViewToken() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		panic("cli: viewer token: " + err.Error())
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+// viewMutationAllowed accepts a request that changes the store only from
+// this page: the token in the header only same-origin script can read and
+// send, and browser-provided fetch metadata that says the same.
+func viewMutationAllowed(r *http.Request, token string) bool {
+	got := r.Header.Get("X-Agentrec-Token")
+	if len(got) != len(token) || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return false
+	}
+	if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+r.Host {
+		return false
+	}
+	return true
+}
+
+// writeViewMutation answers a delete or restore: nothing on success, and on
+// failure the status that says why.
+func writeViewMutation(w http.ResponseWriter, err error) {
+	switch {
+	case err == nil:
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, errNotInTrash):
+		writeViewError(w, http.StatusNotFound, err)
+	case errors.Is(err, errRunOpen), errors.Is(err, errRunClosing), errors.Is(err, errRunExists):
+		writeViewError(w, http.StatusConflict, err)
+	default:
+		writeViewError(w, http.StatusBadRequest, err)
+	}
 }
 
 func readViewPrompt(root *os.Root) (string, error) {
@@ -426,8 +505,10 @@ func viewSecurity(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
+		switch r.Method {
+		case http.MethodGet, http.MethodDelete, http.MethodPost:
+		default:
+			w.Header().Set("Allow", "GET, POST, DELETE")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
