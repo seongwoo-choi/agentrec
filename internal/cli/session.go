@@ -220,6 +220,17 @@ func runSession(args []string, _ io.Writer, stderr io.Writer) int {
 // closes the run out the way a traced run is closed out. It returns once the
 // session has ended or been given up on.
 func serveSession(opts sessionOptions, stderr io.Writer) int {
+	// Subscribed before the socket is bound: from the moment a hook can see
+	// this recorder, a signal is held until the recorder can end the run
+	// properly rather than ending the process with its default disposition
+	// and leaving a bundle that never says how it ended.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, handledSignals...)
+	// Stop, not Reset: a recorder that loses the socket to another one in the
+	// same process — as the tests arrange — must not take that recorder's
+	// subscription with it on the way out.
+	defer signal.Stop(stop)
+
 	// The socket is taken before anything is written: a second recorder for
 	// the same session — two hooks racing to start one — must find the first
 	// and leave, not record the session twice. Deliveries are read from the
@@ -248,13 +259,6 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 		lock.Close()
 	}
 	defer release()
-
-	// Subscribed before anything is written, so a signal during preparation is
-	// held until the recorder can end the run properly rather than leaving a
-	// bundle that never says how it ended.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, handledSignals...)
-	defer signal.Reset(handledSignals...)
 
 	root, err := runsRoot()
 	if err != nil {
