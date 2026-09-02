@@ -240,6 +240,12 @@ func providerUsageFields(reported *usageartifact.Report) []report.Field {
 		{Name: "Provider", Value: reported.Provider},
 		{Name: "Scope", Value: reported.Scope},
 	}
+	if reported.Source == usageartifact.SourceTranscript {
+		fields = append(fields, report.Field{Name: "Source", Value: "the provider's transcript, read at session end (the provider's own format, undocumented)"})
+	}
+	if reported.Model != "" {
+		fields = append(fields, report.Field{Name: "Model", Value: reported.Model})
+	}
 	appendTokens := func(name string, value *int64) {
 		if value != nil {
 			fields = append(fields, report.Field{Name: name, Value: strconv.FormatInt(*value, 10)})

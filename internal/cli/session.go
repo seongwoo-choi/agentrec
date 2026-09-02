@@ -108,7 +108,11 @@ type hookEnvelope struct {
 	SessionID     string `json:"session_id"`
 	HookEventName string `json:"hook_event_name"`
 	CWD           string `json:"cwd"`
-	Prompt        string `json:"prompt"`
+	// TranscriptPath is where the provider keeps its own record of the
+	// session. The hooks carry no usage; the transcript does, and it is read
+	// once, at session end, for what it says about resources and identity.
+	TranscriptPath string `json:"transcript_path"`
+	Prompt         string `json:"prompt"`
 	// PromptID (Claude Code) and TurnID (Codex) name the turn a prompt opened,
 	// and the Stop hook that closes it carries the same id beside the
 	// assistant's final message, so the two can be read as one exchange.
@@ -328,6 +332,7 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 		cwd:          opts.cwd,
 		canonicalCWD: manifestCWD,
 		repoRoot:     manifestRepoRoot,
+		startedAt:    time.Now(),
 		stderr:       stderr,
 	}
 	reason := rec.serve(inbox, opts.idle, stop)
@@ -340,10 +345,35 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 	if rec.storageErr != nil {
 		reason = runner.ReasonStorageError
 	}
+	// What the hooks never said, the transcript does: how many tokens the
+	// session used, which model answered, which provider version ran. Read
+	// now that the session is over, and filed as the provider's own word.
+	version := ""
+	if rec.transcript != "" {
+		// A little before the recorder started: the provider wrote its first
+		// lines before its SessionStart hook reached here.
+		reported, transcriptVersion, err := readTranscriptUsage(rec.provider, rec.transcript, rec.startedAt.Add(-transcriptStartSkew))
+		switch {
+		case errors.Is(err, os.ErrNotExist), errors.Is(err, errTranscriptNoUsage):
+			// No transcript, or one with nothing in it: no usage to file,
+			// and the report says (none) as it does for any run without.
+			version = transcriptVersion
+		case err != nil:
+			rec.warnings++
+			rec.warn("transcript %s: %v", strconv.Quote(rec.transcript), err)
+		default:
+			version = transcriptVersion
+			if err := bundle.WriteUsage(reported); err != nil {
+				rec.warnings++
+				rec.warn("%v", err)
+			}
+		}
+	}
 	if err := bundle.Finalize(storage.Finalization{
-		EndedAt:      time.Now(),
-		ExitReason:   reason,
-		WarningCount: rec.warnings,
+		EndedAt:         time.Now(),
+		ExitReason:      reason,
+		WarningCount:    rec.warnings,
+		ProviderVersion: version,
 	}); err != nil {
 		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
 	}
@@ -500,6 +530,8 @@ type sessionRecorder struct {
 	cwd          string
 	canonicalCWD string
 	repoRoot     string
+	transcript   string
+	startedAt    time.Time
 	stderr       io.Writer
 
 	prompted bool
@@ -605,6 +637,9 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 		s.warnings++
 		s.warn("delivery for session %s ignored", strconv.Quote(env.SessionID))
 		return false
+	}
+	if s.transcript == "" && env.TranscriptPath != "" {
+		s.transcript = env.TranscriptPath
 	}
 
 	dropped := ""
@@ -808,6 +843,10 @@ func (s *sessionRecorder) recordText(env hookEnvelope, dropped string, at time.T
 		Dropped:        dropped,
 	})
 }
+
+// transcriptStartSkew is how much earlier than the recorder's start a
+// transcript line may be and still count as this session's.
+const transcriptStartSkew = 10 * time.Second
 
 // duplicateDeliveryWindow is how close two identical text deliveries must
 // arrive to count as one hook registered twice rather than the same thing

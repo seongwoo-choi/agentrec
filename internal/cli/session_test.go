@@ -139,6 +139,11 @@ func waitExit(t *testing.T, done <-chan int) int {
 func runDirs(t *testing.T, root string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		// A recorder that has not created its first run yet: nothing there,
+		// which is not an error to a caller that is waiting for it.
+		return nil
+	}
 	if err != nil {
 		t.Fatalf("read runs root: %v", err)
 	}

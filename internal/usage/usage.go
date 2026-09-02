@@ -9,9 +9,16 @@ import (
 
 const (
 	AttributionProviderReported = "provider_reported"
-	ScopeRun                    = "run"
-	ScopeSession                = "session"
-	ScopeUnknown                = "unknown"
+	// SourceStream is usage the provider reported in its event stream as the
+	// run ended; SourceTranscript is usage read from the provider's own
+	// transcript file at session end, whose format is the provider's and
+	// undocumented. Both are the provider's word; the report says which.
+	SourceStream     = "stream"
+	SourceTranscript = "transcript"
+	MaxModelBytes    = 256
+	ScopeRun         = "run"
+	ScopeSession     = "session"
+	ScopeUnknown     = "unknown"
 
 	MaxTokens  int64   = 1_000_000_000_000_000
 	MaxCostUSD float64 = 1_000_000_000
@@ -29,6 +36,8 @@ type Report struct {
 	CacheCreationInputTokens *int64   `json:"cacheCreationInputTokens,omitempty"`
 	OutputTokens             *int64   `json:"outputTokens,omitempty"`
 	CostUSD                  *float64 `json:"costUSD,omitempty"`
+	Source                   string   `json:"source,omitempty"`
+	Model                    string   `json:"model,omitempty"`
 }
 
 // Validate rejects values outside the deliberately small schema and arithmetic
@@ -45,6 +54,12 @@ func (r Report) Validate() error {
 	}
 	if r.Scope != ScopeRun && r.Scope != ScopeSession && r.Scope != ScopeUnknown {
 		return fmt.Errorf("usage: unsupported scope %q", r.Scope)
+	}
+	if r.Source != "" && r.Source != SourceStream && r.Source != SourceTranscript {
+		return fmt.Errorf("usage: unsupported source %q", r.Source)
+	}
+	if len(r.Model) > MaxModelBytes {
+		return fmt.Errorf("usage: model name of %d bytes is longer than %d", len(r.Model), MaxModelBytes)
 	}
 	values := []*int64{r.InputTokens, r.CachedInputTokens, r.CacheCreationInputTokens, r.OutputTokens}
 	hasValue := r.CostUSD != nil

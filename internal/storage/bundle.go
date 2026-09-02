@@ -96,6 +96,10 @@ type Finalization struct {
 	ExitReason    string
 	WarningCount  int
 	UnparsedLines int
+	// ProviderVersion, when set, records the provider's version as learned
+	// while the run was open — a session learns it from the transcript at
+	// its end — for a manifest created before it was known.
+	ProviderVersion string
 }
 
 // ErrFinalized is returned by every write once the run has been finalized, and
@@ -419,6 +423,11 @@ func (b *Bundle) WriteUsage(reported usage.Report) error {
 	if err != nil {
 		return fmt.Errorf("storage: encode provider usage: %w", err)
 	}
+	// The model name is the provider's string; redacted like every string
+	// that reaches the bundle.
+	if raw, err = b.red.RedactJSON(raw); err != nil {
+		return fmt.Errorf("storage: redact provider usage: %w", err)
+	}
 	if err := installNewAt(b.dirRoot, usageFile, append(raw, '\n')); err != nil {
 		return b.fail(err)
 	}
@@ -592,6 +601,9 @@ func (b *Bundle) Finalize(f Finalization) error {
 	b.manifest.ExitReason = f.ExitReason
 	b.manifest.WarningCount = f.WarningCount
 	b.manifest.UnparsedLines = f.UnparsedLines
+	if f.ProviderVersion != "" {
+		b.manifest.ProviderVersion = f.ProviderVersion
+	}
 	manifestErr := b.writeManifest()
 	var processRootErr error
 	if b.processRoot != nil {
