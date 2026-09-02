@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="assets/agentrec-wordmark.svg" alt="agentrec — 코딩 에이전트를 위한 플라이트 레코더" width="100%">
+  <a href="assets/agentrec-wordmark.svg"><img src="assets/agentrec-wordmark.svg" alt="agentrec — 코딩 에이전트를 위한 플라이트 레코더" width="100%"></a>
 </p>
 
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/agentrec-report.svg" alt="agentrec show latest가 대화형 세션을 네 개의 증거 섹션이 있는 액션 타임라인으로 렌더한 모습"><br>
+      <a href="assets/viewer-ko-light.png"><img src="assets/viewer-ko-light.png" alt="agentrec viewer: 기록된 세션을 도구 호출이 딸린 대화로, 여섯 개의 증거 타일과 증거 인스펙터와 함께 읽는 모습"></a><br>
       <sub><b>실행 하나를 다시 읽기.</b><br>에이전트가 말한 것, 프로세스가 한 것, 저장소가 보여주는 것, 체크가 돌려준 것을 서로 섞지 않고 보여줍니다.</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/agentrec-evidence-layers.svg" alt="agentrec 번들의 네 가지 증거 계층"><br>
+      <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="agentrec 번들의 네 가지 증거 계층"></a><br>
       <sub><b>관측자 넷, 출처 표기 넷.</b><br>어떤 것도 점수로 합치지 않고, 없는 증거를 통과로 바꾸지 않습니다.</sub>
     </td>
   </tr>
@@ -155,7 +155,8 @@ agentrec events latest --json
 `agentrec start`는 viewer를 백그라운드에서 `http://127.0.0.1:7788/`에 계속 띄워 두고
 브라우저를 엽니다. `status`는 viewer가 돌고 있는지, run이 몇 개 기록됐는지, hooks가
 설치됐는지 알려 주고, `stop`은 viewer를 끝냅니다. `view`는 같은 화면을
-포그라운드로 띄웁니다.
+포그라운드로 띄웁니다. viewer에서 삭제한 run은 휴지통으로 가며, `agentrec trash`로
+나열·복원·비우기를 할 수 있습니다.
 
 | Provider | 실행 파일 | 지원 범위 | agentrec이 주입하는 것 |
 | --- | --- | --- | --- |
@@ -172,11 +173,11 @@ agentrec events latest --json
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/agentrec-report.svg" alt="agentrec show latest"><br>
-      <sub><b><code>agentrec show</code>.</b> 같은 읽기가 증거 옆에 <code>report.md</code>로 남습니다.</sub>
+      <a href="assets/viewer-ko-dark.png"><img src="assets/viewer-ko-dark.png" alt="다크 모드의 agentrec viewer"></a><br>
+      <sub><b><code>agentrec view</code>.</b> 같은 증거를 loopback 위에서 브라우저로 읽습니다. <code>agentrec show</code>는 같은 읽기를 증거 옆에 <code>report.md</code>로 남깁니다.</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/agentrec-evidence-layers.svg" alt="네 가지 증거 계층"><br>
+      <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="네 가지 증거 계층"></a><br>
       <sub><b><code>agentrec view</code>.</b> 같은 번들 위의 읽기 전용, loopback 전용 viewer.</sub>
     </td>
   </tr>
@@ -202,7 +203,7 @@ agentrec events latest --json
 | 계층 | 관측자 | 의미 | 기록되는 출처 표기 |
 | --- | --- | --- | --- |
 | 🗣️ **Provider가 보고한 액션** | 에이전트 | 에이전트가 자기가 했다고 말한 것 — tool call, 셸 명령, 파일 읽기와 편집, MCP 호출, Codex 파일 변경. 정규화하고 요약할 뿐 증명으로 삼지 않습니다. | `provider_reported` |
-| 👁️ **Supervisor가 관측한 결과** | agentrec | provider 프로세스가 어떻게 끝났는지: exit code, 종료 사유, signal, 소요 시간, 경고 수. agentrec이 시작하지 않은 세션에서는 `UNAVAILABLE`. | `supervisor_observed` |
+| 👁️ **Supervisor가 관측한 결과** | agentrec | provider 프로세스가 어떻게 끝났는지: exit code, 종료 사유, signal, 소요 시간, 경고 수. agentrec이 시작하지 않은 세션에서는 `NOT OBSERVED`. | `supervisor_observed` |
 | 🌳 **저장소에서 관측한 변경** | agentrec | 실행 전에 고정한 커밋과 실행 후 워크트리의 차이. agentrec이 직접 측정합니다. | `observed during run, not causal proof` |
 | ✅ **검증에서 관측한 결과** | agentrec | provider가 멈춘 뒤 agentrec이 실행한, 저장소 스스로 고정한 체크가 어떻게 끝났는지. 작업이 어떻게 이루어졌는지는 말하지 않습니다. | `verification_observed` |
 
@@ -218,7 +219,7 @@ manifest에 `unparsedLines`로 집계되고, 리포트에 언급됩니다. 실�
 | | 🚀 `agentrec trace` | 🎧 대화형 세션 |
 | --- | --- | --- |
 | provider를 누가 시작하나 | agentrec이 부모 프로세스로 | 평소처럼 당신이. provider의 hook이 agentrec에 보고 |
-| Supervisor가 관측한 결과 | exit code, signal, 소요 시간 | `UNAVAILABLE`. `Ended By`가 `SessionEnd` hook의 보고로 끝났는지, recorder가 기다리다 포기했는지(`session_lost`, hook 없이 8시간)를 말함 |
+| Supervisor가 관측한 결과 | exit code, signal, 소요 시간 | `NOT OBSERVED`. `Ended By`가 `SessionEnd` hook의 보고로 끝났는지, recorder가 기다리다 포기했는지(`session_lost`, hook 없이 8시간)를 말함 |
 | baseline | 프로세스 시작 전에 고정 | `SessionStart` hook 도착 시점에 고정. `Window` 줄이 이를 명시 |
 | 체크아웃 상태 | 깨끗해야 하고 저장소당 run 하나 | 커밋 안 된 변경이 있는 체크아웃과 동시 세션도 거부하지 않고 기록 |
 | 검증 | `--verify`가 실행 전 `.agentrec.yaml`을 고정 | `--verify`로 출력한 조각에서만, 그리고 `.agentrec.yaml`이 추적 중이고 `HEAD`와 동일할 때만 |
@@ -245,6 +246,7 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 | ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | viewer를 백그라운드로 띄우고 브라우저를 엽니다. |
 | ⏹️ `agentrec stop` | 백그라운드 viewer를 종료합니다. |
 | ℹ️ `agentrec status` | viewer 상태, 기록된 run 수, hooks 설치 여부를 보여줍니다. |
+| 🗑️ `agentrec trash [restore <run-id> \| empty]` | viewer에서 삭제한 run을 나열하거나, 하나를 되살리거나, 전부 지웁니다. |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | `setup`이 설치할 hooks 조각을 출력합니다. 손으로 설치할 때 씁니다. |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 하나의 작업을 같은 커밋에서 격리된 worktree 두 곳에 두 번 기록합니다. |
 | ⚖️ `agentrec shadow show <group-id>` | 기록된 비교를 증거만으로 다시 렌더합니다. |
@@ -337,7 +339,9 @@ agentrec은 직접 본 것만 일어났다고 말합니다. 상태는 기록된 
 | 표시 | 의미 |
 | --- | --- |
 | `AVAILABLE` | 저장소를 측정했습니다. 개수는 이때만 표시됩니다. |
-| `UNAVAILABLE` | 측정이 만들어지지 않았거나, 세션이라 감독한 프로세스가 없습니다. 중립이며 통과가 아닙니다. |
+| `NOT RUN` | 이 run에는 검증을 요청하지 않았습니다. 중립이며 통과가 아닙니다. |
+| `NOT OBSERVED` | 감독한 프로세스가 없습니다. agentrec이 시작하지 않은 세션이라 exit code와 signal을 보지 못했습니다. |
+| `NOT RECORDED` | 저장소 측정이 만들어지지 않았습니다. 중립이며 통과가 아닙니다. |
 | `PENDING` | 실행 전에 쓰였고 끝내 답을 받지 못했습니다. 0은 *측정하지 않음*이지 *없음으로 측정*이 아닙니다. |
 | `PASS` / `FAIL` / `TIMEOUT` / `ERROR` | 실행이 남긴 트리 위에서 고정된 체크가 어떻게 끝났는지. |
 | `TAINTED` | 고정한 뒤 실행이 `.agentrec.yaml`을 고쳐 썼습니다. **아무것도 실행하지 않았고** 체크는 `PENDING`으로 남습니다. |
@@ -378,6 +382,12 @@ agentrec이 주장하지 않는 것:
 
 ## 보안
 
+- **viewer는 브라우저가 아니라 머신을 신뢰합니다.** 인증 없이 loopback에서 듣기
+  때문에, 이 머신에서 loopback에 닿는 프로세스라면 모든 run을 읽을 수 있고, v0.5.0부터는
+  휴지통으로 옮길 수도 있습니다. 브라우저의 다른 출처 페이지는 그럴 수 없습니다.
+  삭제와 복원에는 viewer 페이지만 읽을 수 있는 토큰이 필요하고, 그 토큰은 cross-site
+  요청이 실을 수 없는 헤더로 보내며, same-origin fetch만 받습니다. viewer는 아무것도
+  지우지 않습니다. `agentrec trash empty`만 지웁니다.
 - **저장 전 구조적 redaction.** provider 이벤트, stderr, 이벤트가 아닌 stdout은
   쓰이기 전에 redaction을 거칩니다. 정규화된 이름이 17개 비밀 접미사(`TOKEN`,
   `SECRET`, `PASSWORD`, `APIKEY`, `PASSPHRASE`, `AUTHORIZATION`, `COOKIE`, …) 중

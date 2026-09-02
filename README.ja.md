@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="assets/agentrec-wordmark.svg" alt="agentrec — コーディングエージェントのフライトレコーダー" width="100%">
+  <a href="assets/agentrec-wordmark.svg"><img src="assets/agentrec-wordmark.svg" alt="agentrec — コーディングエージェントのフライトレコーダー" width="100%"></a>
 </p>
 
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/agentrec-report.svg" alt="agentrec show latest が対話セッションを 4 つの証拠セクション付きのアクションタイムラインとして描画した様子"><br>
+      <a href="assets/viewer-en-light.png"><img src="assets/viewer-en-light.png" alt="agentrec ビューアー: 記録されたセッションを、ツール呼び出し付きの会話、6 つの証拠タイル、証拠インスペクターとともに読み返す様子"></a><br>
       <sub><b>1 回の実行を、読み返す。</b><br>エージェントが言ったこと、プロセスがしたこと、リポジトリが示すこと、チェックが返したことを、混ぜずに並べます。</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/agentrec-evidence-layers.svg" alt="agentrec バンドルの 4 つの証拠レイヤー"><br>
+      <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="agentrec バンドルの 4 つの証拠レイヤー"></a><br>
       <sub><b>4 つの観測者、4 つの帰属。</b><br>何もスコアに合算せず、得られなかった証拠を合格として扱うこともありません。</sub>
     </td>
   </tr>
@@ -159,7 +159,8 @@ agentrec events latest --json
 `agentrec start` はビューアーをバックグラウンドで `http://127.0.0.1:7788/` に立ち上げた
 まま保ち、ブラウザーで開きます。`status` はビューアーが動いているか、run がいくつ
 記録されているか、hooks がインストールされているかを伝え、`stop` はビューアーを終了
-します。`view` は同じページをフォアグラウンドで提供します。
+します。`view` は同じページをフォアグラウンドで提供します。ビューアーで削除した run は
+ゴミ箱に移り、`agentrec trash` で一覧表示、復元、または空にできます。
 
 | プロバイダー | 実行ファイル | サポート範囲 | agentrec が注入するもの |
 | --- | --- | --- | --- |
@@ -177,11 +178,11 @@ manifest とすべての report に `versionUnverified` が刻まれます。`sh
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/agentrec-report.svg" alt="agentrec show latest"><br>
-      <sub><b><code>agentrec show</code>。</b> 同じ内容が証拠の隣に <code>report.md</code> として保存されます。</sub>
+      <a href="assets/viewer-en-dark.png"><img src="assets/viewer-en-dark.png" alt="ダークモードの agentrec ビューアー"></a><br>
+      <sub><b><code>agentrec view</code>。</b> 同じ証拠をループバック上でブラウザーから読みます。<code>agentrec show</code> は同じ内容を証拠の隣に <code>report.md</code> として保存します。</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/agentrec-evidence-layers.svg" alt="4 つの証拠レイヤー"><br>
+      <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="4 つの証拠レイヤー"></a><br>
       <sub><b><code>agentrec view</code>。</b> 同じバンドルを読む、読み取り専用・ループバック専用のビューアーです。</sub>
     </td>
   </tr>
@@ -209,7 +210,7 @@ manifest とすべての report に `versionUnverified` が刻まれます。`sh
 | レイヤー | 観測者 | 意味するもの | 記録される帰属 |
 | --- | --- | --- | --- |
 | 🗣️ **プロバイダー報告アクション** | エージェント | エージェントが行ったと報告した内容。ツール呼び出し、シェルコマンド、ファイルの読み取り・編集、MCP 呼び出し、Codex のファイル変更。正規化して要約しますが、証明としては扱いません。 | `provider_reported` |
-| 👁️ **スーパーバイザー観測結果** | agentrec | プロバイダープロセスの終了状況。終了コード、終了理由、シグナル、所要時間、警告数。agentrec が起動していないセッションでは `UNAVAILABLE`。 | `supervisor_observed` |
+| 👁️ **スーパーバイザー観測結果** | agentrec | プロバイダープロセスの終了状況。終了コード、終了理由、シグナル、所要時間、警告数。agentrec が起動していないセッションでは `NOT OBSERVED`。 | `supervisor_observed` |
 | 🌳 **リポジトリ観測変更** | agentrec | 実行前に固定したコミットと、実行後のワークツリーとの差分を、agentrec 自身が測定したもの。 | `observed during run, not causal proof` |
 | ✅ **検証観測結果** | agentrec | プロバイダー停止後に、agentrec がリポジトリ自身の固定されたチェックを実行した結果。作業がどのように行われたかについては何も語りません。 | `verification_observed` |
 
@@ -225,7 +226,7 @@ manifest とすべての report に `versionUnverified` が刻まれます。`sh
 | | 🚀 `agentrec trace` | 🎧 対話セッション |
 | --- | --- | --- |
 | プロバイダーを起動するのは | 親プロセスとしての agentrec | いつもどおりあなた。プロバイダーの hook が agentrec に報告します |
-| スーパーバイザー観測結果 | 終了コード、シグナル、所要時間 | `UNAVAILABLE`。`Ended By` が、`SessionEnd` hook が終了を報告したのか、recorder が待つのをやめたのか（`session_lost`、hook のないまま 8 時間経過後）を示します |
+| スーパーバイザー観測結果 | 終了コード、シグナル、所要時間 | `NOT OBSERVED`。`Ended By` が、`SessionEnd` hook が終了を報告したのか、recorder が待つのをやめたのか（`session_lost`、hook のないまま 8 時間経過後）を示します |
 | Baseline | プロセス起動前に固定 | `SessionStart` hook が届いた時点で固定。`Window` 行がそのことを述べます |
 | チェックアウトの状態 | クリーンであること。リポジトリごとに 1 実行 | 汚れたチェックアウトや同時セッションも拒否せず記録します |
 | 検証 | `--verify` が起動前に `.agentrec.yaml` を固定 | `--verify` 付きで出力した断片でのみ、かつ `.agentrec.yaml` が追跡されていて `HEAD` と同一のときだけ |
@@ -253,6 +254,7 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 | ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | ビューアーをバックグラウンドで起動し、ブラウザーで開きます。 |
 | ⏹️ `agentrec stop` | バックグラウンドのビューアーを停止します。 |
 | ℹ️ `agentrec status` | ビューアーの状態、run の件数、hooks がインストールされているかを報告します。 |
+| 🗑️ `agentrec trash [restore <run-id> \| empty]` | ビューアーから削除した run を一覧表示するか、1 つを復元するか、すべてを消去します。 |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | `setup` がインストールする hooks の断片を出力します。手動でインストールするときに使います。 |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 1 つのタスクを、1 つのコミット済み baseline から、隔離されたワークツリーで 2 回記録します。 |
 | ⚖️ `agentrec shadow show <group-id>` | 記録済みの比較を、証拠だけで再描画します。 |
@@ -344,7 +346,9 @@ agentrec が言うのは、見たことが起きた、ということだけで�
 | 表示 | 意味 |
 | --- | --- |
 | `AVAILABLE` | リポジトリが測定されました。件数が表示されるのはここだけです。 |
-| `UNAVAILABLE` | 測定が行われませんでした。セッションの場合は、監督したプロセスがありませんでした。中立であり、決して合格ではありません。 |
+| `NOT RUN` | この run では検証が要求されませんでした。中立であり、決して合格ではありません。 |
+| `NOT OBSERVED` | 監督したプロセスがありません。agentrec が起動していないセッションのため、終了コードもシグナルも見ていません。 |
+| `NOT RECORDED` | リポジトリの測定が行われませんでした。中立であり、決して合格ではありません。 |
 | `PENDING` | 実行前に書き込まれ、回答されないまま残ったもの。そのゼロは *測定していない* であって、*測定して何もなかった* ではありません。 |
 | `PASS` / `FAIL` / `TIMEOUT` / `ERROR` | 実行が残したツリー上で、固定されたチェックがどう終わったか。 |
 | `TAINTED` | 固定後に実行が `.agentrec.yaml` を書き換えました。**何も実行されておらず**、チェックは `PENDING` のままです。 |
@@ -386,6 +390,13 @@ agentrec が主張しないこと:
 
 ## セキュリティ
 
+- **ビューアーはブラウザーではなくマシンを信頼する。** 認証なしでループバックを待ち受ける
+  ため、このマシン上でループバックに到達できるプロセスなら、どれでもすべての run を読めますし、
+  v0.5.0 からは 1 つをゴミ箱へ移すこともできます。ブラウザー内の別オリジンのページには
+  それができません。削除と復元には、ビューアー自身のページだけが読めるトークンが必要で、
+  それはクロスサイトリクエストでは載せられないヘッダーで送られ、宛先も同一オリジンへの
+  fetch に限られます。ビューアーが消去することはありません。消去するのは
+  `agentrec trash empty` だけです。
 - **永続化前の構造的な秘匿処理。** プロバイダーイベント、stderr、イベントでない stdout は、
   書き込まれる前に秘匿処理されます。正規化した名前が 17 種類の秘密サフィックス（`TOKEN`、
   `SECRET`、`PASSWORD`、`APIKEY`、`PASSPHRASE`、`AUTHORIZATION`、`COOKIE`、…）のいずれかで

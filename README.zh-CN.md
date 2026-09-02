@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="assets/agentrec-wordmark.svg" alt="agentrec — 面向编码智能体的飞行记录仪" width="100%">
+  <a href="assets/agentrec-wordmark.svg"><img src="assets/agentrec-wordmark.svg" alt="agentrec — 面向编码智能体的飞行记录仪" width="100%"></a>
 </p>
 
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/agentrec-report.svg" alt="agentrec show latest 将一次交互式会话渲染为带四个证据区块的操作时间线"><br>
+      <a href="assets/viewer-en-light.png"><img src="assets/viewer-en-light.png" alt="agentrec 查看器：把一次已记录的会话当作带工具调用的对话来回读，并配有六个证据卡片和证据检视器"></a><br>
       <sub><b>一次运行，事后回读。</b><br>智能体说了什么、进程做了什么、仓库呈现了什么、检查返回了什么，分开呈现，互不混淆。</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/agentrec-evidence-layers.svg" alt="agentrec 证据包的四个证据层"><br>
+      <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="agentrec 证据包的四个证据层"></a><br>
       <sub><b>四个观察者，四种归属。</b><br>不会合并成一个评分，缺失的证据也绝不算作通过。</sub>
     </td>
   </tr>
@@ -147,7 +147,8 @@ agentrec events latest --json
 
 `agentrec start` 会让查看器在后台持续运行于 `http://127.0.0.1:7788/` 并打开它；`status`
 会说明查看器是否在运行、已记录多少次运行以及 hooks 是否已安装；`stop` 会结束它。`view`
-在前台提供同样的页面。
+在前台提供同样的页面。在查看器中删除的运行记录会进入回收站，`agentrec trash` 可以列出、
+恢复或清空它。
 
 | 提供方 | 可执行文件 | 支持范围 | agentrec 注入的内容 |
 | --- | --- | --- | --- |
@@ -164,11 +165,11 @@ agentrec events latest --json
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/agentrec-report.svg" alt="agentrec show latest"><br>
-      <sub><b><code>agentrec show</code>。</b>同一份读取结果会以 <code>report.md</code> 的形式与证据一起归档。</sub>
+      <a href="assets/viewer-en-dark.png"><img src="assets/viewer-en-dark.png" alt="深色模式下的 agentrec 查看器"></a><br>
+      <sub><b><code>agentrec view</code>。</b>同样的证据，在回环地址上通过浏览器回读；<code>agentrec show</code> 会把同一份读取结果以 <code>report.md</code> 的形式与证据一起归档。</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/agentrec-evidence-layers.svg" alt="四个证据层"><br>
+      <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="四个证据层"></a><br>
       <sub><b><code>agentrec view</code>。</b>基于同一证据包的只读、仅回环地址的查看器。</sub>
     </td>
   </tr>
@@ -192,7 +193,7 @@ agentrec events latest --json
 | 层 | 观察者 | 含义 | 记录的归属 |
 | --- | --- | --- | --- |
 | 🗣️ **提供方报告的操作** | 智能体 | 智能体声称执行过的操作：工具调用、shell 命令、文件读写、MCP 调用和 Codex 文件变更。会被规范化和汇总，但绝不视为证明。 | `provider_reported` |
-| 👁️ **监管方观察到的结果** | agentrec | 提供方进程如何结束：退出码、退出原因、信号、耗时和警告数量。对于不是由 agentrec 启动的会话，显示为 `UNAVAILABLE`。 | `supervisor_observed` |
+| 👁️ **监管方观察到的结果** | agentrec | 提供方进程如何结束：退出码、退出原因、信号、耗时和警告数量。对于不是由 agentrec 启动的会话，显示为 `NOT OBSERVED`。 | `supervisor_observed` |
 | 🌳 **仓库观察到的变更** | agentrec | 运行前固定的提交与运行后工作树之间的差异，由 agentrec 自行测量。 | `observed during run, not causal proof` |
 | ✅ **验证观察到的结果** | agentrec | 提供方停止后，agentrec 运行仓库自身固定检查时得到的结果。它并不说明工作是如何完成的。 | `verification_observed` |
 
@@ -207,7 +208,7 @@ agentrec events latest --json
 | | 🚀 `agentrec trace` | 🎧 交互式会话 |
 | --- | --- | --- |
 | 谁启动提供方 | agentrec，作为父进程 | 一如往常由你启动；提供方的 hook 向 agentrec 报告 |
-| 监管方观察到的结果 | 退出码、信号、耗时 | `UNAVAILABLE`；`Ended By` 会说明是 `SessionEnd` hook 报告了结束，还是 recorder 放弃等待（`session_lost`，在 8 小时没有 hook 之后） |
+| 监管方观察到的结果 | 退出码、信号、耗时 | `NOT OBSERVED`；`Ended By` 会说明是 `SessionEnd` hook 报告了结束，还是 recorder 放弃等待（`session_lost`，在 8 小时没有 hook 之后） |
 | 基线 | 在进程启动前固定 | 在 `SessionStart` hook 到达时固定；`Window` 行会说明这一点 |
 | 检出状态 | 必须干净；每个仓库一次运行 | 有未提交变更的检出和并发会话会被记录，而不是拒绝 |
 | 验证 | `--verify` 在启动前固定 `.agentrec.yaml` | 仅对用 `--verify` 输出的片段生效，且只在 `.agentrec.yaml` 已被跟踪且与 `HEAD` 一致时执行 |
@@ -233,6 +234,7 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 | ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | 在后台启动查看器并打开它。 |
 | ⏹️ `agentrec stop` | 停止后台查看器。 |
 | ℹ️ `agentrec status` | 报告查看器状态、运行记录数量以及 hooks 是否已安装。 |
+| 🗑️ `agentrec trash [restore <run-id> \| empty]` | 列出从查看器中删除的运行记录，恢复其中一条，或将其全部清除。 |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 输出 `setup` 将要安装的 hooks 片段，供手动安装使用。 |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 从同一个已提交基线出发，在相互隔离的工作树中把同一任务记录两次。 |
 | ⚖️ `agentrec shadow show <group-id>` | 重新渲染一次已记录的比较，只呈现证据。 |
@@ -321,7 +323,9 @@ agentrec 只声称它看到的事情确实发生过。状态只按记录值展�
 | 显示 | 含义 |
 | --- | --- |
 | `AVAILABLE` | 仓库已被测量。只有此时才显示计数。 |
-| `UNAVAILABLE` | 未产生测量结果——或者对于会话而言，没有受监管的进程。它是中性的，绝不算作通过。 |
+| `NOT RUN` | 本次运行未请求验证。它是中性的，绝不算作通过。 |
+| `NOT OBSERVED` | 没有受监管的进程：这次运行是一个不由 agentrec 启动的会话，因此从未看到退出码和信号。 |
+| `NOT RECORDED` | 未进行仓库测量。它是中性的，绝不算作通过。 |
 | `PENDING` | 运行前已写入，但始终未得到结果。其中的零表示*未测量*，而不是*测得为空*。 |
 | `PASS` / `FAIL` / `TIMEOUT` / `ERROR` | 固定检查在运行留下的工作树上如何结束。 |
 | `TAINTED` | 运行在 `.agentrec.yaml` 被固定后重写了它：**不会执行任何检查**，检查仍保持 `PENDING`。 |
@@ -359,6 +363,11 @@ agentrec 不声称什么：
 
 ## 安全
 
+- **查看器信任的是这台机器，而不是浏览器。** 它在回环地址上监听且不做身份验证，因此这台
+  机器上任何能访问回环地址的进程都能读取每一条运行记录，并且从 v0.5.0 起还能把其中一条
+  移入回收站。浏览器里来自其他源的页面则做不到：删除和恢复都需要一个只有查看器自己的
+  页面才能读到的令牌，该令牌通过跨站请求无法携带的请求头发送，且 fetch 的目标必须同源。
+  查看器不会擦除任何内容；只有 `agentrec trash empty` 才会擦除。
 - **持久化前进行结构化脱敏。** 提供方事件、stderr 和非事件 stdout 都会先脱敏再写入。
   字段名规范化后以 17 个秘密后缀之一结尾的字段下的值（`TOKEN`、`SECRET`、
   `PASSWORD`、`APIKEY`、`PASSPHRASE`、`AUTHORIZATION`、`COOKIE`、……）、`NAME=VALUE`

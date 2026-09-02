@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="assets/agentrec-wordmark.svg" alt="agentrec — a flight recorder for coding agents" width="100%">
+  <a href="assets/agentrec-wordmark.svg"><img src="assets/agentrec-wordmark.svg" alt="agentrec — a flight recorder for coding agents" width="100%"></a>
 </p>
 
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/agentrec-report.svg" alt="agentrec show latest rendering an interactive session as an action timeline with four evidence sections"><br>
+      <a href="assets/viewer-en-light.png"><img src="assets/viewer-en-light.png" alt="The agentrec viewer: a recorded session read as a conversation with its tool calls, six evidence tiles and the evidence inspector"></a><br>
       <sub><b>One run, read back.</b><br>What the agent said, what the process did, what the repository shows, what the checks returned — kept apart.</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/agentrec-evidence-layers.svg" alt="The four evidence layers of an agentrec bundle"><br>
+      <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="The four evidence layers of an agentrec bundle"></a><br>
       <sub><b>Four observers, four attributions.</b><br>Nothing is combined into a score, and unavailable evidence is never a pass.</sub>
     </td>
   </tr>
@@ -156,7 +156,8 @@ agentrec events latest --json
 `agentrec start` keeps the viewer running in the background at `http://127.0.0.1:7788/`
 and opens it; `status` says whether it is running, how many runs are recorded and
 whether the hooks are installed; `stop` ends it. `view` serves the same pages in the
-foreground.
+foreground. A run deleted in the viewer goes to the trash, which `agentrec trash`
+lists, restores from, or empties.
 
 | Provider | Executable | Supported range | What agentrec injects |
 | --- | --- | --- | --- |
@@ -174,11 +175,11 @@ and one that was not is not a comparison.
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <img src="assets/agentrec-report.svg" alt="agentrec show latest"><br>
-      <sub><b><code>agentrec show</code>.</b> The same reading is filed as <code>report.md</code> beside the evidence.</sub>
+      <a href="assets/viewer-en-dark.png"><img src="assets/viewer-en-dark.png" alt="The agentrec viewer in dark mode"></a><br>
+      <sub><b><code>agentrec view</code>.</b> The same evidence on loopback, in your browser; <code>agentrec show</code> files the same reading as <code>report.md</code> beside the evidence.</sub>
     </td>
     <td width="50%" align="center">
-      <img src="assets/agentrec-evidence-layers.svg" alt="The four evidence layers"><br>
+      <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="The four evidence layers"></a><br>
       <sub><b><code>agentrec view</code>.</b> A read-only, loopback-only viewer over the same bundle.</sub>
     </td>
   </tr>
@@ -205,7 +206,7 @@ What the timeline and the viewer put in front of you:
 | Layer | Observer | What it means | Attribution recorded |
 | --- | --- | --- | --- |
 | 🗣️ **Provider-reported actions** | the agent | What the agent said it did — tool calls, shell commands, file reads and edits, MCP calls, Codex file changes. Normalized and summarized, never taken as proof. | `provider_reported` |
-| 👁️ **Supervisor-observed result** | agentrec | How the provider process ended: exit code, exit reason, signal, duration, warning count. `UNAVAILABLE` for a session agentrec did not launch. | `supervisor_observed` |
+| 👁️ **Supervisor-observed result** | agentrec | How the provider process ended: exit code, exit reason, signal, duration, warning count. `NOT OBSERVED` for a session agentrec did not launch. | `supervisor_observed` |
 | 🌳 **Repository-observed changes** | agentrec | The difference between the commit pinned before the run and the worktree after it, measured by agentrec itself. | `observed during run, not causal proof` |
 | ✅ **Verification-observed result** | agentrec | How the repository's own pinned checks ended when agentrec ran them after the provider stopped. Says nothing about how the work was done. | `verification_observed` |
 
@@ -221,7 +222,7 @@ does not fail the run: a provider that printed one line of prose has still run.
 | | 🚀 `agentrec trace` | 🎧 Interactive session |
 | --- | --- | --- |
 | Who starts the provider | agentrec, as the parent process | You, as always; the provider's hooks report to agentrec |
-| Supervisor-observed result | exit code, signal, duration | `UNAVAILABLE`; `Ended By` says whether the `SessionEnd` hook reported the end or the recorder gave up (`session_lost`, after eight hours without a hook) |
+| Supervisor-observed result | exit code, signal, duration | `NOT OBSERVED`; `Ended By` says whether the `SessionEnd` hook reported the end or the recorder gave up (`session_lost`, after eight hours without a hook) |
 | Baseline | pinned before the process starts | pinned when the `SessionStart` hook arrives; the `Window` line says so |
 | Checkout state | must be clean; one run per repository | dirty checkouts and concurrent sessions are recorded, not refused |
 | Verification | `--verify` pins `.agentrec.yaml` before launch | only for a fragment printed with `--verify`, and only when `.agentrec.yaml` is tracked and identical to `HEAD` |
@@ -249,6 +250,7 @@ the interactive TUI follow the same documented contract.
 | ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | Starts the viewer in the background and opens it. |
 | ⏹️ `agentrec stop` | Stops the background viewer. |
 | ℹ️ `agentrec status` | Reports the viewer, the run count and whether the hooks are installed. |
+| 🗑️ `agentrec trash [restore <run-id> \| empty]` | Lists the runs deleted from the viewer, restores one, or erases them all. |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | Prints the hooks fragment `setup` would install, for installing by hand. |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | Records one task twice, from one committed baseline, in isolated worktrees. |
 | ⚖️ `agentrec shadow show <group-id>` | Re-renders a recorded comparison, evidence only. |
@@ -340,7 +342,9 @@ recorded, never inferred:
 | Shown | Means |
 | --- | --- |
 | `AVAILABLE` | The repository was measured. Counts are shown only here. |
-| `UNAVAILABLE` | No measurement was produced — or, for a session, no process was supervised. Neutral, never a pass. |
+| `NOT RUN` | No verification was requested for this run. Neutral, never a pass. |
+| `NOT OBSERVED` | No process was supervised: the run is a session agentrec did not launch, so exit code and signal were never seen. |
+| `NOT RECORDED` | No repository measurement was made. Neutral, never a pass. |
 | `PENDING` | Written before the run and never answered. Its zeros mean *not measured*, not *measured as nothing*. |
 | `PASS` / `FAIL` / `TIMEOUT` / `ERROR` | How the pinned checks ended on the tree the run left behind. |
 | `TAINTED` | The run rewrote `.agentrec.yaml` after it was pinned: **nothing was executed**, and the checks stay `PENDING`. |
@@ -381,6 +385,13 @@ What agentrec does not claim:
 
 ## Security
 
+- **The viewer trusts the machine, not the browser.** It listens on loopback
+  without authentication, so any process on the machine that can reach loopback
+  can read every run — and, since v0.5.0, move one to the trash. A page from
+  another origin in your browser cannot: deleting and restoring require a token
+  only the viewer's own page can read, sent in a header no cross-site request can
+  carry, and a same-origin fetch destination. Nothing is erased by the viewer;
+  only `agentrec trash empty` erases.
 - **Structural redaction before persistence.** Provider events, stderr and
   non-event stdout are redacted before they are written. Values under field names
   whose canonicalized form ends in one of 17 secret suffixes (`TOKEN`, `SECRET`,
