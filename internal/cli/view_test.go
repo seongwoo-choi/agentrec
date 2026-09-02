@@ -1233,7 +1233,7 @@ func TestViewRunListKeepsUnavailableVerificationNeutral(t *testing.T) {
 	tests := []struct {
 		name, exit, verification, wantClass, wantLabel string
 	}{
-		{"unavailable verification", "completed", "UNAVAILABLE", "", "UNAVAILABLE"},
+		{"unavailable verification", "completed", "NOT RUN", "", "NOT RUN"},
 		{"passed verification", "completed", "PASS", "pass", "PASS"},
 		{"failed verification", "completed", "FAIL", "fail", "FAIL"},
 		{"unknown verification", "completed", "FUTURE", "", "FUTURE"},
@@ -1290,8 +1290,8 @@ func TestViewRunListIsNewestFirstAndNamesInitialRun(t *testing.T) {
 		t.Fatalf("runs = %+v", body.Runs)
 	}
 	for _, run := range body.Runs {
-		if run.StatusClass != "" || run.StatusLabel != "UNAVAILABLE" {
-			t.Errorf("run %s status = (%q, %q), want neutral UNAVAILABLE", run.ID, run.StatusClass, run.StatusLabel)
+		if run.StatusClass != "" || run.StatusLabel != "NOT RUN" {
+			t.Errorf("run %s status = (%q, %q), want neutral NOT RUN", run.ID, run.StatusClass, run.StatusLabel)
 		}
 	}
 }

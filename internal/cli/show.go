@@ -196,7 +196,7 @@ func readRunFromRoot(root *os.Root) (report.Report, error) {
 // pinned when the session's first hook arrived rather than before anything
 // ran, and the reader is told both before reading anything else.
 const (
-	sessionSupervisorStatus = "UNAVAILABLE (interactive session: agentrec was not the parent process; exit code and signal unknown)"
+	sessionSupervisorStatus = "NOT OBSERVED (interactive session: agentrec was not the parent process; exit code and signal unknown)"
 	sessionRepositoryWindow = "baseline pinned at the SessionStart hook, not before the process started; measured after the session ended; the checkout was open to the operator in between"
 	sessionVerificationPin  = "at the SessionStart hook; run after the session ended"
 )
@@ -394,7 +394,7 @@ func repositoryFields(res *gitResult) []report.Field {
 	if res == nil {
 		return nil
 	}
-	fields := []report.Field{{Name: "Status", Value: strings.ToUpper(res.Status)}}
+	fields := []report.Field{{Name: "Status", Value: repositoryStatusLabel(res.Status)}}
 	if res.Reason != "" {
 		fields = append(fields, report.Field{Name: "Reason", Value: res.Reason})
 	}
@@ -411,6 +411,20 @@ func repositoryFields(res *gitResult) []report.Field {
 	// Said on every result: what a difference means is not something a reader
 	// should have to supply themselves.
 	return append(fields, report.Field{Name: "Attribution", Value: res.Attribution})
+}
+
+// verificationNotRun is the verification column and tile of a run that was
+// asked for no verification. Three absences get three words, because they
+// mean three things: NOT RUN (no checks were requested), NOT OBSERVED (no
+// process was supervised), NOT RECORDED (no repository measurement was made).
+const verificationNotRun = "NOT RUN"
+
+// repositoryStatusLabel spells the repository evidence status as recorded.
+func repositoryStatusLabel(status string) string {
+	if status == "unavailable" {
+		return "NOT RECORDED"
+	}
+	return strings.ToUpper(status)
 }
 
 // verificationVerdicts spell the two endings an operator acts on. Every other

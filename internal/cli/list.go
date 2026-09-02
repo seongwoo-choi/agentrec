@@ -130,7 +130,7 @@ func listRunsForTable(root, cwd string, exitReasonSet bool, exitReasonFilter str
 		if err != nil {
 			return false, err
 		}
-		run.Verification = "UNAVAILABLE"
+		run.Verification = verificationNotRun
 		if verification != nil {
 			run.Verification = verdict(verification.Status)
 		}

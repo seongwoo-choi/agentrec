@@ -126,9 +126,9 @@ func TestListReportsRunsNewestFirstWithStableTieBreak(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
-		"run-c  claude  tmp  2026-07-27T10:00:00Z  unknown  UNAVAILABLE",
-		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  UNAVAILABLE",
-		"run-a  claude  tmp  2026-07-27T09:00:00Z  completed  UNAVAILABLE",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  unknown  NOT RUN",
+		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  NOT RUN",
+		"run-a  claude  tmp  2026-07-27T09:00:00Z  completed  NOT RUN",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -152,8 +152,8 @@ func TestListFiltersByExitReason(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
-		"run-c  claude  tmp  2026-07-27T10:00:00Z  failed  UNAVAILABLE",
-		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  UNAVAILABLE",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  failed  NOT RUN",
+		"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  NOT RUN",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -182,7 +182,7 @@ func TestListShowsAndFiltersByVerificationStatus(t *testing.T) {
 	}
 	allWant := strings.Join([]string{
 		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
-		"run-c  claude  tmp  2026-07-27T10:00:00Z  completed  UNAVAILABLE",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  completed  NOT RUN",
 		"run-b  codex  tmp  2026-07-27T10:00:00Z  completed  FAIL",
 		"run-a  claude  tmp  2026-07-27T09:00:00Z  completed  PASS",
 		"",
@@ -211,13 +211,13 @@ func TestListShowsAndFiltersByVerificationStatus(t *testing.T) {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
 
-	code, stdout, stderr = run(t, "list", "--verification-status", "UNAVAILABLE")
+	code, stdout, stderr = run(t, "list", "--verification-status", "NOT RUN")
 	if code != 0 {
 		t.Fatalf("unavailable exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
 	want = strings.Join([]string{
 		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
-		"run-c  claude  tmp  2026-07-27T10:00:00Z  completed  UNAVAILABLE",
+		"run-c  claude  tmp  2026-07-27T10:00:00Z  completed  NOT RUN",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -362,7 +362,7 @@ func TestListFiltersByTheEscapedExitReasonShownInTheTable(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
-		`run-a  claude  tmp  2026-07-27T09:00:00Z  failed\nreason  UNAVAILABLE`,
+		`run-a  claude  tmp  2026-07-27T09:00:00Z  failed\nreason  NOT RUN`,
 		"",
 	}, "\n")
 	if stdout != want {
@@ -414,7 +414,7 @@ func TestListCombinesWorkingDirectoryAndExitReasonFiltersInEitherOrder(t *testin
 		}
 		want := strings.Join([]string{
 			"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
-			"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  UNAVAILABLE",
+			"run-b  codex  tmp  2026-07-27T10:00:00Z  failed  NOT RUN",
 			"",
 		}, "\n")
 		if stdout != want {
@@ -459,7 +459,7 @@ func TestListFiltersByCleanedWorkingDirectory(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
-		"match  claude  project  2026-07-27T09:00:00Z  unknown  UNAVAILABLE",
+		"match  claude  project  2026-07-27T09:00:00Z  unknown  NOT RUN",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -500,9 +500,9 @@ func TestListNamesProjectFromRecordedWorkingDirectory(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
-		"run-c  claude  unknown  2026-07-27T09:00:00Z  unknown  UNAVAILABLE",
-		"run-b  claude  unknown  2026-07-27T09:00:00Z  unknown  UNAVAILABLE",
-		"run-a  claude  agentrec  2026-07-27T09:00:00Z  unknown  UNAVAILABLE",
+		"run-c  claude  unknown  2026-07-27T09:00:00Z  unknown  NOT RUN",
+		"run-b  claude  unknown  2026-07-27T09:00:00Z  unknown  NOT RUN",
+		"run-a  claude  agentrec  2026-07-27T09:00:00Z  unknown  NOT RUN",
 		"",
 	}, "\n")
 	if stdout != want {
@@ -1596,7 +1596,7 @@ VERIFICATION-OBSERVED RESULT
 				}},
 			},
 			wantSections: `REPOSITORY-OBSERVED CHANGES
-  Status       UNAVAILABLE
+  Status       NOT RECORDED
   Reason       baseline_unreachable
   Attribution  observed during run, not causal proof
 
