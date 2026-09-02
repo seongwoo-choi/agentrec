@@ -324,3 +324,54 @@ func TestSetupAsksOnATerminalWhenNoFlagsAreGiven(t *testing.T) {
 		t.Errorf("--claude on a terminal: exit %d\n%s", code, stdout)
 	}
 }
+
+// An installation from before the Stop hook existed is completed in place:
+// status says what is missing, setup adds only that, and a hook someone else
+// keeps on the same event stays first — and stays after --uninstall.
+func TestSetupAddsTheStopHookToAnOlderInstallation(t *testing.T) {
+	home(t)
+	userHome := setupHome(t, ".claude")
+	path := filepath.Join(userHome, ".claude", "settings.json")
+	if code, _, stderr := run(t, "setup", "--claude"); code != 0 {
+		t.Fatalf("install: exit %d (%s)", code, stderr)
+	}
+	doc := readJSON(t, path)
+	doc["hooks"].(map[string]any)[hookStop] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "say done"}}}}
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, stdout, _ := run(t, "status"); !strings.Contains(stdout, "hooks installed for 5 of 6 events") {
+		t.Errorf("status before the upgrade:\n%s", stdout)
+	}
+	code, stdout, stderr := run(t, "setup", "--claude")
+	if code != 0 || setupState(stdout, hookStop) != "installed" || setupState(stdout, hookSessionStart) != "unchanged" {
+		t.Errorf("upgrade: exit %d (%s)\n%s", code, stderr, stdout)
+	}
+	if got := hookCommands(t, readJSON(t, path), hookStop); len(got) != 2 || got[0] != "say done" || !strings.HasSuffix(got[1], "agentrec hook claude") {
+		t.Errorf("Stop after the upgrade = %v, want the foreign hook first and agentrec's after it", got)
+	}
+	if _, stdout, _ := run(t, "status"); !strings.Contains(stdout, "hooks installed in") {
+		t.Errorf("status after the upgrade:\n%s", stdout)
+	}
+	if code, _, stderr := run(t, "setup", "--claude", "--uninstall"); code != 0 {
+		t.Fatalf("uninstall: exit %d (%s)", code, stderr)
+	}
+	if got := hookCommands(t, readJSON(t, path), hookStop); len(got) != 1 || got[0] != "say done" {
+		t.Errorf("Stop after --uninstall = %v, want only the foreign hook", got)
+	}
+}
+
+// setupState reads the state setup printed for one event.
+func setupState(stdout, event string) string {
+	for _, line := range strings.Split(stdout, "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && fields[0] == event {
+			return fields[1]
+		}
+	}
+	return ""
+}

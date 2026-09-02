@@ -1005,7 +1005,7 @@ func TestSessionRecordsPromptsAndReplies(t *testing.T) {
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "rotate the leaked key AKIAIOSFODNN7EXAMPLE", "prompt_id": "p-1"}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "Rotated; the new key AKIAI44QH8DHBEXAMPLE is in the vault.", "prompt_id": "p-1", "stop_hook_active": false}))
 	// Codex names it turn_id, and a turn a stop hook continued stops twice.
-	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "and the tests?", "turn_id": "t-2"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "and the tests?\n\x1b[31mall of them\x1b[0m", "turn_id": "t-2"}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "All green.", "turn_id": "t-2"}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "Still green.", "turn_id": "t-2", "stop_hook_active": true}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": nil}))
@@ -1045,10 +1045,13 @@ func TestSessionRecordsPromptsAndReplies(t *testing.T) {
 	}
 
 	_, stdout, _ := run(t, "show", "latest")
-	for _, want := range []string{"PROMPT  and the tests?", "MESSAGE  All green.", "PROMPT  rotate the leaked key [REDACTED:"} {
+	for _, want := range []string{"PROMPT  and the tests? [31mall of them[0m", "MESSAGE  All green.", "PROMPT  rotate the leaked key [REDACTED:"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("show output lacks %q:\n%s", want, stdout)
 		}
+	}
+	if strings.Contains(stdout, "\x1b") {
+		t.Errorf("show output passes an escape sequence from the prompt to the terminal")
 	}
 }
 
@@ -1067,22 +1070,65 @@ func TestSessionFilesADoublyDeliveredHookOnce(t *testing.T) {
 		sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "hi", "prompt_id": "p-1"}),
 		sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "true"}, "tool_use_id": "toolu_1", "tool_response": ""}),
 		sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "hello", "prompt_id": "p-1"}),
+		// A stop hook continued the turn and it ended with the same words.
+		sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "hello", "prompt_id": "p-1", "stop_hook_active": true}),
+		sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "hello again", "prompt_id": "p-1", "stop_hook_active": true}),
+		// Claude Code before 2.1.196 names no turn at all.
+		sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "old client"}),
+		sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "done"}),
 	} {
 		deliver(t, socket, payload)
 		deliver(t, socket, payload)
 	}
-	again := sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "hello again", "prompt_id": "p-1", "stop_hook_active": true})
-	deliver(t, socket, again)
-	deliver(t, socket, again)
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
 	if code := waitExit(t, done); code != 0 {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
 	}
+	actions := readActionsFile(t, onlyRunDir(t, root))
 	var ids []string
-	for _, a := range readActionsFile(t, onlyRunDir(t, root)) {
+	for _, a := range actions {
 		ids = append(ids, a.ID)
 	}
-	if got, want := strings.Join(ids, " "), "prompt-p-1 toolu_1 reply-p-1 reply-p-1-4"; got != want {
-		t.Errorf("actions = %q, want %q", got, want)
+	if got, want := strings.Join(ids, " "), "prompt-p-1 toolu_1 reply-p-1 reply-p-1-4 reply-p-1-5 hook-6 hook-7"; got != want {
+		t.Fatalf("actions = %q, want %q", got, want)
+	}
+	if actions[5].Type != action.TypeUserPrompt || actions[6].Type != action.TypeAgentMessage || string(actions[6].Input) != `{"text":"done"}` {
+		t.Errorf("unnamed turn = %s %s / %s %s, want a prompt and a reply {\"text\":\"done\"}", actions[5].Type, actions[5].Input, actions[6].Type, actions[6].Input)
+	}
+	if !strings.Contains(string(actions[3].Result), `"stopHookActive":true`) {
+		t.Errorf("continued reply result = %s, want stopHookActive", actions[3].Result)
+	}
+}
+
+// An oversized prompt is not lost from the record: prompt.txt keeps the
+// session's first prompt as it always did, the action says its text was
+// dropped, and the event standing in for the delivery still names the turn.
+func TestSessionKeepsAnOversizedFirstPromptPaired(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "session-big-0001"
+	socket, done, stderr := serveInProcess(t, sessionID, repo)
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": strings.Repeat("x", sessionPayloadLimit+10), "prompt_id": "p-1"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "second", "prompt_id": "p-2"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	dir := onlyRunDir(t, root)
+	if got, err := os.ReadFile(filepath.Join(dir, "prompt.txt")); err != nil || !strings.HasPrefix(string(got), "xxxx") {
+		t.Errorf("prompt.txt = %.16q, %v; want the first prompt", got, err)
+	}
+	actions := readActionsFile(t, dir)
+	if len(actions) != 2 || actions[0].ID != "prompt-p-1" || string(actions[0].Input) != `{"prompt":""}` || !strings.Contains(string(actions[0].Result), `"dropped":"payload of`) || !strings.Contains(string(actions[0].Result), `"turn":"p-1"`) {
+		t.Errorf("actions = %+v, want the dropped prompt first, with its turn", actions)
+	}
+	if len(actions) == 2 && string(actions[1].Input) != `{"prompt":"second"}` {
+		t.Errorf("second prompt = %s", actions[1].Input)
+	}
+	events, err := os.ReadFile(filepath.Join(dir, "provider-events.sanitized.jsonl"))
+	if err != nil || !strings.Contains(string(events), `"prompt_id":"p-1"`) || !strings.Contains(string(events), `"agentrec_dropped"`) {
+		t.Errorf("events do not pair the dropped delivery with its turn (%v):\n%.300s", err, events)
 	}
 }

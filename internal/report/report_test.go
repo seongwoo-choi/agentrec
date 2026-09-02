@@ -548,7 +548,9 @@ func TestMarkdownEscapesControlSequencesAndFencesBackticks(t *testing.T) {
 
 	for _, want := range []string{
 		"- " + "`Action`" + ": " + "`SHELL`",
-		"- " + "`Detail`" + ": " + "````echo ``` `x` ```\\n## Heading````",
+		// A detail is one line before it is fenced: the line break that would
+		// have opened a heading is a space.
+		"- " + "`Detail`" + ": " + "````echo ``` `x` ``` ## Heading````",
 		"- " + "`` `Name` ``" + ": " + "`` ` ``",
 	} {
 		if !strings.Contains(got, want) {

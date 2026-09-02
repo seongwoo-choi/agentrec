@@ -253,10 +253,24 @@ func detail(a action.Action) string {
 	for _, key := range keys {
 		var value string
 		if err := json.Unmarshal(fields[key], &value); err == nil && value != "" {
-			return value
+			return singleLine(value)
 		}
 	}
 	return ""
+}
+
+// singleLine keeps a detail on the report's one line: runs of whitespace,
+// line breaks included, become one space, and other control characters —
+// which a terminal would obey rather than show — are dropped. Provider text
+// is displayed, never executed.
+func singleLine(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // outcome names and renders how an action ended: a shell action reports the

@@ -114,6 +114,7 @@ type hookEnvelope struct {
 	PromptID             string          `json:"prompt_id"`
 	TurnID               string          `json:"turn_id"`
 	LastAssistantMessage string          `json:"last_assistant_message"`
+	StopHookActive       bool            `json:"stop_hook_active"`
 	ToolName             string          `json:"tool_name"`
 	ToolInput            json.RawMessage `json:"tool_input"`
 	ToolResponse         json.RawMessage `json:"tool_response"`
@@ -131,14 +132,15 @@ type hookEnvelope struct {
 // names the hook it came from, so a reader can tell a result the session's
 // hook reported from one a stream parser read.
 type hookActionResult struct {
-	Source       string          `json:"source"`
-	Turn         string          `json:"turn,omitempty"`
-	ToolResponse json.RawMessage `json:"toolResponse,omitempty"`
-	Error        string          `json:"error,omitempty"`
-	DurationMs   *int64          `json:"durationMs,omitempty"`
-	AgentID      string          `json:"agentId,omitempty"`
-	AgentType    string          `json:"agentType,omitempty"`
-	Dropped      string          `json:"dropped,omitempty"`
+	Source         string          `json:"source"`
+	Turn           string          `json:"turn,omitempty"`
+	StopHookActive bool            `json:"stopHookActive,omitempty"`
+	ToolResponse   json.RawMessage `json:"toolResponse,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	DurationMs     *int64          `json:"durationMs,omitempty"`
+	AgentID        string          `json:"agentId,omitempty"`
+	AgentType      string          `json:"agentType,omitempty"`
+	Dropped        string          `json:"dropped,omitempty"`
 }
 
 type sessionOptions struct {
@@ -493,11 +495,13 @@ type sessionRecorder struct {
 
 	prompted bool
 	actions  int
-	// seen remembers what was already filed, so a hook registered twice —
-	// once in the user's settings and once in the project's — files each tool
-	// call, prompt and reply once: a tool call by event and tool_use_id, a
-	// prompt or reply by turn and text, and every action id handed out.
-	seen       map[string]bool
+	// seen remembers what was already filed and when, so a hook registered
+	// twice — once in the user's settings and once in the project's — files
+	// each tool call, prompt and reply once: a tool call by event and
+	// tool_use_id, for good; a prompt or reply by turn, text digest and
+	// stop_hook_active, within duplicateDeliveryWindow; and every action id
+	// handed out.
+	seen       map[string]time.Time
 	warnings   int
 	storageErr error
 }
@@ -605,7 +609,6 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 		// would end the recording of everything after it.
 		s.warnings++
 		env.ToolInput, env.ToolResponse = nil, nil
-		env.Prompt, env.LastAssistantMessage = "", ""
 		raw = droppedPayload(env, dropped)
 	}
 	if err := s.bundle.WriteProviderEvent(raw); errors.Is(err, storage.ErrNotProviderEvent) {
@@ -637,7 +640,7 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 // carries no timestamps: the times here are when the recorder took delivery,
 // and the duration is the provider's own.
 func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
-	if env.ToolUseID != "" && !s.first(env.HookEventName+":"+env.ToolUseID) {
+	if env.ToolUseID != "" && !s.first(env.HookEventName+":"+env.ToolUseID, 0) {
 		return
 	}
 	s.actions++
@@ -699,6 +702,10 @@ func (s *sessionRecorder) recordText(env hookEnvelope, dropped string) {
 	default:
 		return
 	}
+	if dropped != "" {
+		// The text went with the payload; the action says so in its result.
+		text = ""
+	}
 	if text == "" && dropped == "" {
 		return
 	}
@@ -706,16 +713,22 @@ func (s *sessionRecorder) recordText(env hookEnvelope, dropped string) {
 	if turn == "" {
 		turn = env.TurnID
 	}
-	if turn != "" && !s.first(prefix+turn+"\x00"+text) {
+	// A doubled delivery has the same turn, the same text and the same
+	// stop_hook_active, and arrives within moments of the first. The same
+	// words said again later — a repeated prompt, a continued turn that
+	// ends the same way — are filed again. Without a turn id (Claude Code
+	// before 2.1.196) the moment is all there is to go on.
+	digest := sha256.Sum256([]byte(text))
+	if !s.first(env.HookEventName+":"+turn+":"+hex.EncodeToString(digest[:])+":"+strconv.FormatBool(env.StopHookActive), duplicateDeliveryWindow) {
 		return
 	}
 	s.actions++
 	id := fmt.Sprintf("hook-%d", s.actions)
 	if turn != "" {
 		id = prefix + turn
-		if !s.first("id:" + id) {
-			// A turn a stop hook continued reports Stop again with a new
-			// message: filed beside the first, not over it.
+		if !s.first("id:"+id, 0) {
+			// A turn a stop hook continued reports Stop again: filed beside
+			// the first, not over it.
 			id = fmt.Sprintf("%s-%d", id, s.actions)
 		}
 	}
@@ -732,26 +745,34 @@ func (s *sessionRecorder) recordText(env hookEnvelope, dropped string) {
 		Input:      input,
 	}
 	if payload, err := json.Marshal(hookActionResult{
-		Source:    "hook." + env.HookEventName,
-		Turn:      turn,
-		AgentID:   env.AgentID,
-		AgentType: env.AgentType,
-		Dropped:   dropped,
+		Source:         "hook." + env.HookEventName,
+		Turn:           turn,
+		StopHookActive: env.StopHookActive,
+		AgentID:        env.AgentID,
+		AgentType:      env.AgentType,
+		Dropped:        dropped,
 	}); err == nil {
 		act.Result = payload
 	}
 	s.store(s.bundle.WriteAction(act))
 }
 
-// first reports whether key was not seen before, and remembers it.
-func (s *sessionRecorder) first(key string) bool {
+// duplicateDeliveryWindow is how close two identical text deliveries must be
+// to count as one hook registered twice rather than the same thing said
+// again. Doubled deliveries arrive milliseconds apart; a person does not.
+const duplicateDeliveryWindow = 2 * time.Second
+
+// first reports whether key was not seen within window (ever, when window
+// is zero), and remembers it now.
+func (s *sessionRecorder) first(key string, window time.Duration) bool {
 	if s.seen == nil {
-		s.seen = map[string]bool{}
+		s.seen = map[string]time.Time{}
 	}
-	if s.seen[key] {
+	now := time.Now()
+	if at, ok := s.seen[key]; ok && (window == 0 || now.Sub(at) < window) {
 		return false
 	}
-	s.seen[key] = true
+	s.seen[key] = now
 	return true
 }
 
@@ -793,17 +814,20 @@ func boundedLine(raw []byte, what string) []byte {
 // too deep to record: the envelope, and the reason the rest is missing.
 func droppedPayload(env hookEnvelope, note string) []byte {
 	out, err := json.Marshal(struct {
-		SessionID     string `json:"session_id"`
-		HookEventName string `json:"hook_event_name"`
-		CWD           string `json:"cwd,omitempty"`
-		ToolName      string `json:"tool_name,omitempty"`
-		ToolUseID     string `json:"tool_use_id,omitempty"`
-		DurationMs    *int64 `json:"duration_ms,omitempty"`
-		Error         string `json:"error,omitempty"`
-		AgentID       string `json:"agent_id,omitempty"`
-		AgentType     string `json:"agent_type,omitempty"`
-		Dropped       string `json:"agentrec_dropped"`
-	}{env.SessionID, env.HookEventName, env.CWD, env.ToolName, env.ToolUseID, env.DurationMs, env.Error, env.AgentID, env.AgentType, note})
+		SessionID      string `json:"session_id"`
+		HookEventName  string `json:"hook_event_name"`
+		CWD            string `json:"cwd,omitempty"`
+		ToolName       string `json:"tool_name,omitempty"`
+		ToolUseID      string `json:"tool_use_id,omitempty"`
+		DurationMs     *int64 `json:"duration_ms,omitempty"`
+		Error          string `json:"error,omitempty"`
+		AgentID        string `json:"agent_id,omitempty"`
+		AgentType      string `json:"agent_type,omitempty"`
+		PromptID       string `json:"prompt_id,omitempty"`
+		TurnID         string `json:"turn_id,omitempty"`
+		StopHookActive bool   `json:"stop_hook_active,omitempty"`
+		Dropped        string `json:"agentrec_dropped"`
+	}{env.SessionID, env.HookEventName, env.CWD, env.ToolName, env.ToolUseID, env.DurationMs, env.Error, env.AgentID, env.AgentType, env.PromptID, env.TurnID, env.StopHookActive, note})
 	if err != nil {
 		return []byte(`{"agentrec_dropped":"oversized delivery"}`)
 	}

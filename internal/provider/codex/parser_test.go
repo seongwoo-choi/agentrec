@@ -185,14 +185,15 @@ func TestParseAgentMessagesAndOrder(t *testing.T) {
 	if msg.Status != "completed" {
 		t.Errorf("message Status = %q, want %q", msg.Status, "completed")
 	}
-	var result struct {
+	// The text is the message's input, the one shape agent.message has.
+	var input struct {
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(msg.Result, &result); err != nil {
-		t.Fatalf("unmarshal message Result: %v", err)
+	if err := json.Unmarshal(msg.Input, &input); err != nil {
+		t.Fatalf("unmarshal message Input: %v", err)
 	}
-	if result.Text != "Running the build." {
-		t.Errorf("message Result.text = %q, want %q", result.Text, "Running the build.")
+	if input.Text != "Running the build." {
+		t.Errorf("message Input.text = %q, want %q", input.Text, "Running the build.")
 	}
 }
 
@@ -578,14 +579,14 @@ func TestParseDuplicateMessageIDKeepsFirst(t *testing.T) {
 	if res.WarningCount != 1 {
 		t.Errorf("WarningCount = %d, want 1", res.WarningCount)
 	}
-	var result struct {
+	var input struct {
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(res.Actions[0].Result, &result); err != nil {
-		t.Fatalf("unmarshal Result: %v", err)
+	if err := json.Unmarshal(res.Actions[0].Input, &input); err != nil {
+		t.Fatalf("unmarshal Input: %v", err)
 	}
-	if result.Text != "first" {
-		t.Errorf("Result.text = %q, want the first message's %q", result.Text, "first")
+	if input.Text != "first" {
+		t.Errorf("Input.text = %q, want the first message's %q", input.Text, "first")
 	}
 }
 

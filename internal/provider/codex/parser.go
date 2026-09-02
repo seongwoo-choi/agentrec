@@ -244,7 +244,9 @@ func Parse(r io.Reader) (ParseResult, error) {
 				continue
 			}
 			index[ev.Item.ID] = len(res.Actions)
-			result, err := json.Marshal(messageResult{Text: ev.Item.Text})
+			// The text is the message's input, as it is for Claude Code and
+			// for a reply a session's Stop hook reports: one shape per type.
+			input, err := json.Marshal(messageResult{Text: ev.Item.Text})
 			if err != nil {
 				continue
 			}
@@ -255,7 +257,7 @@ func Parse(r io.Reader) (ParseResult, error) {
 				Assurance:  action.AssuranceProviderReported,
 				FinishedAt: parseTime(ev.Timestamp),
 				Status:     statusCompleted,
-				Result:     result,
+				Input:      input,
 			})
 		case ev.Type == "item.completed" && ev.Item.Type == "error":
 			if !canClaimID(index, ev.Item.ID) {
