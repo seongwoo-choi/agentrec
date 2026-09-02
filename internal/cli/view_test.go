@@ -52,7 +52,7 @@ func TestViewAPIIncludesRequestActionsEventsAndEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler := newViewHandler(root, "run-ui")
+	handler := newViewHandler(root, "run-ui", false)
 	t.Cleanup(func() { _ = handler.Close() })
 	request := httptest.NewRequest(http.MethodGet, "/api/runs/run-ui", nil)
 	request.Host = "127.0.0.1:42817"
@@ -158,7 +158,7 @@ func TestViewChangesExposeImmutableTrackedAndUntrackedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler := newViewHandler(root, "run-changes")
+	handler := newViewHandler(root, "run-changes", false)
 	t.Cleanup(func() { _ = handler.Close() })
 	var run struct {
 		SnapshotID string            `json:"snapshotId"`
@@ -397,7 +397,7 @@ func TestViewRunRemainsReadableWhenChangeListEvidenceIsIncomplete(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	handler := newViewHandler(root, "run-incomplete-changes")
+	handler := newViewHandler(root, "run-incomplete-changes", false)
 	t.Cleanup(func() { _ = handler.Close() })
 	var run struct {
 		SnapshotID  string `json:"snapshotId"`
@@ -763,7 +763,7 @@ func TestViewPaginatesLargeStreams(t *testing.T) {
 	if err := b.Finalize(storage.Finalization{EndedAt: late, ExitReason: "completed"}); err != nil {
 		t.Fatal(err)
 	}
-	handler := newViewHandler(root, "run-pages")
+	handler := newViewHandler(root, "run-pages", false)
 	t.Cleanup(func() { _ = handler.Close() })
 
 	var detail struct {
@@ -802,7 +802,7 @@ func TestViewPagesAreAlsoBoundedByBytes(t *testing.T) {
 	if err := b.Finalize(storage.Finalization{EndedAt: late, ExitReason: "completed"}); err != nil {
 		t.Fatal(err)
 	}
-	handler := newViewHandler(root, "run-byte-pages")
+	handler := newViewHandler(root, "run-byte-pages", false)
 	t.Cleanup(func() { _ = handler.Close() })
 	var detail struct {
 		SnapshotID string `json:"snapshotId"`
@@ -971,7 +971,7 @@ func TestViewSnapshotStoreDoesNotAddAfterCancellation(t *testing.T) {
 func TestViewSnapshotDoesNotPublishAfterRequestCancellation(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-cancelled-snapshot", "claude", early, "completed")
-	handler := newViewHandler(root, "run-cancelled-snapshot")
+	handler := newViewHandler(root, "run-cancelled-snapshot", false)
 	t.Cleanup(func() { _ = handler.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	handler.snapshots.afterCopy = cancel
@@ -1100,7 +1100,7 @@ func TestViewSnapshotKeepsImmutableStreamBytes(t *testing.T) {
 	if err := b.Finalize(storage.Finalization{EndedAt: late, ExitReason: "completed"}); err != nil {
 		t.Fatal(err)
 	}
-	handler := newViewHandler(root, "run-immutable")
+	handler := newViewHandler(root, "run-immutable", false)
 	var detail struct {
 		SnapshotID string `json:"snapshotId"`
 	}
@@ -1135,7 +1135,7 @@ func TestViewSnapshotKeepsImmutableStreamBytes(t *testing.T) {
 func TestViewHandlerServesSelfContainedReadOnlyUIWithSecurityHeaders(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-ui", "claude", early, "completed")
-	handler := newViewHandler(root, "run-ui")
+	handler := newViewHandler(root, "run-ui", false)
 	t.Cleanup(func() { _ = handler.Close() })
 
 	for _, path := range []string{"/", "/assets/app.css", "/assets/app.js"} {
@@ -1264,7 +1264,7 @@ func TestViewRunListIsNewestFirstAndNamesInitialRun(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-old", "claude", early, "completed")
 	writeRun(t, root, "run-new", "codex", late, "completed")
-	handler := newViewHandler(root, "run-old")
+	handler := newViewHandler(root, "run-old", false)
 	t.Cleanup(func() { _ = handler.Close() })
 	request := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
 	request.Host = "127.0.0.1"
@@ -1342,12 +1342,12 @@ func fieldValue(fields []report.Field, name string) string {
 }
 
 func TestParseViewArgsAcceptsOnlyLoopbackListeners(t *testing.T) {
-	runID, listen, open, ok := parseViewArgs([]string{"run-ui", "--listen", "127.0.0.1:43177", "--no-open"})
+	runID, listen, open, _, ok := parseViewArgs([]string{"run-ui", "--listen", "127.0.0.1:43177", "--no-open"})
 	if !ok || runID != "run-ui" || listen != "127.0.0.1:43177" || open {
 		t.Fatalf("parseViewArgs returned run=%q listen=%q open=%v ok=%v", runID, listen, open, ok)
 	}
 	for _, address := range []string{"0.0.0.0:43177", "192.0.2.1:43177", ":43177", "not-an-address"} {
-		if _, _, _, ok := parseViewArgs([]string{"--listen", address}); ok {
+		if _, _, _, _, ok := parseViewArgs([]string{"--listen", address}); ok {
 			t.Errorf("accepted non-loopback listener %q", address)
 		}
 	}
@@ -1369,7 +1369,7 @@ func viewJSONRequest(t *testing.T, handler http.Handler, target string, out any)
 
 func TestViewRejectsTraversalRunID(t *testing.T) {
 	root := home(t)
-	handler := newViewHandler(root, "latest")
+	handler := newViewHandler(root, "latest", false)
 	t.Cleanup(func() { _ = handler.Close() })
 	request := httptest.NewRequest(http.MethodGet, "/api/runs/%2e%2e%2fsecret", nil)
 	request.Host = "127.0.0.1"

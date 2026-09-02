@@ -15,9 +15,9 @@ Usage:
   agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]
   agentrec show <run-id>|latest
   agentrec events <run-id>|latest [--json]
-  agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open]
+  agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open] [--allow-run]
   agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]
-  agentrec start [--listen <loopback-address>] [--no-open]
+  agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]
   agentrec stop
   agentrec status
   agentrec trash [restore <run-id> | empty]

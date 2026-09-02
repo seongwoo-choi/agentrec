@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,7 +28,7 @@ import (
 )
 
 const (
-	viewUsage         = "usage: agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open]\n"
+	viewUsage         = "usage: agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open] [--allow-run]\n"
 	defaultViewListen = "127.0.0.1:0"
 	promptFile        = "prompt.txt"
 )
@@ -135,7 +136,7 @@ type viewRunListResponse struct {
 }
 
 func runView(args []string, stdout, stderr io.Writer) int {
-	runID, listen, open, ok := parseViewArgs(args)
+	runID, listen, open, allowRun, ok := parseViewArgs(args)
 	if !ok {
 		fmt.Fprint(stderr, viewUsage)
 		return 2
@@ -182,7 +183,7 @@ func runView(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	handler := newViewHandler(root, runID)
+	handler := newViewHandler(root, runID, allowRun)
 	defer handler.Close()
 	server := &http.Server{
 		Handler:           handler,
@@ -204,32 +205,38 @@ func runView(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func parseViewArgs(args []string) (runID, listen string, open, ok bool) {
+func parseViewArgs(args []string) (runID, listen string, open, allowRun, ok bool) {
 	runID, listen, open, ok = latestRun, defaultViewListen, true, true
 	runSet, listenSet := false, false
 	for len(args) > 0 {
 		switch args[0] {
 		case "--no-open":
 			if !open {
-				return "", "", false, false
+				return "", "", false, false, false
 			}
 			open = false
 			args = args[1:]
+		case "--allow-run":
+			if allowRun {
+				return "", "", false, false, false
+			}
+			allowRun = true
+			args = args[1:]
 		case "--listen":
 			if listenSet || len(args) < 2 || !isLoopbackListen(args[1]) {
-				return "", "", false, false
+				return "", "", false, false, false
 			}
 			listenSet, listen = true, args[1]
 			args = args[2:]
 		default:
 			if runSet || (args[0] != latestRun && validateRunID(args[0]) != nil) {
-				return "", "", false, false
+				return "", "", false, false, false
 			}
 			runSet, runID = true, args[0]
 			args = args[1:]
 		}
 	}
-	return runID, listen, open, true
+	return runID, listen, open, allowRun, true
 }
 
 func isLoopbackListen(address string) bool {
@@ -263,6 +270,7 @@ func openViewBrowser(target string) error {
 type viewHandler struct {
 	http.Handler
 	snapshots *viewSnapshotStore
+	jobs      *shadowJobs
 	// token is what a request that changes the store must carry, in a
 	// header only this page's own script can send: a page on any other
 	// origin cannot read it (no CORS) and cannot set the header without a
@@ -270,12 +278,78 @@ type viewHandler struct {
 	token string
 }
 
-func (h *viewHandler) Close() error { return h.snapshots.Close() }
+func (h *viewHandler) Close() error {
+	h.jobs.Close()
+	return h.snapshots.Close()
+}
 
-func newViewHandler(root, initialRunID string) *viewHandler {
+func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
 	snapshots := newViewSnapshotStore(root)
 	token := newViewToken()
+	jobs := newShadowJobs(root, allowRun)
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/shadow", func(w http.ResponseWriter, _ *http.Request) {
+		writeViewJSON(w, jobs.overview())
+	})
+	mux.HandleFunc("POST /api/shadow/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if !viewMutationAllowed(r, token) {
+			writeViewError(w, http.StatusForbidden, errors.New("a request that changes the store must come from this page"))
+			return
+		}
+		var req shadowJobRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 6*shadowTaskLimit+4096)).Decode(&req); err != nil {
+			writeViewError(w, http.StatusBadRequest, errors.New("invalid comparison request"))
+			return
+		}
+		id, err := jobs.start(req)
+		switch {
+		case errors.Is(err, errShadowDisabled):
+			writeViewError(w, http.StatusForbidden, err)
+		case errors.Is(err, errShadowBusy), errors.Is(err, errShadowClosing):
+			writeViewError(w, http.StatusConflict, err)
+		case err != nil:
+			writeViewError(w, http.StatusBadRequest, err)
+		default:
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
+		}
+	})
+	mux.HandleFunc("GET /api/shadow/jobs/{jobID}", func(w http.ResponseWriter, r *http.Request) {
+		since := int64(0)
+		if raw := r.URL.Query().Get("since"); raw != "" {
+			parsed, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || parsed < 0 {
+				writeViewError(w, http.StatusBadRequest, errors.New("invalid offset"))
+				return
+			}
+			since = parsed
+		}
+		view, err := jobs.get(r.PathValue("jobID"), since)
+		if err != nil {
+			writeViewError(w, http.StatusNotFound, err)
+			return
+		}
+		writeViewJSON(w, view)
+	})
+	mux.HandleFunc("POST /api/shadow/jobs/{jobID}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if !viewMutationAllowed(r, token) {
+			writeViewError(w, http.StatusForbidden, errors.New("a request that changes the store must come from this page"))
+			return
+		}
+		switch err := jobs.cancel(r.PathValue("jobID")); {
+		case errors.Is(err, errShadowNotFound):
+			writeViewError(w, http.StatusNotFound, err)
+		case errors.Is(err, errShadowNotOpen):
+			writeViewError(w, http.StatusConflict, err)
+		case err != nil:
+			writeViewError(w, http.StatusInternalServerError, err)
+		default:
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusAccepted)
+		}
+	})
 	mux.HandleFunc("GET /api/token", func(w http.ResponseWriter, _ *http.Request) {
 		writeViewJSON(w, map[string]string{"token": token})
 	})
@@ -400,7 +474,7 @@ func newViewHandler(root, initialRunID string) *viewHandler {
 			writeViewError(w, http.StatusBadRequest, err)
 		}
 	})
-	return &viewHandler{Handler: viewSecurity(mux), snapshots: snapshots, token: token}
+	return &viewHandler{Handler: viewSecurity(mux), snapshots: snapshots, jobs: jobs, token: token}
 }
 
 func newViewToken() string {

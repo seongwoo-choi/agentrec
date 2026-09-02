@@ -22,7 +22,7 @@ import (
 // SIGTERM the viewer already shuts down cleanly on.
 
 const (
-	startUsage  = "usage: agentrec start [--listen <loopback-address>] [--no-open]\n"
+	startUsage  = "usage: agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]\n"
 	stopUsage   = "usage: agentrec stop\n"
 	statusUsage = "usage: agentrec status\n"
 
@@ -34,7 +34,12 @@ const (
 	viewerPIDFile  = "pid"
 	viewerURLFile  = "url"
 	viewerLogFile  = "log"
-	viewerStopWait = 5 * time.Second
+	viewerModeFile = "mode"
+	viewerAllowRun = "allow-run"
+	// Long enough for the viewer's own shutdown: connections drain for a
+	// few seconds, then a comparison still running is interrupted and given
+	// a moment before it is killed.
+	viewerStopWait = 15 * time.Second
 	// viewerStartWait bounds waiting for a freshly started viewer to say
 	// where it is listening.
 	viewerStartWait = 10 * time.Second
@@ -51,9 +56,10 @@ func viewerStateDir() (string, error) {
 }
 
 type viewerState struct {
-	dir string
-	pid int
-	url string
+	dir      string
+	pid      int
+	url      string
+	allowRun bool
 }
 
 // readViewerState reports the viewer the pid file names, if it is still alive.
@@ -81,12 +87,16 @@ func readViewerState() (viewerState, bool, error) {
 	if url, err := os.ReadFile(filepath.Join(dir, viewerURLFile)); err == nil {
 		state.url = strings.TrimSpace(string(url))
 	}
+	if mode, err := os.ReadFile(filepath.Join(dir, viewerModeFile)); err == nil {
+		state.allowRun = strings.TrimSpace(string(mode)) == viewerAllowRun
+	}
 	return state, true, nil
 }
 
 func clearViewerState(dir string) {
 	os.Remove(filepath.Join(dir, viewerPIDFile))
 	os.Remove(filepath.Join(dir, viewerURLFile))
+	os.Remove(filepath.Join(dir, viewerModeFile))
 }
 
 // processAlive reports whether a process with this pid exists. Signal 0 tests
@@ -98,11 +108,13 @@ func processAlive(pid int) bool {
 }
 
 func runStart(args []string, stdout, stderr io.Writer) int {
-	listen, open := defaultStartListen, true
+	listen, open, allowRun := defaultStartListen, true, false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--no-open":
 			open = false
+		case "--allow-run":
+			allowRun = true
 		case "--listen":
 			if i+1 >= len(args) || !isLoopbackListen(args[i+1]) {
 				fmt.Fprint(stderr, startUsage)
@@ -123,6 +135,9 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 	}
 	if running {
 		fmt.Fprintf(stdout, "agentrec viewer already running: %s (pid %d)\n", state.url, state.pid)
+		if allowRun && !state.allowRun {
+			fmt.Fprintln(stdout, "It was started without --allow-run; run 'agentrec stop' and start it again to run comparisons from the page.")
+		}
 		if open && state.url != "" {
 			if err := openViewBrowser(state.url); err != nil {
 				fmt.Fprintf(stderr, "Warning: browser did not open: %v\n", err)
@@ -150,7 +165,11 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 	startOffset, _ := logFile.Seek(0, io.SeekEnd)
-	cmd := exec.Command(exe, "view", "--no-open", "--listen", listen)
+	viewArgs := []string{"view", "--no-open", "--listen", listen}
+	if allowRun {
+		viewArgs = append(viewArgs, "--allow-run")
+	}
+	cmd := exec.Command(exe, viewArgs...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
@@ -173,6 +192,14 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := os.WriteFile(filepath.Join(state.dir, viewerURLFile), []byte(url+"\n"), 0o600); err != nil {
 		fmt.Fprintf(stderr, "cli: write viewer url: %v\n", err)
+		return exitFailure
+	}
+	mode := ""
+	if allowRun {
+		mode = viewerAllowRun
+	}
+	if err := os.WriteFile(filepath.Join(state.dir, viewerModeFile), []byte(mode+"\n"), 0o600); err != nil {
+		fmt.Fprintf(stderr, "cli: write viewer mode: %v\n", err)
 		return exitFailure
 	}
 	fmt.Fprintf(stdout, "agentrec viewer: %s (pid %d)\n", url, pid)
@@ -255,7 +282,11 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 	if running {
-		fmt.Fprintf(stdout, "viewer    running at %s (pid %d)\n", state.url, state.pid)
+		mode := ""
+		if state.allowRun {
+			mode = ", comparisons allowed"
+		}
+		fmt.Fprintf(stdout, "viewer    running at %s (pid %d%s)\n", state.url, state.pid, mode)
 	} else {
 		fmt.Fprintln(stdout, "viewer    not running (agentrec start)")
 	}

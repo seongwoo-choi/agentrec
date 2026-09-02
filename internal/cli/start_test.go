@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,7 +28,7 @@ func TestStartStopAndStatusManageABackgroundViewer(t *testing.T) {
 		t.Fatalf("status before start: exit %d\n%s%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = run(t, "start", "--no-open", "--listen", "127.0.0.1:0")
+	code, stdout, stderr = run(t, "start", "--no-open", "--listen", "127.0.0.1:0", "--allow-run")
 	if code != 0 {
 		t.Fatalf("start exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
@@ -69,9 +70,19 @@ func TestStartStopAndStatusManageABackgroundViewer(t *testing.T) {
 		t.Errorf("second start exit %d, stdout %q; want the running viewer named", code, stdout)
 	}
 	code, stdout, _ = run(t, "status")
-	if code != 0 || !strings.Contains(stdout, "viewer    running at "+url+" (pid "+strconv.Itoa(pid)+")") || !strings.Contains(stdout, "hooks not installed (agentrec setup)") {
+	if code != 0 || !strings.Contains(stdout, "viewer    running at "+url+" (pid "+strconv.Itoa(pid)+", comparisons allowed)") || !strings.Contains(stdout, "hooks not installed (agentrec setup)") {
 		t.Errorf("status while running: exit %d\n%s", code, stdout)
 	}
+	// The page can say so too.
+	resp, err = http.Get(url + "api/shadow")
+	if err != nil {
+		t.Fatalf("GET /api/shadow: %v", err)
+	}
+	var overview struct{ AllowRun bool }
+	if err := json.NewDecoder(resp.Body).Decode(&overview); err != nil || !overview.AllowRun {
+		t.Errorf("viewer started with --allow-run reports allowRun=%v (%v)", overview.AllowRun, err)
+	}
+	resp.Body.Close()
 
 	code, stdout, stderr = run(t, "stop")
 	if code != 0 || !strings.Contains(stdout, "agentrec viewer stopped (pid "+strconv.Itoa(pid)+")") {

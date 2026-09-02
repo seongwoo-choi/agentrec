@@ -61,7 +61,7 @@ func TestViewDeletesIntoTheTrashAndRestores(t *testing.T) {
 	at := time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
 	writeRun(t, root, "run-a", "claude", at, "completed")
 	writeRun(t, root, "run-b", "codex", at.Add(time.Hour), "completed")
-	handler := newViewHandler(root, "latest")
+	handler := newViewHandler(root, "latest", false)
 	t.Cleanup(func() { handler.Close() })
 	token := viewToken(t, handler)
 
@@ -130,7 +130,7 @@ func TestViewRefusesToDeleteAnOpenSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { listener.Close(); lock.Close() })
-	handler := newViewHandler(root, "latest")
+	handler := newViewHandler(root, "latest", false)
 	t.Cleanup(func() { handler.Close() })
 	if res := viewMutate(t, handler, http.MethodDelete, "/api/runs/run-open", viewToken(t, handler), nil); res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "still open") {
 		t.Errorf("DELETE of an open session = %d %s, want 409 saying it is open", res.Code, res.Body.String())
@@ -156,7 +156,7 @@ func TestViewRefusesToDeleteATraceStillBeingRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := newViewHandler(root, "latest")
+	handler := newViewHandler(root, "latest", false)
 	t.Cleanup(func() { handler.Close() })
 	token := viewToken(t, handler)
 	if res := viewMutate(t, handler, http.MethodDelete, "/api/runs/run-trace", token, nil); res.Code != http.StatusConflict {
@@ -184,7 +184,7 @@ func TestViewRefusesToDeleteDuringCloseOutAndForgetsTheInitialRun(t *testing.T) 
 	at := time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
 	writeRun(t, root, "run-old", "claude", at, "completed")
 	writeRun(t, root, "run-new", "claude", time.Now().Add(-time.Minute), "completed")
-	handler := newViewHandler(root, "run-old")
+	handler := newViewHandler(root, "run-old", false)
 	t.Cleanup(func() { handler.Close() })
 	token := viewToken(t, handler)
 	if res := viewMutate(t, handler, http.MethodDelete, "/api/runs/run-new", token, nil); res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "closed out") {
@@ -249,10 +249,10 @@ func TestViewMutationGuardsCoverBothEndpoints(t *testing.T) {
 	root := home(t)
 	at := time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
 	writeRun(t, root, "run-a", "claude", at, "completed")
-	handler := newViewHandler(root, "latest")
+	handler := newViewHandler(root, "latest", false)
 	t.Cleanup(func() { handler.Close() })
 	token := viewToken(t, handler)
-	other := newViewHandler(root, "latest")
+	other := newViewHandler(root, "latest", false)
 	t.Cleanup(func() { other.Close() })
 	if viewToken(t, other) == token {
 		t.Errorf("two viewers were given the same token")
