@@ -86,7 +86,10 @@ func TestGitAtReturnsWhenAGrandchildHoldsThePipes(t *testing.T) {
 
 	started := time.Now()
 	out, err := gitAt(context.Background(), "", maxSmallBytes, "anything")
-	if took := time.Since(started); took > 7*time.Second {
+	// Three times the wait delay: what is being proved is that gitAt returns
+	// at all while a grandchild holds the pipes, and a loaded machine has
+	// taken more than seven seconds to do what it does in five.
+	if took := time.Since(started); took > 15*time.Second {
 		t.Fatalf("gitAt took %v, want Git's exit plus the wait delay", took)
 	}
 	if err != nil || string(out) != "answer\n" {
