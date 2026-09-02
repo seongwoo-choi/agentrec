@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.4.0.md) ·
+[发布说明](docs/releases/v0.5.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -52,12 +52,14 @@
 
 ## 快速开始
 
-> **状态：** v0.4.0 是最新发布版本。会话现在会记录说过的话：每条提示词和每条最终回复
-> 都记在工具调用旁边；`agentrec setup` 和 `agentrec start` 让记录与回读各只需一条
-> 命令；查看器会用四种语言解释它显示的每一种状态。
+> **状态：** v0.5.0 是最新发布版本。运行记录可以从查看器中删除（进入回收站，CLI 可以
+> 从中恢复或将其清空），时间线改为滚动而非分页，会话的 token 用量、模型和提供方版本会从
+> 提供方的 transcript 中读取，`UNAVAILABLE` 被三个直白的词取代，并且在启用 `--allow-run`
+> 时，可以从页面上发起两个运行器的比较。
 >
-> v0.3.0 新增了 Claude Code 与 Codex 的交互式会话记录，把仓库证据固定到 Git 默认值，
-> 并防止脱敏把一行放大到超过流上限。
+> v0.4.0 新增了对提示词和回复的记录、`agentrec setup` 与 `agentrec start`，以及查看器的
+> 四种语言；v0.3.0 新增了 Claude Code 与 Codex 的交互式会话记录，把仓库证据固定到 Git
+> 默认值，并防止脱敏把一行放大到超过流上限。
 
 **任选一种安装方式。Homebrew 最简单。**
 
@@ -67,14 +69,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.4.0_darwin_arm64.tar.gz
+archive=agentrec_0.5.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.4.0_darwin_arm64/agentrec version
+./agentrec_0.5.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.4.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.5.0
 ```
 
 每个已打标签的发布版本都包含 `darwin_amd64`、`darwin_arm64`、`linux_amd64` 和
@@ -148,7 +150,9 @@ agentrec events latest --json
 `agentrec start` 会让查看器在后台持续运行于 `http://127.0.0.1:7788/` 并打开它；`status`
 会说明查看器是否在运行、已记录多少次运行以及 hooks 是否已安装；`stop` 会结束它。`view`
 在前台提供同样的页面。在查看器中删除的运行记录会进入回收站，`agentrec trash` 可以列出、
-恢复或清空它。
+恢复或清空它。以 `--allow-run` 启动时，查看器还能运行比较：在“比较运行器”面板里填入
+仓库、任务和运行器，它会替你启动 `agentrec shadow run`，并展示其输出以及记录下的两条
+运行记录。没有该标志时，面板只会把命令写出来供你复制。
 
 | 提供方 | 可执行文件 | 支持范围 | agentrec 注入的内容 |
 | --- | --- | --- | --- |
@@ -231,7 +235,7 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | 记录一次由 agentrec 启动并监管的非交互式运行。 |
 | 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | 安装用于记录交互式会话的 hooks；不带标志在终端中运行时，会询问记录哪个智能体、是否验证以及写到哪里。 |
-| ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | 在后台启动查看器并打开它。 |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | 在后台启动查看器并打开它；启用 `--allow-run` 时，可以从页面上发起比较。 |
 | ⏹️ `agentrec stop` | 停止后台查看器。 |
 | ℹ️ `agentrec status` | 报告查看器状态、运行记录数量以及 hooks 是否已安装。 |
 | 🗑️ `agentrec trash [restore <run-id> \| empty]` | 列出从查看器中删除的运行记录，恢复其中一条，或将其全部清除。 |
@@ -241,7 +245,7 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | 按时间倒序列出运行记录。 |
 | 📄 `agentrec show <run-id>\|latest` | 从证据包渲染一次运行；不写入任何内容。 |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 汇总或导出已记录的提供方事件。 |
-| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open]` | 在回环地址上提供只读查看器。 |
+| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 在回环地址上提供只读查看器。 |
 | 🏷️ `agentrec version` | 输出标签、提交和 UTC 构建时间。 |
 
 `agentrec hook <provider>` 和 `agentrec session serve` 也存在；前者由提供方运行，
@@ -367,7 +371,9 @@ agentrec 不声称什么：
   机器上任何能访问回环地址的进程都能读取每一条运行记录，并且从 v0.5.0 起还能把其中一条
   移入回收站。浏览器里来自其他源的页面则做不到：删除和恢复都需要一个只有查看器自己的
   页面才能读到的令牌，该令牌通过跨站请求无法携带的请求头发送，且 fetch 的目标必须同源。
-  查看器不会擦除任何内容；只有 `agentrec trash empty` 才会擦除。
+  查看器不会擦除任何内容；只有 `agentrec trash empty` 才会擦除。启用 `--allow-run` 后，
+  能访问回环地址的进程还能以你的身份在它自选的仓库中启动 `agentrec shadow run`：除非你
+  确实想要这样，否则不要开启该标志。
 - **持久化前进行结构化脱敏。** 提供方事件、stderr 和非事件 stdout 都会先脱敏再写入。
   字段名规范化后以 17 个秘密后缀之一结尾的字段下的值（`TOKEN`、`SECRET`、
   `PASSWORD`、`APIKEY`、`PASSPHRASE`、`AUTHORIZATION`、`COOKIE`、……）、`NAME=VALUE`
@@ -404,7 +410,7 @@ agentrec 不声称什么：
 
 ## 文档
 
-- [v0.4.0 发布说明](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.5.0 发布说明](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [飞行记录仪设计](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——recorder](docs/dogfood/2026-07-28-evidence.md)：一个固定的 20 次
@@ -422,7 +428,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.4.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.5.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 在本地构建发布归档，不发布任何内容；其输出目录必须

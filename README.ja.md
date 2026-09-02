@@ -41,7 +41,7 @@
 コードレビュー、障害調査、引き継ぎ、新しいエージェントバージョンを信頼するかの判断を、
 要約ではなく観測された事実から始められます。
 
-[リリースノート](docs/releases/v0.4.0.md) ·
+[リリースノート](docs/releases/v0.5.0.md) ·
 [設計ノート](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood の証拠](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,14 +55,17 @@
 
 ## クイックスタート
 
-> **ステータス:** 最新リリースは v0.4.0 です。セッションで何が語られたか、つまり各
-> プロンプトと各最終応答がツール呼び出しの隣に記録されるようになりました。`agentrec setup`
-> と `agentrec start` により、記録も読み返しもコマンド 1 つで済みます。ビューアーは
-> 表示するすべてのステータスを 4 か国語で説明します。
+> **ステータス:** 最新リリースは v0.5.0 です。run をビューアーから削除できるようになり
+> （移った先のゴミ箱は CLI で復元も空にもできます）、タイムラインはページ送りではなく
+> スクロールで続き、セッションのトークン使用量・モデル・プロバイダーのバージョンは
+> プロバイダーのトランスクリプトから読み取られ、`UNAVAILABLE` は 3 つの平易な言葉に
+> 置き換わり、そして `--allow-run` を付けたときには 2 つのランナーの比較をページから
+> 開始できます。
 >
-> v0.3.0 では Claude Code と Codex の対話セッション記録を追加し、リポジトリの証拠を
-> Git の既定値に固定し、redaction が行をストリーム上限を超えて膨らませないように
-> しました。
+> v0.4.0 ではプロンプトと応答の記録、`agentrec setup` と `agentrec start`、ビューアーの
+> 4 か国語を追加し、v0.3.0 では Claude Code と Codex の対話セッション記録を追加し、
+> リポジトリの証拠を Git の既定値に固定し、redaction が行をストリーム上限を超えて
+> 膨らませないようにしました。
 
 **インストール方法を 1 つ選びます。Homebrew が最も簡単です。**
 
@@ -72,14 +75,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.4.0_darwin_arm64.tar.gz
+archive=agentrec_0.5.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.4.0_darwin_arm64/agentrec version
+./agentrec_0.5.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.4.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.5.0
 ```
 
 各タグ付きリリースには `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64`
@@ -160,7 +163,10 @@ agentrec events latest --json
 まま保ち、ブラウザーで開きます。`status` はビューアーが動いているか、run がいくつ
 記録されているか、hooks がインストールされているかを伝え、`stop` はビューアーを終了
 します。`view` は同じページをフォアグラウンドで提供します。ビューアーで削除した run は
-ゴミ箱に移り、`agentrec trash` で一覧表示、復元、または空にできます。
+ゴミ箱に移り、`agentrec trash` で一覧表示、復元、または空にできます。`--allow-run` を
+付けて起動すると、ビューアーから比較も実行できます。「ランナー比較」パネルにリポジトリ、
+タスク、ランナーを入力すると、`agentrec shadow run` を代わりに起動し、その出力と記録された
+2 つの run を表示します。フラグなしでは、パネルはコピー用のコマンドを書き出すだけです。
 
 | プロバイダー | 実行ファイル | サポート範囲 | agentrec が注入するもの |
 | --- | --- | --- | --- |
@@ -251,7 +257,7 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | agentrec が起動・監督する非対話実行 1 件を記録します。 |
 | 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | 対話セッションを記録する hooks をインストールします。フラグなしでターミナルから実行すると、どのエージェントか、検証するか、どこに書くかを尋ねます。 |
-| ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | ビューアーをバックグラウンドで起動し、ブラウザーで開きます。 |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | ビューアーをバックグラウンドで起動し、ブラウザーで開きます。`--allow-run` を付けると、ページから比較を開始できます。 |
 | ⏹️ `agentrec stop` | バックグラウンドのビューアーを停止します。 |
 | ℹ️ `agentrec status` | ビューアーの状態、run の件数、hooks がインストールされているかを報告します。 |
 | 🗑️ `agentrec trash [restore <run-id> \| empty]` | ビューアーから削除した run を一覧表示するか、1 つを復元するか、すべてを消去します。 |
@@ -261,7 +267,7 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | 実行を新しい順に一覧します。 |
 | 📄 `agentrec show <run-id>\|latest` | 実行 1 件をバンドルから描画します。何も書き込みません。 |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 記録されたプロバイダーイベントを要約またはダンプします。 |
-| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open]` | 読み取り専用ビューアーをループバックで提供します。 |
+| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 読み取り専用ビューアーをループバックで提供します。 |
 | 🏷️ `agentrec version` | タグ、コミット、UTC のビルド時刻を出力します。 |
 
 `agentrec hook <provider>` と `agentrec session serve` も存在します。前者はプロバイダーが
@@ -396,7 +402,9 @@ agentrec が主張しないこと:
   それができません。削除と復元には、ビューアー自身のページだけが読めるトークンが必要で、
   それはクロスサイトリクエストでは載せられないヘッダーで送られ、宛先も同一オリジンへの
   fetch に限られます。ビューアーが消去することはありません。消去するのは
-  `agentrec trash empty` だけです。
+  `agentrec trash empty` だけです。`--allow-run` を付けると、ループバックに到達できる
+  プロセスは、任意のリポジトリであなたの権限で `agentrec shadow run` を起動することも
+  できます。それを望まないなら、フラグは付けないでください。
 - **永続化前の構造的な秘匿処理。** プロバイダーイベント、stderr、イベントでない stdout は、
   書き込まれる前に秘匿処理されます。正規化した名前が 17 種類の秘密サフィックス（`TOKEN`、
   `SECRET`、`PASSWORD`、`APIKEY`、`PASSPHRASE`、`AUTHORIZATION`、`COOKIE`、…）のいずれかで
@@ -438,7 +446,7 @@ agentrec が主張しないこと:
 
 ## ドキュメント
 
-- [v0.4.0 のリリースノート](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.5.0 のリリースノート](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [フライトレコーダーの設計](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood の証拠 — recorder](docs/dogfood/2026-07-28-evidence.md): 固定 20 回の
@@ -456,7 +464,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.4.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.5.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` はリリースアーカイブをローカルでビルドするだけで、何も公開

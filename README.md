@@ -41,7 +41,7 @@ comes from a different observer, and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.4.0.md) ·
+[Release notes](docs/releases/v0.5.0.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,12 +55,16 @@ version starts from what was observed rather than from a summary.
 
 ## Quick start
 
-> **Status:** v0.4.0 is the latest release. A session now records what was said,
-> each prompt and each final reply beside the tool calls; `agentrec setup` and
-> `agentrec start` make recording and reading back one command each; and the
-> viewer explains every status it shows, in four languages.
+> **Status:** v0.5.0 is the latest release. A run can be deleted from the viewer
+> (into a trash the CLI restores from or empties), the timeline scrolls instead
+> of paging, a session's token usage, model and provider version are read from
+> the provider's transcript, three plain words replace `UNAVAILABLE`, and —
+> behind `--allow-run` — a comparison of two runners can be launched from the
+> page.
 >
-> v0.3.0 added interactive session recording
+> v0.4.0 added prompts and replies to the recording, `agentrec setup` and
+> `agentrec start`, and the viewer's four languages; v0.3.0 added interactive
+> session recording
 > for Claude Code and Codex, pins repository evidence to Git's defaults, and keeps
 > redaction from growing a line past the stream limit.
 
@@ -72,14 +76,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.4.0_darwin_arm64.tar.gz
+archive=agentrec_0.5.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.4.0_darwin_arm64/agentrec version
+./agentrec_0.5.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.4.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.5.0
 ```
 
 Each tagged release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -157,7 +161,11 @@ agentrec events latest --json
 and opens it; `status` says whether it is running, how many runs are recorded and
 whether the hooks are installed; `stop` ends it. `view` serves the same pages in the
 foreground. A run deleted in the viewer goes to the trash, which `agentrec trash`
-lists, restores from, or empties.
+lists, restores from, or empties. Started with `--allow-run`, the viewer can also
+run a comparison: the Compare runners panel takes a repository, a task and the
+runners, launches `agentrec shadow run` for you, and shows its output and the two
+runs it recorded. Without the flag the panel only writes the command for you to
+copy.
 
 | Provider | Executable | Supported range | What agentrec injects |
 | --- | --- | --- | --- |
@@ -247,7 +255,7 @@ the interactive TUI follow the same documented contract.
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | Records one non-interactive run agentrec launches and supervises. |
 | 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | Installs the hooks that record interactive sessions; without flags, on a terminal, it asks which agent, whether to verify and where. |
-| ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | Starts the viewer in the background and opens it. |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | Starts the viewer in the background and opens it; with `--allow-run`, comparisons can be launched from the page. |
 | ⏹️ `agentrec stop` | Stops the background viewer. |
 | ℹ️ `agentrec status` | Reports the viewer, the run count and whether the hooks are installed. |
 | 🗑️ `agentrec trash [restore <run-id> \| empty]` | Lists the runs deleted from the viewer, restores one, or erases them all. |
@@ -257,7 +265,7 @@ the interactive TUI follow the same documented contract.
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | Lists runs newest first. |
 | 📄 `agentrec show <run-id>\|latest` | Renders one run from its bundle; writes nothing. |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | Summarises or dumps the recorded provider events. |
-| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open]` | Serves the read-only viewer on loopback. |
+| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | Serves the read-only viewer on loopback. |
 | 🏷️ `agentrec version` | Prints the tag, commit and UTC build time. |
 
 `agentrec hook <provider>` and `agentrec session serve` exist too; the provider
@@ -391,7 +399,9 @@ What agentrec does not claim:
   another origin in your browser cannot: deleting and restoring require a token
   only the viewer's own page can read, sent in a header no cross-site request can
   carry, and a same-origin fetch destination. Nothing is erased by the viewer;
-  only `agentrec trash empty` erases.
+  only `agentrec trash empty` erases. With `--allow-run`, a process that reaches
+  loopback can also launch `agentrec shadow run` in a repository of its choosing,
+  as you: leave the flag off unless you want that.
 - **Structural redaction before persistence.** Provider events, stderr and
   non-event stdout are redacted before they are written. Values under field names
   whose canonicalized form ends in one of 17 secret suffixes (`TOKEN`, `SECRET`,
@@ -435,7 +445,7 @@ and lock under the system temporary directory.
 
 ## Documentation
 
-- [Release notes for v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [Release notes for v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed
@@ -454,7 +464,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.4.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.5.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the release archives locally and publishes

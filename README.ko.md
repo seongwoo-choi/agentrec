@@ -40,7 +40,7 @@
 이를 섞지 않습니다. 그래서 코드 리뷰, 장애 조사, 인수인계, 새 에이전트 버전을
 믿을지에 대한 판단이 요약이 아니라 관측된 사실에서 출발합니다.
 
-[릴리스 노트](docs/releases/v0.4.0.md) ·
+[릴리스 노트](docs/releases/v0.5.0.md) ·
 [설계 노트](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 증거](docs/dogfood/2026-07-28-evidence.md) ·
@@ -54,12 +54,14 @@
 
 ## 빠른 시작
 
-> **상태:** v0.4.0이 최신 릴리스입니다. 세션에서 무엇을 말했는지, 즉 각 프롬프트와
-> 각 최종 응답이 도구 호출 옆에 기록됩니다. `agentrec setup`과 `agentrec start`로
-> 기록과 되읽기가 명령 하나씩이 됐고, viewer는 보여주는 모든 상태를 네 개 언어로
-> 설명합니다.
+> **상태:** v0.5.0이 최신 릴리스입니다. viewer에서 run을 삭제할 수 있고(휴지통으로,
+> CLI로 복원·비우기), 타임라인은 페이지 대신 스크롤로 이어지며, 세션의 토큰 사용량·
+> 모델·provider 버전을 provider의 transcript에서 읽고, `UNAVAILABLE` 대신 세 개의
+> 분명한 단어를 쓰며, `--allow-run`을 켜면 두 러너의 비교 실행을 화면에서 시작할 수
+> 있습니다.
 >
-> v0.3.0에서는 Claude Code와 Codex의 대화형 세션 기록이
+> v0.4.0에서는 프롬프트와 응답 기록, `agentrec setup`과 `agentrec start`, viewer의 네
+> 개 언어가 추가됐고, v0.3.0에서는 Claude Code와 Codex의 대화형 세션 기록이
 > 추가됐고, 저장소 증거를 Git 기본값에 고정하며, redaction이 스트림 한도를 넘게
 > 줄을 키우지 않습니다.
 
@@ -71,14 +73,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.4.0_darwin_arm64.tar.gz
+archive=agentrec_0.5.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.4.0_darwin_arm64/agentrec version
+./agentrec_0.5.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.4.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.5.0
 ```
 
 태그된 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`
@@ -156,7 +158,10 @@ agentrec events latest --json
 브라우저를 엽니다. `status`는 viewer가 돌고 있는지, run이 몇 개 기록됐는지, hooks가
 설치됐는지 알려 주고, `stop`은 viewer를 끝냅니다. `view`는 같은 화면을
 포그라운드로 띄웁니다. viewer에서 삭제한 run은 휴지통으로 가며, `agentrec trash`로
-나열·복원·비우기를 할 수 있습니다.
+나열·복원·비우기를 할 수 있습니다. `--allow-run`으로 시작하면 viewer에서 비교 실행도
+할 수 있습니다. "러너 비교" 패널에 저장소·작업·러너를 적으면 `agentrec shadow run`을
+대신 실행하고, 출력과 기록된 두 run을 보여줍니다. 플래그가 없으면 패널은 복사할
+명령만 만들어 줍니다.
 
 | Provider | 실행 파일 | 지원 범위 | agentrec이 주입하는 것 |
 | --- | --- | --- | --- |
@@ -243,7 +248,7 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | agentrec이 직접 실행하고 감독하는 비대화형 run 하나를 기록합니다. |
 | 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | 대화형 세션을 기록하는 hooks를 설치합니다. 플래그 없이 터미널에서 실행하면 어떤 에이전트인지, 검증할지, 어디에 쓸지 묻습니다. |
-| ▶️ `agentrec start [--listen <loopback-address>] [--no-open]` | viewer를 백그라운드로 띄우고 브라우저를 엽니다. |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | viewer를 백그라운드로 띄우고 브라우저를 엽니다. `--allow-run`이면 화면에서 비교 실행을 시작할 수 있습니다. |
 | ⏹️ `agentrec stop` | 백그라운드 viewer를 종료합니다. |
 | ℹ️ `agentrec status` | viewer 상태, 기록된 run 수, hooks 설치 여부를 보여줍니다. |
 | 🗑️ `agentrec trash [restore <run-id> \| empty]` | viewer에서 삭제한 run을 나열하거나, 하나를 되살리거나, 전부 지웁니다. |
@@ -253,7 +258,7 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | run을 최신순으로 나열합니다. |
 | 📄 `agentrec show <run-id>\|latest` | 번들에서 run 하나를 렌더합니다. 아무것도 쓰지 않습니다. |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 기록된 provider 이벤트를 요약하거나 덤프합니다. |
-| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open]` | 읽기 전용 viewer를 loopback에 띄웁니다. |
+| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 읽기 전용 viewer를 loopback에 띄웁니다. |
 | 🏷️ `agentrec version` | 태그, 커밋, UTC 빌드 시각을 출력합니다. |
 
 `agentrec hook <provider>`와 `agentrec session serve`도 있습니다. 앞의 것은
@@ -387,7 +392,9 @@ agentrec이 주장하지 않는 것:
   휴지통으로 옮길 수도 있습니다. 브라우저의 다른 출처 페이지는 그럴 수 없습니다.
   삭제와 복원에는 viewer 페이지만 읽을 수 있는 토큰이 필요하고, 그 토큰은 cross-site
   요청이 실을 수 없는 헤더로 보내며, same-origin fetch만 받습니다. viewer는 아무것도
-  지우지 않습니다. `agentrec trash empty`만 지웁니다.
+  지우지 않습니다. `agentrec trash empty`만 지웁니다. `--allow-run`을 켜면 loopback에
+  닿는 프로세스가 원하는 저장소에서 당신의 권한으로 `agentrec shadow run`을 시작할
+  수도 있습니다. 그걸 원하지 않으면 플래그를 끄세요.
 - **저장 전 구조적 redaction.** provider 이벤트, stderr, 이벤트가 아닌 stdout은
   쓰이기 전에 redaction을 거칩니다. 정규화된 이름이 17개 비밀 접미사(`TOKEN`,
   `SECRET`, `PASSWORD`, `APIKEY`, `PASSPHRASE`, `AUTHORIZATION`, `COOKIE`, …) 중
@@ -428,7 +435,7 @@ recorder는 소켓과 lock을 시스템 임시 디렉터리 아래에 둡니다.
 
 ## 문서
 
-- [v0.4.0 릴리스 노트](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.5.0 릴리스 노트](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [플라이트 레코더 설계](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 증거 — recorder](docs/dogfood/2026-07-28-evidence.md): 고정된 20회
@@ -446,7 +453,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.4.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.5.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 릴리스 아카이브를 로컬에서 빌드할 뿐 아무것도
