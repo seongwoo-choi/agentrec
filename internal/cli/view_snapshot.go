@@ -38,11 +38,15 @@ type viewAction struct {
 type viewActionPage struct {
 	Items      []viewAction `json:"items"`
 	NextCursor *int64       `json:"nextCursor,omitempty"`
+	// EndCursor is the offset after the last item, present even at the end
+	// of the stream: a page that follows a run as it grows resumes there.
+	EndCursor int64 `json:"endCursor"`
 }
 
 type viewEventPage struct {
 	Items      []json.RawMessage `json:"items"`
 	NextCursor *int64            `json:"nextCursor,omitempty"`
+	EndCursor  int64             `json:"endCursor"`
 }
 
 type viewSnapshot struct {
@@ -254,7 +258,10 @@ func captureViewStreamWithUnlinkContext(ctx context.Context, source *os.Root, na
 		file.Close()
 		return nil, 0, fmt.Errorf("cli: inspect %s while capturing viewer snapshot: %w", name, err)
 	}
-	if !sameViewFileMetadata(expected.info, info) {
+	// An append-only stream may have grown since it was looked at: the
+	// snapshot takes the prefix that was there then, which is a consistent
+	// view of a run still being recorded. Anything else must be unchanged.
+	if !viewStreamStill(name, expected.info, info) {
 		file.Close()
 		return nil, 0, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
 	}
@@ -272,7 +279,8 @@ func captureViewStreamWithUnlinkContext(ctx context.Context, source *os.Root, na
 		return nil, 0, errors.Join(err, file.Close(), copyFile.Close(), readCloseErr, os.Remove(temp))
 	}
 	hash := sha256.New()
-	_, copyErr := io.CopyN(io.MultiWriter(copyFile, hash), viewContextReader{ctx: ctx, reader: file}, info.Size())
+	size := expected.info.Size()
+	_, copyErr := io.CopyN(io.MultiWriter(copyFile, hash), viewContextReader{ctx: ctx, reader: file}, size)
 	after, statErr := file.Stat()
 	if copyErr != nil {
 		return cleanup(fmt.Errorf("cli: capture %s for viewer snapshot: %w", name, copyErr), nil)
@@ -282,7 +290,7 @@ func captureViewStreamWithUnlinkContext(ctx context.Context, source *os.Root, na
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], hash.Sum(nil))
-	if !sameViewFileMetadata(expected.info, after) || digest != expected.digest {
+	if !viewStreamStill(name, expected.info, after) || (!viewAppendOnly[name] && digest != expected.digest) {
 		return cleanup(fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name), nil)
 	}
 	readFile, err := os.Open(temp)
@@ -297,16 +305,16 @@ func captureViewStreamWithUnlinkContext(ctx context.Context, source *os.Root, na
 	if err != nil {
 		return cleanup(fmt.Errorf("cli: inspect writable viewer stream snapshot: %w", err), readFile)
 	}
-	if !os.SameFile(readInfo, writeInfo) || readInfo.Size() != info.Size() {
+	if !os.SameFile(readInfo, writeInfo) || readInfo.Size() != size {
 		return cleanup(errors.New("cli: viewer stream snapshot changed before it was pinned"), readFile)
 	}
 	readHash := sha256.New()
-	if _, err := io.CopyN(readHash, readFile, info.Size()); err != nil {
+	if _, err := io.CopyN(readHash, readFile, size); err != nil {
 		return cleanup(fmt.Errorf("cli: verify viewer stream snapshot: %w", err), readFile)
 	}
 	var readDigest [sha256.Size]byte
 	copy(readDigest[:], readHash.Sum(nil))
-	if readDigest != expected.digest {
+	if readDigest != digest || (!viewAppendOnly[name] && readDigest != expected.digest) {
 		return cleanup(errors.New("cli: viewer stream snapshot changed before it was pinned"), readFile)
 	}
 	if err := unlink(temp); err != nil {
@@ -319,7 +327,7 @@ func captureViewStreamWithUnlinkContext(ctx context.Context, source *os.Root, na
 		readFile.Close()
 		return nil, 0, fmt.Errorf("cli: close writable viewer stream snapshot: %w", err)
 	}
-	return readFile, info.Size(), nil
+	return readFile, size, nil
 }
 
 func (s *viewSnapshotStore) withSlot(r *http.Request, fn func() error) error {
@@ -495,6 +503,14 @@ func viewRunFingerprint(root *os.Root) (map[string]viewFileIdentity, error) {
 	return fingerprint, nil
 }
 
+// viewAppendOnly names the streams a recorder only ever appends to. A run
+// still being recorded grows them between the two looks a snapshot takes;
+// that is growth, not change, and reading them up to the size seen at
+// capture is a consistent view. They are not hashed — twice per snapshot,
+// every few seconds, over tens of megabytes — but their identity and
+// non-shrinking size are still checked.
+var viewAppendOnly = map[string]bool{actionsFile: true, providerEventsFile: true}
+
 func viewFileFingerprint(root *os.Root, name string) (viewFileIdentity, error) {
 	file, err := openRegularFromRoot(root, name)
 	if errors.Is(err, os.ErrNotExist) {
@@ -512,6 +528,10 @@ func viewFileFingerprint(root *os.Root, name string) (viewFileIdentity, error) {
 	if info.Size() > limit {
 		file.Close()
 		return viewFileIdentity{}, fmt.Errorf("cli: %s is larger than %d bytes", name, limit)
+	}
+	if viewAppendOnly[name] {
+		file.Close()
+		return viewFileIdentity{present: true, info: info}, nil
 	}
 	hash := sha256.New()
 	if _, err := io.CopyN(hash, file, info.Size()); err != nil {
@@ -535,11 +555,27 @@ func sameViewFingerprint(a, b map[string]viewFileIdentity) bool {
 		if !left.present {
 			continue
 		}
+		if viewAppendOnly[name] {
+			if !os.SameFile(left.info, right.info) || right.info.Size() < left.info.Size() || left.info.Mode() != right.info.Mode() {
+				return false
+			}
+			continue
+		}
 		if !sameViewFileMetadata(left.info, right.info) || left.digest != right.digest {
 			return false
 		}
 	}
 	return true
+}
+
+// viewStreamStill says whether a stream file is still the one that was
+// looked at: unchanged, or — for an append-only stream — the same file, no
+// shorter.
+func viewStreamStill(name string, before, now os.FileInfo) bool {
+	if viewAppendOnly[name] {
+		return os.SameFile(before, now) && now.Size() >= before.Size() && before.Mode() == now.Mode()
+	}
+	return sameViewFileMetadata(before, now)
 }
 
 func sameViewFileMetadata(a, b os.FileInfo) bool {
@@ -850,6 +886,7 @@ func readViewActionPage(snapshot *viewSnapshot, cursor int64) (viewActionPage, e
 		return viewActionPage{}, fmt.Errorf("cli: read %s page: %w", actionsFile, err)
 	}
 	page.NextCursor = viewNextCursor(position, snapshot.actionSize)
+	page.EndCursor = position
 	return page, nil
 }
 
@@ -890,6 +927,7 @@ func readViewEventPage(snapshot *viewSnapshot, cursor int64) (viewEventPage, err
 		return viewEventPage{}, fmt.Errorf("cli: read %s page: %w", providerEventsFile, err)
 	}
 	page.NextCursor = viewNextCursor(position, snapshot.eventSize)
+	page.EndCursor = position
 	return page, nil
 }
 

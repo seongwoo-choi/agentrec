@@ -403,6 +403,33 @@ func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
 		}
 		writeViewJSON(w, viewRunListResponse{1, initial, unreadable, out})
 	})
+	mux.HandleFunc("GET /api/runs/{runID}/live", func(w http.ResponseWriter, r *http.Request) {
+		live, err := readLiveChanges(root, r.PathValue("runID"))
+		switch {
+		case errors.Is(err, errRunNotRunning):
+			writeViewError(w, http.StatusConflict, err)
+		case errors.Is(err, os.ErrNotExist):
+			writeViewError(w, http.StatusNotFound, err)
+		case err != nil:
+			writeViewError(w, http.StatusBadRequest, err)
+		default:
+			writeViewJSON(w, live)
+		}
+	})
+	mux.HandleFunc("GET /api/search", func(w http.ResponseWriter, r *http.Request) {
+		limit := 0
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil {
+				limit = parsed
+			}
+		}
+		result, err := searchRuns(root, r.URL.Query().Get("q"), limit)
+		if err != nil {
+			writeViewError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeViewJSON(w, result)
+	})
 	mux.HandleFunc("GET /api/runs/{runID}", func(w http.ResponseWriter, r *http.Request) {
 		runID := r.PathValue("runID")
 		if runID == "" || validateRunID(runID) != nil || path.Base(runID) != runID {
