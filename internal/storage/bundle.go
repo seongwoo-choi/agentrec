@@ -103,6 +103,11 @@ type Finalization struct {
 // anything arriving after it belongs to a run that is no longer being recorded.
 var ErrFinalized = errors.New("storage: run already finalized")
 
+// ErrLineTooLarge says one line would not fit the stream once sanitized. It
+// is not a failure of the bundle: the line is not written, and the bundle
+// takes the next one. A recorder files what it can of the entry instead.
+var ErrLineTooLarge = errors.New("storage: line is too large")
+
 // MaxStreamLineBytes is the exclusive bound shared by bundle writers and
 // readers. bufio.Scanner needs room for the line delimiter inside this bound.
 const (
@@ -682,7 +687,7 @@ type streamState struct {
 // appendLine writes one sanitized JSON line to an already-open stream.
 func (b *Bundle) appendLine(f *os.File, name string, line []byte, state *streamState) error {
 	if len(line) >= MaxStreamLineBytes {
-		return b.fail(fmt.Errorf("storage: %s line is too large", name))
+		return fmt.Errorf("%w: %s", ErrLineTooLarge, name)
 	}
 	if state.entries == MaxStreamEntries {
 		return b.fail(fmt.Errorf("storage: %s holds too many entries", name))

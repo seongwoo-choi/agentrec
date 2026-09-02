@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
 	"github.com/seongwoo-choi/agentrec/internal/evidence"
@@ -399,6 +400,10 @@ type delivery struct {
 	raw       []byte
 	truncated bool
 	err       error
+	// at is when the delivery was read off the socket. Doubled deliveries
+	// are told apart by when they arrived, not by when the recorder — which
+	// may be busy redacting a large one — gets to them.
+	at time.Time
 }
 
 // sessionInbox takes deliveries off the socket as they arrive and queues them
@@ -482,7 +487,7 @@ func readDelivery(conn net.Conn) delivery {
 	if truncated {
 		raw = raw[:sessionReadLimit]
 	}
-	return delivery{raw: raw, truncated: truncated}
+	return delivery{raw: raw, truncated: truncated, at: time.Now()}
 }
 
 // sessionRecorder turns deliveries into the bundle's streams. It is used from
@@ -617,6 +622,15 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 	}
 	if err := s.bundle.WriteProviderEvent(raw); errors.Is(err, storage.ErrNotProviderEvent) {
 		s.store(s.bundle.WriteUnparsedLine(boundedLine(raw, "delivery that is not one JSON object")))
+	} else if errors.Is(err, storage.ErrLineTooLarge) {
+		// Under the limit as delivered, over it once redacted: kept the way
+		// an oversized delivery is, envelope without bulk.
+		s.warnings++
+		if dropped == "" {
+			dropped = fmt.Sprintf("payload of %d bytes grew past the %d-byte stream limit under redaction; tool input and response were not recorded", len(raw), storage.MaxStreamLineBytes)
+		}
+		env.ToolInput, env.ToolResponse = nil, nil
+		s.store(s.bundle.WriteProviderEvent(droppedPayload(env, dropped)))
 	} else {
 		s.store(err)
 	}
@@ -627,13 +641,13 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 		// session; the rest are in the event stream with everything else.
 		if !s.prompted && env.Prompt != "" {
 			s.prompted = true
-			s.store(s.bundle.WritePrompt(env.Prompt))
+			s.store(s.bundle.WritePrompt(boundedPrompt(env.Prompt)))
 		}
-		s.recordText(env, dropped)
+		s.recordText(env, dropped, d.at)
 	case hookStop:
-		s.recordText(env, dropped)
+		s.recordText(env, dropped, d.at)
 	case hookPostToolUse, hookPostToolUseFailure:
-		s.recordAction(env, dropped)
+		s.recordAction(env, dropped, d.at)
 	case hookSessionEnd:
 		return true
 	}
@@ -643,8 +657,8 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 // recordAction files a tool call the session's hook reported on. The hook
 // carries no timestamps: the times here are when the recorder took delivery,
 // and the duration is the provider's own.
-func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
-	if env.ToolUseID != "" && !s.first(env.HookEventName+":"+env.ToolUseID, 0) {
+func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string, at time.Time) {
+	if env.ToolUseID != "" && !s.first(env.HookEventName+":"+env.ToolUseID, 0, at) {
 		return
 	}
 	s.actions++
@@ -673,7 +687,11 @@ func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
 	if len(env.ToolInput) > 0 {
 		act.Input = env.ToolInput
 	}
-	if payload, err := json.Marshal(hookActionResult{
+	if recordsRepositoryPaths(act) {
+		act.RepositoryPaths = observeActionRepositoryPaths(act, s.cwd, s.canonicalCWD, s.repoRoot)
+		act.RepositoryPathsRecorded = true
+	}
+	s.fileAction(act, hookActionResult{
 		Source:       "hook." + env.HookEventName,
 		ToolResponse: env.ToolResponse,
 		Error:        env.Error,
@@ -681,14 +699,47 @@ func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
 		AgentID:      env.AgentID,
 		AgentType:    env.AgentType,
 		Dropped:      dropped,
-	}); err == nil {
-		act.Result = payload
+	})
+}
+
+// fileAction writes an action with its result, and when the redacted line
+// would not fit the stream, writes it again without its bulk: the envelope,
+// the source and a note saying what was dropped. One delivery never ends the
+// recording of the ones after it.
+func (s *sessionRecorder) fileAction(act action.Action, res hookActionResult) {
+	var err error
+	if act.Result, err = json.Marshal(res); err == nil {
+		err = s.bundle.WriteAction(act)
 	}
-	if recordsRepositoryPaths(act) {
-		act.RepositoryPaths = observeActionRepositoryPaths(act, s.cwd, s.canonicalCWD, s.repoRoot)
-		act.RepositoryPathsRecorded = true
+	if !errors.Is(err, storage.ErrLineTooLarge) {
+		s.store(err)
+		return
 	}
-	s.store(s.bundle.WriteAction(act))
+	s.warnings++
+	act.Input = nil
+	res.ToolResponse = nil
+	res.Error = bounded(res.Error, droppedFieldLimit)
+	res.Dropped = fmt.Sprintf("the action grew past the %d-byte stream limit under redaction; input and response were not recorded", storage.MaxStreamLineBytes)
+	if act.Result, err = json.Marshal(res); err == nil {
+		err = s.bundle.WriteAction(act)
+	}
+	s.store(err)
+}
+
+// droppedFieldLimit bounds each string a dropped delivery's stub keeps from
+// its envelope, so the stub itself always fits the stream.
+const droppedFieldLimit = 4096
+
+// bounded cuts s to limit bytes at a character boundary, marking the cut.
+func bounded(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // recordText files what was said: the operator's prompt as submitted, and the
@@ -696,7 +747,7 @@ func (s *sessionRecorder) recordAction(env hookEnvelope, dropped string) {
 // are the provider's word, filed under the same types the stream parser uses
 // for a traced run, and both pass through redaction like any other action.
 // The turn id pairs a reply with its prompt (prompt-<id> and reply-<id>).
-func (s *sessionRecorder) recordText(env hookEnvelope, dropped string) {
+func (s *sessionRecorder) recordText(env hookEnvelope, dropped string, at time.Time) {
 	var typ, prefix, key, text string
 	switch env.HookEventName {
 	case hookUserPromptSubmit:
@@ -723,14 +774,14 @@ func (s *sessionRecorder) recordText(env hookEnvelope, dropped string) {
 	// ends the same way — are filed again. Without a turn id (Claude Code
 	// before 2.1.196) the moment is all there is to go on.
 	digest := sha256.Sum256([]byte(text))
-	if !s.first(env.HookEventName+":"+turn+":"+hex.EncodeToString(digest[:])+":"+strconv.FormatBool(env.StopHookActive), duplicateDeliveryWindow) {
+	if !s.first(env.HookEventName+":"+turn+":"+hex.EncodeToString(digest[:])+":"+strconv.FormatBool(env.StopHookActive), duplicateDeliveryWindow, at) {
 		return
 	}
 	s.actions++
 	id := fmt.Sprintf("hook-%d", s.actions)
 	if turn != "" {
 		id = prefix + turn
-		if !s.first("id:"+id, 0) {
+		if !s.first("id:"+id, 0, at) {
 			// A turn a stop hook continued reports Stop again: filed beside
 			// the first, not over it.
 			id = fmt.Sprintf("%s-%d", id, s.actions)
@@ -748,36 +799,54 @@ func (s *sessionRecorder) recordText(env hookEnvelope, dropped string) {
 		Status:     hookStatusCompleted,
 		Input:      input,
 	}
-	if payload, err := json.Marshal(hookActionResult{
+	s.fileAction(act, hookActionResult{
 		Source:         "hook." + env.HookEventName,
 		Turn:           turn,
 		StopHookActive: env.StopHookActive,
 		AgentID:        env.AgentID,
 		AgentType:      env.AgentType,
 		Dropped:        dropped,
-	}); err == nil {
-		act.Result = payload
-	}
-	s.store(s.bundle.WriteAction(act))
+	})
 }
 
-// duplicateDeliveryWindow is how close two identical text deliveries must be
-// to count as one hook registered twice rather than the same thing said
-// again. Doubled deliveries arrive milliseconds apart; a person does not.
+// duplicateDeliveryWindow is how close two identical text deliveries must
+// arrive to count as one hook registered twice rather than the same thing
+// said again. Doubled deliveries arrive milliseconds apart; a person does
+// not. Arrival is what counts: the recorder may take longer than the window
+// to redact and file a large delivery before it reads the next.
 const duplicateDeliveryWindow = 2 * time.Second
 
-// first reports whether key was not seen within window (ever, when window
-// is zero), and remembers it now.
-func (s *sessionRecorder) first(key string, window time.Duration) bool {
+// first reports whether key was not seen within window of at (ever, when
+// window is zero), and remembers at.
+func (s *sessionRecorder) first(key string, window time.Duration, at time.Time) bool {
 	if s.seen == nil {
 		s.seen = map[string]time.Time{}
 	}
-	now := time.Now()
-	if at, ok := s.seen[key]; ok && (window == 0 || now.Sub(at) < window) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	if prev, ok := s.seen[key]; ok && (window == 0 || at.Sub(prev) < window) {
 		return false
 	}
-	s.seen[key] = now
+	s.seen[key] = at
 	return true
+}
+
+// promptFileLimit bounds prompt.txt to what every reader of the bundle will
+// open: the viewer refuses a document over maxDocumentBytes. A longer first
+// prompt is cut at a character boundary and says so at its end; the text the
+// payload limit allowed is in the user.prompt action.
+const promptFileLimit = maxDocumentBytes - 256
+
+func boundedPrompt(p string) string {
+	if len(p) <= promptFileLimit {
+		return p
+	}
+	cut := promptFileLimit
+	for cut > 0 && !utf8.RuneStart(p[cut]) {
+		cut--
+	}
+	return p[:cut] + fmt.Sprintf("\n[agentrec: prompt of %d bytes cut to %d here; see the user.prompt action]", len(p), cut)
 }
 
 // hookActionType maps a tool name onto an action type the way the provider's
@@ -831,7 +900,7 @@ func droppedPayload(env hookEnvelope, note string) []byte {
 		TurnID         string `json:"turn_id,omitempty"`
 		StopHookActive bool   `json:"stop_hook_active,omitempty"`
 		Dropped        string `json:"agentrec_dropped"`
-	}{env.SessionID, env.HookEventName, env.CWD, env.ToolName, env.ToolUseID, env.DurationMs, env.Error, env.AgentID, env.AgentType, env.PromptID, env.TurnID, env.StopHookActive, note})
+	}{env.SessionID, env.HookEventName, bounded(env.CWD, droppedFieldLimit), bounded(env.ToolName, droppedFieldLimit), bounded(env.ToolUseID, droppedFieldLimit), env.DurationMs, bounded(env.Error, droppedFieldLimit), bounded(env.AgentID, droppedFieldLimit), bounded(env.AgentType, droppedFieldLimit), bounded(env.PromptID, droppedFieldLimit), bounded(env.TurnID, droppedFieldLimit), env.StopHookActive, note})
 	if err != nil {
 		return []byte(`{"agentrec_dropped":"oversized delivery"}`)
 	}

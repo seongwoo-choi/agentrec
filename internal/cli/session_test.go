@@ -1100,16 +1100,19 @@ func TestSessionFilesADoublyDeliveredHookOnce(t *testing.T) {
 	}
 }
 
-// An oversized prompt is not lost from the record: prompt.txt keeps the
-// session's first prompt as it always did, the action says its text was
-// dropped, and the event standing in for the delivery still names the turn.
-func TestSessionKeepsAnOversizedFirstPromptPaired(t *testing.T) {
+// A large prompt is not lost from the record, and does not break a reader
+// either: prompt.txt holds the session's first prompt cut to what the viewer
+// will open, the user.prompt action holds what the payload limit allowed, an
+// oversized delivery's action says its text was dropped, and the event
+// standing in for that delivery still names the turn.
+func TestSessionKeepsALargeFirstPromptBoundedAndPaired(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
 	sessionSocketHome(t)
 	const sessionID = "session-big-0001"
 	socket, done, stderr := serveInProcess(t, sessionID, repo)
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": strings.Repeat("y", 2<<20), "prompt_id": "p-0"}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": strings.Repeat("x", sessionPayloadLimit+10), "prompt_id": "p-1"}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "second", "prompt_id": "p-2"}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
@@ -1117,18 +1120,94 @@ func TestSessionKeepsAnOversizedFirstPromptPaired(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
 	}
 	dir := onlyRunDir(t, root)
-	if got, err := os.ReadFile(filepath.Join(dir, "prompt.txt")); err != nil || !strings.HasPrefix(string(got), "xxxx") {
-		t.Errorf("prompt.txt = %.16q, %v; want the first prompt", got, err)
+	prompt, err := os.ReadFile(filepath.Join(dir, "prompt.txt"))
+	if err != nil || len(prompt) > maxDocumentBytes || !strings.HasPrefix(string(prompt), "yyyy") || !strings.Contains(string(prompt), "[agentrec: prompt of 2097152 bytes cut to") {
+		t.Errorf("prompt.txt = %d bytes (%v) starting %.8q; want the first prompt cut under %d bytes with a note", len(prompt), err, prompt, maxDocumentBytes)
 	}
 	actions := readActionsFile(t, dir)
-	if len(actions) != 2 || actions[0].ID != "prompt-p-1" || string(actions[0].Input) != `{"prompt":""}` || !strings.Contains(string(actions[0].Result), `"dropped":"payload of`) || !strings.Contains(string(actions[0].Result), `"turn":"p-1"`) {
-		t.Errorf("actions = %+v, want the dropped prompt first, with its turn", actions)
+	if len(actions) != 3 {
+		t.Fatalf("actions = %d, want 3", len(actions))
 	}
-	if len(actions) == 2 && string(actions[1].Input) != `{"prompt":"second"}` {
-		t.Errorf("second prompt = %s", actions[1].Input)
+	if actions[0].ID != "prompt-p-0" || len(actions[0].Input) < 2<<20 {
+		t.Errorf("large prompt action = %s with %d bytes of input, want prompt-p-0 in full", actions[0].ID, len(actions[0].Input))
+	}
+	if actions[1].ID != "prompt-p-1" || string(actions[1].Input) != `{"prompt":""}` || !strings.Contains(string(actions[1].Result), `"dropped":"payload of`) || !strings.Contains(string(actions[1].Result), `"turn":"p-1"`) {
+		t.Errorf("oversized prompt action = %s %s %s, want it dropped with its turn", actions[1].ID, actions[1].Input, actions[1].Result)
+	}
+	if string(actions[2].Input) != `{"prompt":"second"}` {
+		t.Errorf("second prompt = %s", actions[2].Input)
 	}
 	events, err := os.ReadFile(filepath.Join(dir, "provider-events.sanitized.jsonl"))
 	if err != nil || !strings.Contains(string(events), `"prompt_id":"p-1"`) || !strings.Contains(string(events), `"agentrec_dropped"`) {
 		t.Errorf("events do not pair the dropped delivery with its turn (%v):\n%.300s", err, events)
+	}
+}
+
+// Doubled deliveries are told apart by when they arrived at the socket, not
+// by when the recorder got to them: a large delivery can take longer than
+// the window to file.
+func TestDuplicateDeliveryWindowUsesArrivalTime(t *testing.T) {
+	s := &sessionRecorder{}
+	at := time.Now()
+	if !s.first("k", duplicateDeliveryWindow, at) {
+		t.Fatal("first delivery was taken for a duplicate")
+	}
+	if s.first("k", duplicateDeliveryWindow, at.Add(duplicateDeliveryWindow/2)) {
+		t.Error("a second copy within the window was filed again")
+	}
+	if !s.first("k", duplicateDeliveryWindow, at.Add(duplicateDeliveryWindow+time.Millisecond)) {
+		t.Error("the same words said again after the window were dropped")
+	}
+	if s.first("t", 0, at) && s.first("t", 0, at.Add(time.Hour)) {
+		t.Error("a tool_use_id was filed twice")
+	}
+}
+
+// A delivery under the payload limit can still outgrow the stream once
+// redaction has replaced every secret in it with a longer marker. Such a
+// line is filed as an envelope with a note, and everything after it is
+// recorded: no delivery ends the recording of the ones that follow.
+func TestSessionKeepsRecordingWhenRedactionGrowsALinePastTheLimit(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "session-grow-0001"
+	socket, done, stderr := serveInProcess(t, sessionID, repo)
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup"}))
+	// Under the limit as delivered; every secret grows under redaction.
+	dense := strings.Repeat("password=12345678 ", (sessionPayloadLimit-4096)/18)
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": dense, "prompt_id": "p-1"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "true"}, "tool_use_id": "toolu_1", "tool_response": ""}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "ok", "prompt_id": "p-1"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	dir := onlyRunDir(t, root)
+	if m := readManifestFile(t, dir); m.ExitReason != reasonSessionEnded || m.WarningCount == 0 {
+		t.Errorf("manifest = exitReason %q, warnings %d; want %s with the grown line counted", m.ExitReason, m.WarningCount, reasonSessionEnded)
+	}
+	actions := readActionsFile(t, dir)
+	if len(actions) != 3 || actions[0].ID != "prompt-p-1" || actions[1].ID != "toolu_1" || actions[2].ID != "reply-p-1" {
+		t.Fatalf("actions = %+v, want the grown prompt, the tool call and the reply", actions)
+	}
+	if len(actions[0].Input) > 0 && string(actions[0].Input) != `{"prompt":""}` || !strings.Contains(string(actions[0].Result), "grew past") {
+		t.Errorf("grown prompt action = input %s result %s; want no text and a note", actions[0].Input, actions[0].Result)
+	}
+	if string(actions[2].Input) != `{"text":"ok"}` {
+		t.Errorf("reply after the grown line = %s", actions[2].Input)
+	}
+	events, err := os.ReadFile(filepath.Join(dir, "provider-events.sanitized.jsonl"))
+	if err != nil || !strings.Contains(string(events), `"agentrec_dropped":"payload of`) || !strings.Contains(string(events), `"prompt_id":"p-1"`) || strings.Contains(string(events), "password=") {
+		t.Errorf("events (%v) lack the stub for the grown delivery, or leak it:\n%.400s", err, events)
+	}
+}
+
+// The stub for a dropped delivery bounds every string it keeps from the
+// envelope, so the stub itself always fits the stream.
+func TestDroppedPayloadIsBounded(t *testing.T) {
+	stub := droppedPayload(hookEnvelope{SessionID: "s", HookEventName: hookPostToolUseFailure, Error: strings.Repeat("e", 5<<20), CWD: strings.Repeat("/d", 4000)}, "note")
+	if len(stub) > 3*droppedFieldLimit || !json.Valid(stub) || !strings.Contains(string(stub), "…") {
+		t.Errorf("droppedPayload = %d bytes (valid %v), want a bounded, valid stub with the cuts marked", len(stub), json.Valid(stub))
 	}
 }
