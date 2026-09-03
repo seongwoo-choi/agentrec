@@ -40,7 +40,7 @@
 이를 섞지 않습니다. 그래서 코드 리뷰, 장애 조사, 인수인계, 새 에이전트 버전을
 믿을지에 대한 판단이 요약이 아니라 관측된 사실에서 출발합니다.
 
-[릴리스 노트](docs/releases/v0.6.0.md) ·
+[릴리스 노트](docs/releases/v0.7.0.md) ·
 [설계 노트](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 증거](docs/dogfood/2026-07-28-evidence.md) ·
@@ -54,11 +54,14 @@
 
 ## 빠른 시작
 
-> **상태:** v0.6.0이 최신 릴리스입니다. viewer가 실행 중인 세션을 따라갑니다. 새
-> 액션·프롬프트·응답이 기록되는 대로 화면에 나타나고, 변경 탭은 지금의 작업 트리를
-> 보여줍니다. 상단 검색창은 모든 run에서 단어를 찾습니다. 어디서 실행됐는지, 무엇을
-> 요청했는지, 무엇을 했는지.
+> **상태:** v0.7.0이 최신 릴리스입니다. run을 사후에 검증할 수 있습니다. 저장소에
+> 커밋된 검사를 오늘 다시 실행하고, 그 결과를 별도의 사후 측정으로 기록하며 HEAD가
+> 그동안 움직였는지 함께 남깁니다. 임의의 두 run을 화면에서 나란히 비교할 수도
+> 있습니다. 저장소가 얼마나 드는지도 이제 말해 줍니다. `agentrec status`가 디스크
+> 사용량을 알려주고, `agentrec trash sweep 30d`가 오래된 run을 휴지통으로 옮기며,
+> 실행 중인 run을 따라갈 때 스트림 전체를 몇 초마다 다시 복사하지 않습니다.
 >
+> v0.6.0에서는 실행 중인 세션의 실시간 화면과 모든 run 검색이 추가됐고,
 > v0.5.0에서는 휴지통으로의 삭제, 무한 스크롤, transcript 기반 사용량·모델, `UNAVAILABLE`
 > 대신 세 단어, `--allow-run` 뒤의 화면 비교 실행이 추가됐고, v0.4.0에서는 프롬프트와
 > 응답 기록, `agentrec setup`과 `agentrec start`, viewer의 네 개 언어가 추가됐으며,
@@ -74,14 +77,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.6.0_darwin_arm64.tar.gz
+archive=agentrec_0.7.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.6.0_darwin_arm64/agentrec version
+./agentrec_0.7.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.6.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.0
 ```
 
 태그된 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`
@@ -205,6 +208,12 @@ agentrec events latest --json
   경로를 추론하지 않습니다.
 - **provider 이벤트와 사용량** — 한도가 있는 provider 이벤트, 이벤트가 아닌
   stdout, provider가 보고한 토큰 사용량은 정규화된 액션과 분리해 둡니다.
+- **두 run 나란히 보기** — 화면에서 다른 run을 골라 함께 읽습니다. provider, 모델,
+  소요 시간, 사용량, 액션과 이벤트, 그리고 각자가 바꾼 파일을 여기만·저기만·양쪽
+  으로 나눠 보여줍니다.
+- **사후 검증** — 저장소에 커밋된 검사를 오늘 다시 실행할 수 있습니다. 화면에서도,
+  `agentrec verify`로도 됩니다. 결과는 실행 시각과 그동안 HEAD가 움직였는지와 함께
+  별도의 사후 측정으로 기록되며, run 자신의 판정은 그대로 남습니다.
 
 ## 네 가지 증거 계층
 
@@ -254,7 +263,8 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 | ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | viewer를 백그라운드로 띄우고 브라우저를 엽니다. `--allow-run`이면 화면에서 비교 실행을 시작할 수 있습니다. |
 | ⏹️ `agentrec stop` | 백그라운드 viewer를 종료합니다. |
 | ℹ️ `agentrec status` | viewer 상태, 기록된 run 수, hooks 설치 여부를 보여줍니다. |
-| 🗑️ `agentrec trash [restore <run-id> \| empty]` | viewer에서 삭제한 run을 나열하거나, 하나를 되살리거나, 전부 지웁니다. |
+| 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | viewer에서 삭제한 run을 나열하거나, 하나를 되살리거나, 전부 지우거나, `30d`처럼 지정한 나이보다 오래된 run을 휴지통으로 옮깁니다(`--dry-run`은 대상만 나열). |
+| ✅ `agentrec verify <run-id>\|latest` | 저장소에 커밋된 검증 설정을 지금, 오늘의 저장소 상태를 대상으로 실행하고 그 결과를 사후 측정으로 run 옆에 기록합니다(`--allow-run`으로 띄운 viewer는 run 페이지에서 같은 일을 합니다). |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | `setup`이 설치할 hooks 조각을 출력합니다. 손으로 설치할 때 씁니다. |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 하나의 작업을 같은 커밋에서 격리된 worktree 두 곳에 두 번 기록합니다. |
 | ⚖️ `agentrec shadow show <group-id>` | 기록된 비교를 증거만으로 다시 렌더합니다. |
@@ -433,12 +443,15 @@ run 디렉터리는 `0700`으로, 안의 모든 파일은 `report.md`까지 `060
 `process/result.json`(trace run만), `git/`(baseline, result, untracked 본문),
 `verification/results.json`, `report.md`가 들어갑니다.
 `provider-stdout.unparsed.log`는 provider가 이벤트가 아닌 무언가를 stdout에 출력했을
-때만 추가됩니다. `AGENTREC_HOME`은 기록 대상 저장소 밖에 있어야 하며, 대화형
-recorder는 소켓과 lock을 시스템 임시 디렉터리 아래에 둡니다.
+때만, `verification-posthoc/`는 run을 사후에 검증했을 때만 추가됩니다. 화면에서 지운
+run은 `agentrec trash empty` 전까지 `trash/`에서 기다리고, 실행 중인 viewer는 스트림
+사본을 `viewer-cache/` 아래 자기 디렉터리에 두었다가 종료할 때 지웁니다.
+`AGENTREC_HOME`은 기록 대상 저장소 밖에 있어야 하며, 대화형 recorder는 소켓과 lock을
+시스템 임시 디렉터리 아래에 둡니다.
 
 ## 문서
 
-- [v0.6.0 릴리스 노트](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.7.0 릴리스 노트](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [플라이트 레코더 설계](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 증거 — recorder](docs/dogfood/2026-07-28-evidence.md): 고정된 20회
@@ -456,7 +469,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.6.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.7.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 릴리스 아카이브를 로컬에서 빌드할 뿐 아무것도

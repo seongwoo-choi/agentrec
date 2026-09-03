@@ -41,7 +41,7 @@
 コードレビュー、障害調査、引き継ぎ、新しいエージェントバージョンを信頼するかの判断を、
 要約ではなく観測された事実から始められます。
 
-[リリースノート](docs/releases/v0.6.0.md) ·
+[リリースノート](docs/releases/v0.7.0.md) ·
 [設計ノート](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood の証拠](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,11 +55,14 @@
 
 ## クイックスタート
 
-> **ステータス:** 最新リリースは v0.6.0 です。ビューアーは実行中のセッションを追いかけます。
-> 新しいアクション、プロンプト、応答は記録されるそばから表示され、「変更」タブは今この
-> 瞬間の作業ツリーを示します。さらに検索欄が、すべての run から単語を見つけます。どこで
-> 実行されたのか、何を求められたのか、何をしたのか。
+> **ステータス:** 最新リリースは v0.7.0 です。run は後からでも検証できます。リポジトリに
+> コミット済みの検査を今日もう一度実行し、その結果を独立した後日の測定として記録し、
+> HEAD がその間に動いたかどうかも残します。任意の 2 つの run をページ上で並べて比較する
+> こともできます。ストアが何を消費しているかも分かるようになりました。`agentrec status`
+> がディスク使用量を示し、`agentrec trash sweep 30d` が古い run をゴミ箱へ移し、実行中の
+> run を追いかけるときにストリーム全体を数秒ごとにコピーし直すことがなくなりました。
 >
+> v0.6.0 では実行中セッションのライブ表示とすべての run を対象とする検索を追加し、
 > v0.5.0 ではゴミ箱への run の削除、無限スクロール、トランスクリプトから読み取る使用量と
 > モデル、`UNAVAILABLE` に代わる 3 つの平易な言葉、`--allow-run` を付けたときのページからの
 > 比較実行を追加し、v0.4.0 ではプロンプトと応答の記録、`agentrec setup` と `agentrec start`、
@@ -75,14 +78,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.6.0_darwin_arm64.tar.gz
+archive=agentrec_0.7.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.6.0_darwin_arm64/agentrec version
+./agentrec_0.7.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.6.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.0
 ```
 
 各タグ付きリリースには `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64`
@@ -213,6 +216,13 @@ manifest とすべての report に `versionUnverified` が刻まれます。`sh
 - **プロバイダーイベントと使用量** — 上限付きのプロバイダーイベント、イベントでない
   stdout、プロバイダー報告のトークン使用量は、正規化されたアクションとは分けて保持
   されます。
+- **2 つの run を並べて** — ページから別の run を選び、一緒に読みます。プロバイダー、
+  モデル、所要時間、使用量、アクションとイベント、そしてそれぞれが変更したファイルを
+  こちらだけ・あちらだけ・両方に分けて示します。
+- **後からの検証** — リポジトリにコミット済みの検査を、ページからでも
+  `agentrec verify` からでも、今日もう一度実行できます。結果は実行時刻と、その間に
+  HEAD が動いたかどうかとともに独立した後日の測定として記録され、run 自身の判定は
+  そのまま残ります。
 
 ## 4 つの証拠レイヤー
 
@@ -263,7 +273,8 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 | ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | ビューアーをバックグラウンドで起動し、ブラウザーで開きます。`--allow-run` を付けると、ページから比較を開始できます。 |
 | ⏹️ `agentrec stop` | バックグラウンドのビューアーを停止します。 |
 | ℹ️ `agentrec status` | ビューアーの状態、run の件数、hooks がインストールされているかを報告します。 |
-| 🗑️ `agentrec trash [restore <run-id> \| empty]` | ビューアーから削除した run を一覧表示するか、1 つを復元するか、すべてを消去します。 |
+| 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | ビューアーから削除した run を一覧表示するか、1 つを復元するか、すべてを消去するか、`30d` のように指定した期間より古い run をゴミ箱へ移します（`--dry-run` は対象を一覧表示するだけ）。 |
+| ✅ `agentrec verify <run-id>\|latest` | リポジトリにコミット済みの検証設定を今、今日のリポジトリの状態に対して実行し、その結果を後日の測定として run の横に記録します（`--allow-run` で起動したビューアーは run ページから同じことができます）。 |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | `setup` がインストールする hooks の断片を出力します。手動でインストールするときに使います。 |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 1 つのタスクを、1 つのコミット済み baseline から、隔離されたワークツリーで 2 回記録します。 |
 | ⚖️ `agentrec shadow show <group-id>` | 記録済みの比較を、証拠だけで再描画します。 |
@@ -443,13 +454,16 @@ agentrec が主張しないこと:
 サニタイズ済みのイベントストリームと stderr、`actions.jsonl`、`process/result.json`
 （trace した実行のみ）、`git/`（baseline、結果、未追跡ファイルの本文）、
 `verification/results.json`、`report.md` が収められます。`provider-stdout.unparsed.log`
-は、プロバイダーがイベントでないものを stdout に出力したときだけ加わります。
+は、プロバイダーがイベントでないものを stdout に出力したときだけ、
+`verification-posthoc/` は run を後から検証したときだけ加わります。ページから削除した
+run は `agentrec trash empty` まで `trash/` で待ち、動作中のビューアーはストリームの
+コピーを `viewer-cache/` の下の自分専用のディレクトリに置き、終了時に削除します。
 `AGENTREC_HOME` は記録対象のリポジトリの外になければならず、対話セッションの recorder は
 ソケットとロックをシステムの一時ディレクトリの下に置きます。
 
 ## ドキュメント
 
-- [v0.6.0 のリリースノート](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.7.0 のリリースノート](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [フライトレコーダーの設計](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood の証拠 — recorder](docs/dogfood/2026-07-28-evidence.md): 固定 20 回の
@@ -467,7 +481,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.6.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.7.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` はリリースアーカイブをローカルでビルドするだけで、何も公開

@@ -41,7 +41,7 @@ comes from a different observer, and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.6.0.md) ·
+[Release notes](docs/releases/v0.7.0.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,11 +55,15 @@ version starts from what was observed rather than from a summary.
 
 ## Quick start
 
-> **Status:** v0.6.0 is the latest release. The viewer follows a session while
-> it runs — new actions, prompts and replies appear as they are filed, and the
-> Changes tab shows the working tree as it is now — and a search field finds a
-> word across every run: where it happened, what was asked, what was done.
+> **Status:** v0.7.0 is the latest release. A run can be verified after the
+> fact — the repository's committed checks run again, today, filed as their own
+> later measurement that says whether HEAD has moved — and any two runs can be
+> compared side by side from the page. The store now says what it costs:
+> `agentrec status` reports its size on disk, `agentrec trash sweep 30d` moves
+> old runs into the trash, and following a live run no longer recopies its
+> whole streams every few seconds.
 >
+> v0.6.0 added the live view of a running session and search across every run;
 > v0.5.0 added deleting runs into a trash, infinite scroll, usage and model
 > from the transcript, three plain words for `UNAVAILABLE`, and comparisons
 > launched from the page behind `--allow-run`; v0.4.0 added prompts and
@@ -76,14 +80,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.6.0_darwin_arm64.tar.gz
+archive=agentrec_0.7.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.6.0_darwin_arm64/agentrec version
+./agentrec_0.7.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.6.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.0
 ```
 
 Each tagged release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -211,6 +215,13 @@ What the timeline and the viewer put in front of you:
   command and result text are never inferred as paths.
 - **Provider events and usage** — bounded provider events, non-event stdout, and
   provider-reported token usage stay separate from normalized actions.
+- **Two runs side by side** — pick any other run from the page and read them
+  together: provider, model, duration, usage, actions and events, and the files
+  each one changed, split into only-here, only-there, and both.
+- **Verified later** — the repository's committed checks can be run again today,
+  from the page or from `agentrec verify`. The result is filed as its own later
+  measurement, with the time it ran and whether HEAD has moved since; the run's
+  own verdict stays where it is.
 
 ## Four evidence layers
 
@@ -261,7 +272,8 @@ the interactive TUI follow the same documented contract.
 | ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | Starts the viewer in the background and opens it; with `--allow-run`, comparisons can be launched from the page. |
 | ⏹️ `agentrec stop` | Stops the background viewer. |
 | ℹ️ `agentrec status` | Reports the viewer, the run count and whether the hooks are installed. |
-| 🗑️ `agentrec trash [restore <run-id> \| empty]` | Lists the runs deleted from the viewer, restores one, or erases them all. |
+| 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | Lists the runs deleted from the viewer, restores one, erases them all, or sweeps runs older than an age such as `30d` into the trash (`--dry-run` only lists them). |
+| ✅ `agentrec verify <run-id>\|latest` | Runs the repository's committed verification config now, against the repository as it is today, and files the result beside the run as a later measurement (`--allow-run` viewers offer the same from the run page). |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | Prints the hooks fragment `setup` would install, for installing by hand. |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | Records one task twice, from one committed baseline, in isolated worktrees. |
 | ⚖️ `agentrec shadow show <group-id>` | Re-renders a recorded comparison, evidence only. |
@@ -442,13 +454,17 @@ One directory per run holds `manifest.json`, `prompt.txt`, the sanitized event
 stream and stderr, `actions.jsonl`, `process/result.json` (traced runs only),
 `git/` (baseline, result, untracked bodies), `verification/results.json` and
 `report.md`. `provider-stdout.unparsed.log` joins them only when the provider
-printed something on stdout that was not an event. `AGENTREC_HOME` must lie
-outside the repository being recorded; the interactive recorder keeps its socket
-and lock under the system temporary directory.
+printed something on stdout that was not an event, and `verification-posthoc/`
+only when the run was verified after the fact. Runs deleted from the page wait
+in `trash/` until `agentrec trash empty`; a running viewer keeps its stream
+copies in a directory of its own under `viewer-cache/` and removes them when it
+stops. `AGENTREC_HOME` must lie outside the repository being recorded; the
+interactive recorder keeps its socket and lock under the system temporary
+directory.
 
 ## Documentation
 
-- [Release notes for v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [Release notes for v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed
@@ -467,7 +483,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.6.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.7.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the release archives locally and publishes

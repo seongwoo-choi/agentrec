@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.6.0.md) ·
+[发布说明](docs/releases/v0.7.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -52,12 +52,15 @@
 
 ## 快速开始
 
-> **状态：** v0.6.0 是最新发布版本。查看器会跟随正在运行的会话——新的操作、提示词和
-> 回复一经记录就会出现，“变更”标签页展示的是此刻的工作树——搜索框则能在每一条运行
-> 记录中找到一个词：它发生在哪里、问了什么、做了什么。
+> **状态：** v0.7.0 是最新发布版本。运行记录可以事后再验证一次——仓库中已提交的检查
+> 今天重新运行，作为独立的事后测量记录下来，并说明 HEAD 在此期间是否移动过——任意
+> 两条运行记录也可以在页面上并排比较。存储的开销现在也能看见：`agentrec status` 会
+> 报告它占用的磁盘空间，`agentrec trash sweep 30d` 会把陈旧的运行记录移入回收站，跟随
+> 一条正在运行的记录时也不再每隔几秒重新复制整个流。
 >
-> v0.5.0 新增了把运行记录删除到回收站、无限滚动、从 transcript 读取用量和模型、取代
-> `UNAVAILABLE` 的三个直白的词，以及在启用 `--allow-run` 时从页面发起比较；v0.4.0 新增了
+> v0.6.0 新增了正在运行会话的实时视图，以及跨所有运行记录的搜索；v0.5.0 新增了把运行
+> 记录删除到回收站、无限滚动、从 transcript 读取用量和模型、取代 `UNAVAILABLE` 的三个
+> 直白的词，以及在启用 `--allow-run` 时从页面发起比较；v0.4.0 新增了
 > 对提示词和回复的记录、`agentrec setup` 与 `agentrec start`，以及查看器的四种语言；
 > v0.3.0 新增了 Claude Code 与 Codex 的交互式会话记录，把仓库证据固定到 Git 默认值，
 > 并防止脱敏把一行放大到超过流上限。
@@ -70,14 +73,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.6.0_darwin_arm64.tar.gz
+archive=agentrec_0.7.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.6.0_darwin_arm64/agentrec version
+./agentrec_0.7.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.6.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.0
 ```
 
 每个已打标签的发布版本都包含 `darwin_amd64`、`darwin_arm64`、`linux_amd64` 和
@@ -194,6 +197,11 @@ agentrec events latest --json
   `same path observed — not causal proof`；绝不会从命令或结果文本中推断路径。
 - **提供方事件与用量**——受限的提供方事件、非事件 stdout 以及提供方报告的 token
   用量，与规范化操作保持分离。
+- **两条运行记录并排**——在页面上任选另一条运行记录一起阅读：提供方、模型、时长、
+  用量、操作与事件，以及各自改动的文件，分为仅此处、仅彼处与两者皆有。
+- **事后验证**——仓库中已提交的检查今天可以重新运行，既可从页面发起，也可用
+  `agentrec verify`。结果连同运行时刻以及 HEAD 在此期间是否移动，一并作为独立的
+  事后测量记录下来；运行记录本身的判定保持原样。
 
 ## 四个证据层
 
@@ -241,7 +249,8 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 | ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | 在后台启动查看器并打开它；启用 `--allow-run` 时，可以从页面上发起比较。 |
 | ⏹️ `agentrec stop` | 停止后台查看器。 |
 | ℹ️ `agentrec status` | 报告查看器状态、运行记录数量以及 hooks 是否已安装。 |
-| 🗑️ `agentrec trash [restore <run-id> \| empty]` | 列出从查看器中删除的运行记录，恢复其中一条，或将其全部清除。 |
+| 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | 列出从查看器中删除的运行记录，恢复其中一条，将其全部清除，或把早于指定期限（如 `30d`）的运行记录移入回收站（`--dry-run` 仅列出对象）。 |
+| ✅ `agentrec verify <run-id>\|latest` | 立即针对仓库当前的状态运行其已提交的验证配置，并把结果作为事后测量记录在运行记录旁（以 `--allow-run` 启动的查看器可在运行页面执行同样的操作）。 |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 输出 `setup` 将要安装的 hooks 片段，供手动安装使用。 |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 从同一个已提交基线出发，在相互隔离的工作树中把同一任务记录两次。 |
 | ⚖️ `agentrec shadow show <group-id>` | 重新渲染一次已记录的比较，只呈现证据。 |
@@ -408,12 +417,15 @@ agentrec 不声称什么：
 其中包含 `manifest.json`、`prompt.txt`、经净化的事件流和 stderr、`actions.jsonl`、
 `process/result.json`（仅 trace 记录的运行）、`git/`（基线、结果、未跟踪文件内容）、
 `verification/results.json` 以及 `report.md`。只有当提供方在 stdout 输出了非事件
-内容时，才会有 `provider-stdout.unparsed.log`。`AGENTREC_HOME` 必须位于被记录的
-仓库之外；交互式 recorder 的 socket 和锁文件放在系统临时目录下。
+内容时，才会有 `provider-stdout.unparsed.log`；只有当运行记录事后被验证过，才会有
+`verification-posthoc/`。从页面删除的运行记录会留在 `trash/` 中，直到执行
+`agentrec trash empty`；运行中的查看器把流的副本放在 `viewer-cache/` 下属于自己的
+目录里，并在停止时删除。`AGENTREC_HOME` 必须位于被记录的仓库之外；交互式 recorder
+的 socket 和锁文件放在系统临时目录下。
 
 ## 文档
 
-- [v0.6.0 发布说明](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.7.0 发布说明](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [飞行记录仪设计](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——recorder](docs/dogfood/2026-07-28-evidence.md)：一个固定的 20 次
@@ -431,7 +443,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.6.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.7.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 在本地构建发布归档，不发布任何内容；其输出目录必须
