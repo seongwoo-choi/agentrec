@@ -23,12 +23,13 @@ const (
 
 // runSummary is one row of the run table.
 type runSummary struct {
-	ID           string
-	Provider     string
-	Project      string
-	StartedAt    time.Time
-	Exit         string
-	Verification string
+	ID                   string
+	Provider             string
+	Project              string
+	StartedAt            time.Time
+	Exit                 string
+	Verification         string
+	VerificationWarnings int
 }
 
 // runList prints the recorded runs, newest first.
@@ -133,6 +134,7 @@ func listRunsForTable(root, cwd string, exitReasonSet bool, exitReasonFilter str
 		run.Verification = verificationNotRun
 		if verification != nil {
 			run.Verification = verdict(verification.Status)
+			run.VerificationWarnings = len(verification.Warnings)
 		}
 		return true, nil
 	})

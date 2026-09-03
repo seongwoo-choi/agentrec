@@ -464,6 +464,8 @@ run은 `agentrec trash empty` 전까지 `trash/`에서 기다리고, 실행 중�
 ## 개발
 
 ```sh
+npm ci --include=dev
+npm run test:ui
 go test ./... -count=1 -timeout=420s
 go test -race ./... -count=1 -timeout=600s
 go vet ./...

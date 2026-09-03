@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -775,15 +776,23 @@ func validateUnparsedCount(want int) error {
 }
 
 func validateUnparsedFile(f *os.File, want int) error {
+	return validateUnparsedFileContext(context.Background(), f, want)
+}
+
+func validateUnparsedFileContext(ctx context.Context, f *os.File, want int) error {
 	info, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("cli: read %s: %w", unparsedFile, err)
 	}
-	if info.Size() > maxActionStreamBytes {
+	return validateUnparsedReaderContext(ctx, f, info.Size(), want)
+}
+
+func validateUnparsedReaderContext(ctx context.Context, reader io.Reader, size int64, want int) error {
+	if size > maxActionStreamBytes {
 		return fmt.Errorf("cli: %s is larger than %d bytes", unparsedFile, maxActionStreamBytes)
 	}
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(&viewContextReader{ctx: ctx, reader: reader})
 	scanner.Buffer(nil, maxActionBytes)
 	got := 0
 	for scanner.Scan() {

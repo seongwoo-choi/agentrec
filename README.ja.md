@@ -476,6 +476,8 @@ run は `agentrec trash empty` まで `trash/` で待ち、動作中のビュー
 ## 開発
 
 ```sh
+npm ci --include=dev
+npm run test:ui
 go test ./... -count=1 -timeout=420s
 go test -race ./... -count=1 -timeout=600s
 go vet ./...

@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,12 +106,22 @@ type untrackedChangeDocument struct {
 }
 
 func prepareViewChanges(snapshot *viewSnapshot) error {
+	return prepareViewChangesContext(context.Background(), snapshot)
+}
+
+func prepareViewChangesContext(ctx context.Context, snapshot *viewSnapshot) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	gitRaw, gitErr := capturedViewDocument(snapshot, gitDir+"/"+resultFile)
 	if gitErr == nil && !utf8.Valid(gitRaw) {
 		return errors.New("cli: read git/result.json: invalid UTF-8")
 	}
 	result, err := decodeGitResult(gitRaw, gitErr)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	trackedRaw, trackedPresent := snapshot.documents[gitDir+"/"+trackedStatFile]
@@ -134,11 +145,14 @@ func prepareViewChanges(snapshot *viewSnapshot) error {
 	}
 
 	var tracked trackedChangeDocument
-	if err := decodeViewChangeDocument(trackedRaw, gitDir+"/"+trackedStatFile, &tracked); err != nil {
+	if err := decodeViewChangeDocumentContext(ctx, trackedRaw, gitDir+"/"+trackedStatFile, &tracked); err != nil {
 		return err
 	}
 	var untracked untrackedChangeDocument
-	if err := decodeViewChangeDocument(untrackedRaw, gitDir+"/"+untrackedChangesFile, &untracked); err != nil {
+	if err := decodeViewChangeDocumentContext(ctx, untrackedRaw, gitDir+"/"+untrackedChangesFile, &untracked); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if tracked.Attribution != evidence.Attribution || untracked.Attribution != evidence.Attribution {
@@ -179,6 +193,9 @@ func prepareViewChanges(snapshot *viewSnapshot) error {
 	paths := make(map[string]struct{}, len(tracked.Files)+len(untracked.Files))
 	trackedAdditions, trackedDeletions, trackedBinary := 0, 0, 0
 	for _, file := range tracked.Files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !validViewChangePath(file.Path) {
 			return errors.New("cli: tracked change has an invalid path")
 		}
@@ -212,6 +229,9 @@ func prepareViewChanges(snapshot *viewSnapshot) error {
 	}
 	stored := 0
 	for _, file := range untracked.Files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !validViewChangePath(file.Path) || file.Size < 0 {
 			return errors.New("cli: untracked change has invalid metadata")
 		}
@@ -236,10 +256,10 @@ func prepareViewChanges(snapshot *viewSnapshot) error {
 		}
 		return nil
 	}
-	if err := validateViewPatchUTF8(snapshot.patch, snapshot.patchSize); err != nil {
+	if err := validateViewPatchUTF8Context(ctx, snapshot.patch, snapshot.patchSize); err != nil {
 		return err
 	}
-	sections, err := indexViewPatch(snapshot.patch, snapshot.patchSize)
+	sections, err := indexViewPatchContext(ctx, snapshot.patch, snapshot.patchSize)
 	if err != nil {
 		return err
 	}
@@ -256,10 +276,17 @@ func prepareViewChanges(snapshot *viewSnapshot) error {
 }
 
 func validateViewPatchUTF8(file io.ReaderAt, size int64) error {
+	return validateViewPatchUTF8Context(context.Background(), file, size)
+}
+
+func validateViewPatchUTF8Context(ctx context.Context, file io.ReaderAt, size int64) error {
 	reader := io.NewSectionReader(file, 0, size)
 	buffer := make([]byte, 64<<10)
 	pending := make([]byte, 0, utf8.UTFMax)
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		n, err := reader.Read(buffer)
 		data := buffer[:n]
 		if len(pending) != 0 {
@@ -328,10 +355,267 @@ func summarizeViewChanges(snapshot *viewSnapshot) viewChangeSummary {
 }
 
 func decodeViewChangeDocument(data []byte, name string, target any) error {
-	if !utf8.Valid(data) {
+	return decodeViewChangeDocumentContext(context.Background(), data, name, target)
+}
+
+func validateViewJSONElementBoundsContext(ctx context.Context, data []byte) error {
+	inString := false
+	escaped := false
+	stringBytes := 0
+	objectStarts := make([]int, 0, 2)
+	for i, b := range data {
+		if i%viewContextChunkSize == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if inString {
+			if escaped {
+				escaped = false
+			} else if b == '\\' {
+				escaped = true
+			} else if b == '"' {
+				inString = false
+				continue
+			}
+			stringBytes++
+			if stringBytes > viewContextChunkSize {
+				return fmt.Errorf("JSON string exceeds %d bytes", viewContextChunkSize)
+			}
+			continue
+		}
+		if len(objectStarts) > 1 && i-objectStarts[len(objectStarts)-1]+1 > viewContextChunkSize {
+			return errors.New("nested JSON object exceeds viewer bound")
+		}
+		switch b {
+		case '"':
+			inString = true
+			stringBytes = 0
+		case '{':
+			objectStarts = append(objectStarts, i)
+		case '}':
+			if len(objectStarts) == 0 {
+				continue
+			}
+			start := objectStarts[len(objectStarts)-1]
+			if len(objectStarts) > 1 && i-start+1 > viewContextChunkSize {
+				return fmt.Errorf("nested JSON object exceeds %d bytes", viewContextChunkSize)
+			}
+			objectStarts = objectStarts[:len(objectStarts)-1]
+		}
+	}
+	return ctx.Err()
+}
+
+func decodeViewChangeDocumentContext(ctx context.Context, data []byte, name string, target any) error {
+	valid, err := validViewUTF8Context(ctx, data)
+	if err != nil {
+		return err
+	}
+	if !valid {
 		return fmt.Errorf("cli: read %s: invalid UTF-8", name)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := validateViewJSONElementBoundsContext(ctx, data); err != nil {
+		return fmt.Errorf("cli: read %s: %w", name, err)
+	}
+	var decodeErr error
+	switch out := target.(type) {
+	case *trackedChangeDocument:
+		decodeErr = decodeTrackedChangeDocumentContext(ctx, bytes.NewReader(data), out)
+	case *untrackedChangeDocument:
+		decodeErr = decodeUntrackedChangeDocumentContext(ctx, bytes.NewReader(data), out)
+	default:
+		return decodeViewChangeReaderContext(ctx, bytes.NewReader(data), name, target)
+	}
+	if decodeErr != nil {
+		return fmt.Errorf("cli: read %s: %w", name, decodeErr)
+	}
+	return nil
+}
+
+func newViewChangeDecoder(ctx context.Context, reader io.Reader) *json.Decoder {
+	decoder := json.NewDecoder(&viewContextReader{ctx: ctx, reader: reader})
+	decoder.DisallowUnknownFields()
+	return decoder
+}
+
+func expectViewJSONDelimiter(decoder *json.Decoder, want json.Delim) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != want {
+		return fmt.Errorf("expected %q", want)
+	}
+	return nil
+}
+
+func finishViewJSONDocument(decoder *json.Decoder) error {
+	if err := expectViewJSONDelimiter(decoder, '}'); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("trailing data")
+	}
+	return nil
+}
+
+func decodeTrackedChangeDocumentContext(ctx context.Context, reader io.Reader, out *trackedChangeDocument) error {
+	decoder := newViewChangeDecoder(ctx, reader)
+	if err := expectViewJSONDelimiter(decoder, '{'); err != nil {
+		return err
+	}
+	for decoder.More() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return errors.New("object key is not a string")
+		}
+		switch name {
+		case "status":
+			err = decoder.Decode(&out.Status)
+		case "reason":
+			err = decoder.Decode(&out.Reason)
+		case "attribution":
+			err = decoder.Decode(&out.Attribution)
+		case "baseline":
+			err = decoder.Decode(&out.Baseline)
+		case "totals":
+			err = decoder.Decode(&out.Totals)
+		case "files":
+			out.Files = nil
+			if err = expectViewJSONDelimiter(decoder, '['); err == nil {
+				for decoder.More() {
+					if err = ctx.Err(); err != nil {
+						break
+					}
+					var file struct {
+						Path      string `json:"path"`
+						Additions *int   `json:"additions,omitempty"`
+						Deletions *int   `json:"deletions,omitempty"`
+						Binary    bool   `json:"binary,omitempty"`
+					}
+					if err = decoder.Decode(&file); err != nil {
+						break
+					}
+					out.Files = append(out.Files, file)
+					if len(out.Files) > maxViewChanges {
+						err = fmt.Errorf("change document holds more than %d files", maxViewChanges)
+						break
+					}
+				}
+				if err == nil {
+					err = expectViewJSONDelimiter(decoder, ']')
+				}
+			}
+		default:
+			return fmt.Errorf("unknown field %q", name)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return finishViewJSONDocument(decoder)
+}
+
+func decodeUntrackedChangeDocumentContext(ctx context.Context, reader io.Reader, out *untrackedChangeDocument) error {
+	decoder := newViewChangeDecoder(ctx, reader)
+	if err := expectViewJSONDelimiter(decoder, '{'); err != nil {
+		return err
+	}
+	for decoder.More() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return errors.New("object key is not a string")
+		}
+		switch name {
+		case "attribution":
+			err = decoder.Decode(&out.Attribution)
+		case "count":
+			err = decoder.Decode(&out.Count)
+		case "stored":
+			err = decoder.Decode(&out.Stored)
+		case "files":
+			out.Files = nil
+			if err = expectViewJSONDelimiter(decoder, '['); err == nil {
+				for decoder.More() {
+					if err = ctx.Err(); err != nil {
+						break
+					}
+					var file struct {
+						Path      string `json:"path"`
+						Kind      string `json:"kind"`
+						Mode      string `json:"mode"`
+						Size      int64  `json:"size"`
+						SHA256    string `json:"sha256,omitempty"`
+						HashBasis string `json:"hashBasis,omitempty"`
+						Stored    bool   `json:"stored"`
+						Reason    string `json:"reason,omitempty"`
+						StoredAs  string `json:"storedAs,omitempty"`
+					}
+					if err = decoder.Decode(&file); err != nil {
+						break
+					}
+					out.Files = append(out.Files, file)
+					if len(out.Files) > maxViewChanges {
+						err = fmt.Errorf("change document holds more than %d files", maxViewChanges)
+						break
+					}
+				}
+				if err == nil {
+					err = expectViewJSONDelimiter(decoder, ']')
+				}
+			}
+		default:
+			return fmt.Errorf("unknown field %q", name)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return finishViewJSONDocument(decoder)
+}
+
+func validViewUTF8Context(ctx context.Context, data []byte) (bool, error) {
+	for start := 0; start < len(data); {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		end := min(start+viewContextChunkSize, len(data))
+		if end < len(data) {
+			for end > start && !utf8.RuneStart(data[end]) {
+				end--
+			}
+			if end == start {
+				return false, nil
+			}
+		}
+		if !utf8.Valid(data[start:end]) {
+			return false, nil
+		}
+		start = end
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func decodeViewChangeReaderContext(ctx context.Context, reader io.Reader, name string, target any) error {
+	decoder := json.NewDecoder(&viewContextReader{ctx: ctx, reader: reader})
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("cli: read %s: %w", name, err)
@@ -389,6 +673,10 @@ func readViewPatchPage(snapshot *viewSnapshot, path string, cursor int64) (viewP
 }
 
 func indexViewPatch(file io.ReaderAt, size int64) (map[string]viewPatchSection, error) {
+	return indexViewPatchContext(context.Background(), file, size)
+}
+
+func indexViewPatchContext(ctx context.Context, file io.ReaderAt, size int64) (map[string]viewPatchSection, error) {
 	reader := bufio.NewReaderSize(io.NewSectionReader(file, 0, size), maxViewPatchHeaderSize)
 	sections := make(map[string]viewPatchSection)
 	var currentPath string
@@ -396,6 +684,9 @@ func indexViewPatch(file io.ReaderAt, size int64) (map[string]viewPatchSection, 
 	var offset int64
 	atLineStart := true
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		fragment, err := reader.ReadSlice('\n')
 		lineStart := offset
 		offset += int64(len(fragment))

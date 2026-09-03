@@ -4,7 +4,7 @@
   const POLL_MS = 5000;
   const LIVE_MS = 3000;
   const SEARCH_MS = 400;
-  const state = { lang: 'en', runs: [], run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -928,6 +928,7 @@ function shortID(id) {
     const v = String(value || '').toLowerCase();
     if (v === 'pass' || v === 'passed' || v === 'completed' || v === 'success') return 'pass';
     if (['fail', 'failed', 'error', 'timeout', 'nonzero', 'interrupted', 'parse_error', 'storage_error', 'start_error'].includes(v)) return 'fail';
+    if (v === 'tainted') return 'warn';
     return '';
   }
 
@@ -963,7 +964,7 @@ function shortID(id) {
     running: { value: 'RUNNING', tone: '', detail: 'Session is still open; results appear when it ends.' },
     unknown: { value: 'UNKNOWN', tone: '', detail: 'The recorder ended without writing how the session ended.' },
     session_ended: { value: 'ENDED', tone: '', detail: 'Ended by the provider\'s SessionEnd hook, as reported.' },
-    session_lost: { value: 'LOST', tone: 'warn', detail: 'No hook arrived for the idle timeout, or the recorder was signalled; the session\'s own end was not seen.' },
+    session_lost: { value: 'LOST', tone: 'fail', detail: 'No hook arrived for the idle timeout, or the recorder was signalled; the session\'s own end was not seen.' },
     completed: { detail: 'The provider process exited normally.' },
     nonzero: { detail: 'The provider process exited with a non-zero code.' },
     interrupted: { detail: 'The run was interrupted before the provider finished.' },
@@ -1075,6 +1076,9 @@ function shortID(id) {
       if (focused === run.id) button.focus({ preventScroll: true });
     }
     $('run-count').textContent = String(state.runs.length);
+    const more = $('run-load-more');
+    more.textContent = t('Load more');
+    more.classList.toggle('hidden', !state.runNextCursor);
     const size = $('store-size');
     // What the Delete button fills is part of what the store costs, and it is
     // not freed until the trash is emptied: both numbers or neither.
@@ -1716,9 +1720,7 @@ function shortID(id) {
     const supervisor = fieldsMap(data.evidence.supervisor);
     const process = outcome(run.exitReason, supervisor);
     const verification = verificationSummary(data.evidence.verification);
-    const tones = [process.tone, verification.tone];
-    // ponytail: a run reads as passed only when both the process and the checks did; NOT RUN never borrows green.
-    const runStatus = tones.includes('fail') ? 'fail' : (tones.includes('warn') ? 'warn' : (process.tone === 'pass' && verification.tone === 'pass' ? 'pass' : ''));
+    const runStatus = run.statusClass || '';
     const verdict = $('run-verdict');
     verdict.textContent = t('Run {run} · Verify {verify}', { run: statusWord(process.value), verify: statusWord(verification.value) });
     const tokens = `Run ${process.value} · Verify ${verification.value}`;
@@ -2795,13 +2797,23 @@ function shortID(id) {
     }
   }
 
-  function applyRunList(list) {
-    const runs = list.runs || [];
+  function applyRunList(list, append = false) {
+    const incoming = list.runs || [];
+    const previousRuns = state.runs;
+    const previousCursor = state.runNextCursor;
+    const sameGeneration = (list.generation || '') === state.runGeneration;
+    const pageIDs = new Set(list.pageIds || incoming.map((run) => run.id));
+    const runs = append && sameGeneration
+      ? [...previousRuns, ...incoming.filter((run) => !previousRuns.some((current) => current.id === run.id))]
+      : (!append && sameGeneration ? [...incoming, ...previousRuns.filter((run) => !pageIDs.has(run.id))] : incoming);
     // ponytail: rebuild the list only when its content changed; a rebuild mid-click would swallow the click.
     const signature = JSON.stringify(runs.map((run) => [run.id, run.provider, run.project, run.statusClass, run.statusLabel, run.startedAt]));
     const changed = signature !== state.runsSignature;
     state.runsSignature = signature;
     state.runs = runs;
+    state.runTotal = list.total || runs.length;
+    state.runNextCursor = runs.length >= state.runTotal ? '' : (append || !sameGeneration || previousRuns.length <= incoming.length ? (list.nextCursor || '') : previousCursor);
+    state.runGeneration = list.generation || '';
     const warning = $('unreadable-warning');
     if (list.unreadable) {
       warning.textContent = t('{n} unreadable run(s) were excluded.', { n: list.unreadable });
@@ -2822,10 +2834,29 @@ function shortID(id) {
     renderWorkspaceState();
   }
 
+  async function loadMoreRuns() {
+    if (!state.runNextCursor) return;
+    const button = $('run-load-more');
+    const cursor = state.runNextCursor;
+    const generation = state.runGeneration;
+    button.disabled = true;
+    try {
+      const list = await getJSON(`/api/runs?cursor=${encodeURIComponent(cursor)}`);
+      if (cursor !== state.runNextCursor || generation !== state.runGeneration || (list.generation || '') !== generation) return;
+      applyRunList(list, true);
+    } catch (error) {
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   // Selects the initial or newest run when nothing is shown; a failed attempt is retried quietly on the next poll.
   function autoSelect(list) {
-    if (state.run || state.runAbortController || state.runs.length === 0) return;
-    return loadRun(list.initialRunId || state.runs[0].id, true);
+    if (state.run || state.runAbortController) return;
+    if (list.initialRunId) return loadRun(list.initialRunId, true);
+    if (state.runs.length === 0) return;
+    return loadRun(state.runs[0].id, true);
   }
 
   // Live refresh: re-fetch /api/runs and redraw the list in place. Selection, focus and the loaded run are untouched.
@@ -2902,6 +2933,7 @@ function shortID(id) {
     if (search.open) renderSearch();
   });
   $('run-search').addEventListener('input', renderRunList);
+  $('run-load-more').addEventListener('click', loadMoreRuns);
   const searchAll = $('search-all');
   searchAll.addEventListener('input', scheduleSearch);
   searchAll.addEventListener('focus', () => { if (search.hits.length && searchAll.value.trim() === search.query) renderSearch(); });

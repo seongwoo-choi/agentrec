@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,16 +65,26 @@ func viewStatusClass(value string) string {
 	// would if the process result were unknown.
 	case "fail", "failed", "error", "timeout", "nonzero", "interrupted", "parse_error", "storage_error", "start_error", reasonSessionLost:
 		return "fail"
+	case "tainted":
+		return "warn"
 	default:
 		return ""
 	}
 }
 
-func viewRunListStatus(exit, verification string) (string, string) {
+func viewRunStatus(exit, verification string, verificationWarnings int) (string, string) {
 	if viewStatusClass(exit) == "fail" {
 		return "fail", exit
 	}
-	return viewStatusClass(verification), verification
+	class := viewStatusClass(verification)
+	if class == "pass" && verificationWarnings > 0 {
+		class = "warn"
+	}
+	return class, verification
+}
+
+func viewRunListStatus(exit, verification string) (string, string) {
+	return viewRunStatus(exit, verification, 0)
 }
 
 type viewRunInfo struct {
@@ -84,6 +97,8 @@ type viewRunInfo struct {
 	StartedAt         time.Time  `json:"startedAt"`
 	EndedAt           *time.Time `json:"endedAt,omitempty"`
 	ExitReason        string     `json:"exitReason,omitempty"`
+	StatusClass       string     `json:"statusClass"`
+	StatusLabel       string     `json:"statusLabel"`
 	WarningCount      int        `json:"warningCount"`
 	UnparsedLines     int        `json:"unparsedLines"`
 	VersionUnverified bool       `json:"versionUnverified,omitempty"`
@@ -94,11 +109,13 @@ type viewRunInfo struct {
 }
 
 type viewEvidence struct {
-	ProviderUsage       []viewField              `json:"providerUsage,omitempty"`
-	Supervisor          []viewField              `json:"supervisor"`
-	Repository          []viewField              `json:"repository"`
-	Verification        []viewField              `json:"verification"`
-	PosthocVerification *viewPosthocVerification `json:"posthocVerification"`
+	ProviderUsage        []viewField              `json:"providerUsage,omitempty"`
+	Supervisor           []viewField              `json:"supervisor"`
+	Repository           []viewField              `json:"repository"`
+	Verification         []viewField              `json:"verification"`
+	PosthocVerification  *viewPosthocVerification `json:"posthocVerification"`
+	verificationStatus   string
+	verificationWarnings int
 }
 
 // viewPosthocVerification is a verification run after the fact: the same
@@ -149,7 +166,181 @@ type viewRunListResponse struct {
 	Unreadable    int              `json:"unreadable"`
 	StoreBytes    int64            `json:"storeBytes"`
 	TrashBytes    int64            `json:"trashBytes"`
+	Total         int              `json:"total"`
+	Generation    string           `json:"generation"`
+	PageIDs       []string         `json:"pageIds"`
+	NextCursor    string           `json:"nextCursor,omitempty"`
 	Runs          []viewRunSummary `json:"runs"`
+}
+
+const viewRunPageSize = 50
+
+func encodeViewRunCursor(generation, position string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("v1\x00" + generation + "\x00" + position))
+}
+
+func decodeViewRunCursor(cursor string) (string, string, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+	parts := strings.Split(string(decoded), "\x00")
+	if err != nil || len(parts) != 3 || parts[0] != "v1" || parts[1] == "" {
+		return "", "", errors.New("invalid run-list cursor")
+	}
+	position, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || position <= 0 {
+		return "", "", errors.New("invalid run-list cursor")
+	}
+	return parts[1], strconv.FormatInt(position, 10), nil
+}
+
+type viewRunPage struct {
+	runs       []runSummary
+	ids        []string
+	unreadable int
+	total      int
+	nextCursor string
+	generation string
+}
+
+type viewRunListCache struct {
+	mu          sync.Mutex
+	root        string
+	stamp       string
+	initialized bool
+	page        viewRunPage
+	scan        func(string) (viewRunPage, error)
+}
+
+func newViewRunListCache(root string) *viewRunListCache {
+	cache := &viewRunListCache{root: root}
+	cache.scan = func(cursor string) (viewRunPage, error) {
+		return scanViewRunPage(root, cursor)
+	}
+	return cache
+}
+
+func (c *viewRunListCache) list() (viewRunPage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	stamp, err := viewRunsStamp(c.root)
+	if err != nil {
+		return viewRunPage{}, err
+	}
+	if !c.initialized || c.stamp != stamp {
+		c.page, err = c.scan("")
+		if err != nil {
+			return viewRunPage{}, err
+		}
+		c.initialized = true
+		c.stamp = stamp
+	} else {
+		refreshed := make([]runSummary, 0, len(c.page.ids))
+		unreadable := 0
+		for _, runID := range c.page.ids {
+			run, err := readViewRunSummary(c.root, runID)
+			if err != nil {
+				unreadable++
+				continue
+			}
+			refreshed = append(refreshed, run)
+		}
+		c.page.runs = refreshed
+		c.page.unreadable = unreadable
+	}
+	page := c.page
+	page.runs = slices.Clone(page.runs)
+	page.ids = slices.Clone(page.ids)
+	return page, nil
+}
+
+func (c *viewRunListCache) continuation(cursor string) (viewRunPage, error) {
+	return c.scan(cursor)
+}
+
+func scanViewRunPage(root, cursor string) (viewRunPage, error) {
+	return scanViewRunPageWithRead(root, cursor, readViewRunSummaryFromRoot)
+}
+
+func scanViewRunPageWithRead(root, cursor string, read func(*os.Root, string) (runSummary, error)) (viewRunPage, error) {
+	var offset int64
+	if cursor != "" {
+		var err error
+		offset, err = strconv.ParseInt(cursor, 10, 64)
+		if err != nil || offset <= 0 {
+			return viewRunPage{}, errors.New("cursor is outside the run index")
+		}
+	}
+	entries, next, total, generation, err := viewRunIndexPage(root, offset)
+	if err != nil {
+		return viewRunPage{}, err
+	}
+	page := viewRunPage{ids: make([]string, 0, len(entries)), total: total, generation: generation}
+	if next > 0 {
+		page.nextCursor = strconv.FormatInt(next, 10)
+	}
+	if len(entries) == 0 {
+		return page, nil
+	}
+	runsRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return viewRunPage{}, fmt.Errorf("cli: open runs directory: %w", err)
+	}
+	defer runsRoot.Close()
+	for _, entry := range entries {
+		page.ids = append(page.ids, entry.id)
+		run, err := read(runsRoot, entry.id)
+		if err != nil {
+			page.unreadable++
+			continue
+		}
+		page.runs = append(page.runs, run)
+	}
+	return page, nil
+}
+
+func viewRunsStamp(root string) (string, error) {
+	info, err := os.Stat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return "missing", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("cli: stat runs directory: %w", err)
+	}
+	return fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size()), nil
+}
+
+func readViewRunSummary(root, runID string) (runSummary, error) {
+	runsRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return runSummary{}, err
+	}
+	defer runsRoot.Close()
+	return readViewRunSummaryFromRoot(runsRoot, runID)
+}
+
+func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error) {
+	runRoot, err := openRunRootFromRoot(root, runID)
+	if err != nil {
+		return runSummary{}, err
+	}
+	defer runRoot.Close()
+	manifest, err := readManifestFromRoot(runRoot)
+	if err != nil {
+		return runSummary{}, err
+	}
+	run := runSummary{
+		ID: runID, Provider: manifest.Provider, Project: projectName(manifest.CWD),
+		StartedAt: manifest.StartedAt, Exit: exitReason(manifest, nil),
+	}
+	verification, err := readVerificationFromRoot(runRoot)
+	if err != nil {
+		return runSummary{}, err
+	}
+	run.Verification = verificationNotRun
+	if verification != nil {
+		run.Verification = verdict(verification.Status)
+		run.VerificationWarnings = len(verification.Warnings)
+	}
+	return run, nil
 }
 
 func runView(args []string, stdout, stderr io.Writer) int {
@@ -200,7 +391,8 @@ func runView(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	handler := newViewHandler(root, runID, allowRun)
+	identityToken := takeViewerIdentityToken()
+	handler := newViewHandlerWithIdentity(root, runID, allowRun, identityToken)
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -209,7 +401,10 @@ func runView(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-handler.shutdown:
+		}
 		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdown)
@@ -220,6 +415,12 @@ func runView(args []string, stdout, stderr io.Writer) int {
 		code = 1
 	}
 	return closeView(handler, stderr, code)
+}
+
+func takeViewerIdentityToken() string {
+	token := os.Getenv(viewerIdentityEnv)
+	_ = os.Unsetenv(viewerIdentityEnv)
+	return token
 }
 
 func closeView(closer io.Closer, stderr io.Writer, code int) int {
@@ -296,11 +497,18 @@ type viewHandler struct {
 	http.Handler
 	snapshots *viewSnapshotStore
 	jobs      *shadowJobs
+	runList   *viewRunListCache
 	// token is what a request that changes the store must carry, in a
 	// header only this page's own script can send: a page on any other
 	// origin cannot read it (no CORS) and cannot set the header without a
 	// preflight this server refuses.
-	token string
+	token        string
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
+}
+
+func (h *viewHandler) requestShutdown() {
+	h.shutdownOnce.Do(func() { close(h.shutdown) })
 }
 
 func (h *viewHandler) Close() error {
@@ -332,11 +540,39 @@ func (c *viewStoreSizes) get() (int64, int64) {
 }
 
 func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
+	return newViewHandlerWithIdentity(root, initialRunID, allowRun, "")
+}
+
+func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identityToken string) *viewHandler {
 	snapshots := newViewSnapshotStore(root)
 	sizes := &viewStoreSizes{root: root}
 	token := newViewToken()
 	jobs := newShadowJobs(root, allowRun)
+	handler := &viewHandler{snapshots: snapshots, jobs: jobs, runList: newViewRunListCache(root), token: token, shutdown: make(chan struct{})}
 	mux := http.NewServeMux()
+	if identityToken != "" {
+		executable, _ := os.Executable()
+		executable, _ = filepath.EvalSymlinks(executable)
+		identityAllowed := func(r *http.Request) bool {
+			got := r.Header.Get(viewerIdentityHeader)
+			return len(got) == len(identityToken) && subtle.ConstantTimeCompare([]byte(got), []byte(identityToken)) == 1
+		}
+		mux.HandleFunc("GET /api/viewer-identity", func(w http.ResponseWriter, r *http.Request) {
+			if !identityAllowed(r) {
+				writeViewError(w, http.StatusForbidden, errors.New("viewer identity challenge failed"))
+				return
+			}
+			writeViewJSON(w, map[string]any{"pid": os.Getpid(), "executable": executable})
+		})
+		mux.HandleFunc("POST /api/viewer-stop", func(w http.ResponseWriter, r *http.Request) {
+			if !identityAllowed(r) {
+				writeViewError(w, http.StatusForbidden, errors.New("viewer identity challenge failed"))
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			handler.requestShutdown()
+		})
+	}
 	mux.HandleFunc("GET /api/shadow", func(w http.ResponseWriter, _ *http.Request) {
 		writeViewJSON(w, jobs.overview())
 	})
@@ -456,15 +692,40 @@ func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
 	mux.HandleFunc("GET /assets/app.js", func(w http.ResponseWriter, _ *http.Request) {
 		serveViewAsset(w, "ui_assets/app.js", "text/javascript; charset=utf-8")
 	})
-	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, _ *http.Request) {
-		runs, unreadable, err := listRunsForTable(root, "", false, "")
+	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
+		cursor := r.URL.Query().Get("cursor")
+		cursorGeneration := ""
+		decodedCursor := ""
+		if cursor != "" {
+			var err error
+			cursorGeneration, decodedCursor, err = decodeViewRunCursor(cursor)
+			if err != nil {
+				writeViewError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		var page viewRunPage
+		var err error
+		if decodedCursor == "" {
+			page, err = handler.runList.list()
+		} else {
+			page, err = handler.runList.continuation(decodedCursor)
+		}
 		if err != nil {
-			writeViewError(w, http.StatusInternalServerError, err)
+			if cursor != "" {
+				writeViewError(w, http.StatusBadRequest, err)
+			} else {
+				writeViewError(w, http.StatusInternalServerError, err)
+			}
 			return
 		}
-		out := make([]viewRunSummary, 0, len(runs))
-		for _, run := range runs {
-			statusClass, statusLabel := viewRunListStatus(run.Exit, run.Verification)
+		if cursorGeneration != "" && cursorGeneration != page.generation {
+			writeViewError(w, http.StatusBadRequest, errors.New("run-list cursor is stale"))
+			return
+		}
+		out := make([]viewRunSummary, 0, len(page.runs))
+		for _, run := range page.runs {
+			statusClass, statusLabel := viewRunStatus(run.Exit, run.Verification, run.VerificationWarnings)
 			out = append(out, viewRunSummary{
 				ID: run.ID, Provider: run.Provider, Project: run.Project,
 				StartedAt: run.StartedAt, Exit: run.Exit, Verification: run.Verification,
@@ -472,17 +733,25 @@ func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
 			})
 		}
 		initial := initialRunID
-		if initial != "" && initial != latestRun {
+		if initial == latestRun {
 			initial = ""
-			for _, run := range out {
-				if run.ID == initialRunID {
-					initial = initialRunID
-					break
-				}
+		} else if initial != "" {
+			runRoot, err := openRunRoot(root, initial)
+			if err != nil {
+				initial = ""
+			} else {
+				runRoot.Close()
 			}
 		}
 		store, trash := sizes.get()
-		writeViewJSON(w, viewRunListResponse{1, initial, unreadable, store, trash, out})
+		nextCursor := ""
+		if page.nextCursor != "" {
+			nextCursor = encodeViewRunCursor(page.generation, page.nextCursor)
+		}
+		writeViewJSON(w, viewRunListResponse{
+			SchemaVersion: 1, InitialRunID: initial, Unreadable: page.unreadable,
+			StoreBytes: store, TrashBytes: trash, Total: page.total, Generation: page.generation, PageIDs: page.ids, NextCursor: nextCursor, Runs: out,
+		})
 	})
 	mux.HandleFunc("GET /api/runs/{runID}/live", func(w http.ResponseWriter, r *http.Request) {
 		live, err := readLiveChanges(root, r.PathValue("runID"))
@@ -582,7 +851,8 @@ func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
 			writeViewError(w, http.StatusBadRequest, err)
 		}
 	})
-	return &viewHandler{Handler: viewSecurity(mux), snapshots: snapshots, jobs: jobs, token: token}
+	handler.Handler = viewSecurity(mux)
+	return handler
 }
 
 func newViewToken() string {

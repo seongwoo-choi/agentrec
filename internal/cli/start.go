@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,9 +20,8 @@ import (
 
 // `agentrec start` keeps the viewer running in the background and opens it, so
 // reading sessions back is one command and one browser tab rather than a
-// foreground process per look. `stop` ends it and `status` says where things
-// stand. The mechanism is the ordinary one: a detached process, a pid file, a
-// SIGTERM the viewer already shuts down cleanly on.
+// foreground process per look. `stop` asks the authenticated viewer instance
+// to shut itself down, and `status` says where things stand.
 
 const (
 	startUsage  = "usage: agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]\n"
@@ -30,12 +32,16 @@ const (
 	// the same every day and can be bookmarked. --listen chooses another.
 	defaultStartListen = "127.0.0.1:7788"
 
-	viewerDirName  = "viewer"
-	viewerPIDFile  = "pid"
-	viewerURLFile  = "url"
-	viewerLogFile  = "log"
-	viewerModeFile = "mode"
-	viewerAllowRun = "allow-run"
+	viewerDirName        = "viewer"
+	viewerPIDFile        = "pid"
+	viewerURLFile        = "url"
+	viewerLogFile        = "log"
+	viewerModeFile       = "mode"
+	viewerTokenFile      = "token"
+	viewerExecutableFile = "executable"
+	viewerAllowRun       = "allow-run"
+	viewerIdentityEnv    = "AGENTREC_VIEWER_IDENTITY_TOKEN"
+	viewerIdentityHeader = "X-Agentrec-Viewer-Identity"
 	// Long enough for the viewer's own shutdown: connections drain for a
 	// few seconds, then a comparison still running is interrupted and given
 	// a moment before it is killed.
@@ -56,10 +62,12 @@ func viewerStateDir() (string, error) {
 }
 
 type viewerState struct {
-	dir      string
-	pid      int
-	url      string
-	allowRun bool
+	dir        string
+	pid        int
+	url        string
+	token      string
+	executable string
+	allowRun   bool
 }
 
 // readViewerState reports the viewer the pid file names, if it is still alive.
@@ -84,8 +92,32 @@ func readViewerState() (viewerState, bool, error) {
 		return state, false, nil
 	}
 	state.pid = pid
-	if url, err := os.ReadFile(filepath.Join(dir, viewerURLFile)); err == nil {
-		state.url = strings.TrimSpace(string(url))
+	url, urlErr := os.ReadFile(filepath.Join(dir, viewerURLFile))
+	token, tokenErr := os.ReadFile(filepath.Join(dir, viewerTokenFile))
+	state.url = strings.TrimSpace(string(url))
+	state.token = strings.TrimSpace(string(token))
+	if executable, err := os.ReadFile(filepath.Join(dir, viewerExecutableFile)); err == nil {
+		state.executable = strings.TrimSpace(string(executable))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return state, false, fmt.Errorf("cli: read viewer executable identity: %w", err)
+	}
+	if urlErr != nil || state.url == "" {
+		clearViewerState(dir)
+		return state, false, nil
+	}
+	if tokenErr != nil && !errors.Is(tokenErr, os.ErrNotExist) {
+		return state, false, fmt.Errorf("cli: read viewer identity token: %w", tokenErr)
+	}
+	if errors.Is(tokenErr, os.ErrNotExist) || state.token == "" {
+		return state, false, fmt.Errorf("cli: legacy viewer pid %d is still running without authenticated control; stop it with the previous agentrec version or terminate it explicitly", state.pid)
+	}
+	matches, err := probeViewerIdentity(state)
+	if err != nil {
+		return state, false, fmt.Errorf("cli: verify viewer identity: %w", err)
+	}
+	if !matches {
+		clearViewerState(dir)
+		return state, false, nil
 	}
 	if mode, err := os.ReadFile(filepath.Join(dir, viewerModeFile)); err == nil {
 		state.allowRun = strings.TrimSpace(string(mode)) == viewerAllowRun
@@ -97,6 +129,69 @@ func clearViewerState(dir string) {
 	os.Remove(filepath.Join(dir, viewerPIDFile))
 	os.Remove(filepath.Join(dir, viewerURLFile))
 	os.Remove(filepath.Join(dir, viewerModeFile))
+	os.Remove(filepath.Join(dir, viewerTokenFile))
+	os.Remove(filepath.Join(dir, viewerExecutableFile))
+}
+
+func viewerRequest(state viewerState, method, endpoint string) (*http.Response, error) {
+	parsed, err := neturl.Parse(state.url)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "/" || state.token == "" {
+		return nil, errors.New("invalid viewer identity state")
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	if ip == nil || !ip.IsLoopback() {
+		return nil, errors.New("viewer identity address is not loopback")
+	}
+	request, err := http.NewRequest(method, state.url+endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set(viewerIdentityHeader, state.token)
+	client := &http.Client{
+		Timeout:       time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return client.Do(request)
+}
+
+func viewerIdentityMatches(state viewerState) bool {
+	matches, _ := probeViewerIdentity(state)
+	return matches
+}
+
+func probeViewerIdentity(state viewerState) (bool, error) {
+	resp, err := viewerRequest(state, http.MethodGet, "api/viewer-identity")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return false, fmt.Errorf("viewer identity endpoint returned HTTP %d", resp.StatusCode)
+		}
+		return false, nil
+	}
+	var identity struct {
+		PID        int    `json:"pid"`
+		Executable string `json:"executable"`
+	}
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 4096))
+	if err := dec.Decode(&identity); err != nil || identity.PID != state.pid || (state.executable != "" && identity.Executable != state.executable) {
+		return false, nil
+	}
+	return errors.Is(dec.Decode(&struct{}{}), io.EOF), nil
+}
+
+func requestViewerStop(state viewerState) error {
+	resp, err := viewerRequest(state, http.MethodPost, "api/viewer-stop")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("viewer refused authenticated stop with HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // processAlive reports whether a process with this pid exists. Signal 0 tests
@@ -154,6 +249,11 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "cli: locate agentrec: %v\n", err)
 		return exitFailure
 	}
+	executableIdentity, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		fmt.Fprintf(stderr, "cli: identify agentrec executable: %v\n", err)
+		return exitFailure
+	}
 
 	// The viewer runs as an ordinary `agentrec view`, detached into a session
 	// of its own so closing this terminal does not end it, with its output in
@@ -170,6 +270,8 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 		viewArgs = append(viewArgs, "--allow-run")
 	}
 	cmd := exec.Command(exe, viewArgs...)
+	identityToken := newViewToken()
+	cmd.Env = append(os.Environ(), viewerIdentityEnv+"="+identityToken)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
@@ -186,12 +288,24 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "cli: %v (see %s)\n", err, logPath)
 		return exitFailure
 	}
-	if err := os.WriteFile(filepath.Join(state.dir, viewerPIDFile), []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
-		fmt.Fprintf(stderr, "cli: write viewer pid: %v\n", err)
+	started := viewerState{dir: state.dir, pid: pid, url: url, token: identityToken, executable: executableIdentity, allowRun: allowRun}
+	published := false
+	defer func() {
+		if !published {
+			_ = requestViewerStop(started)
+			clearViewerState(state.dir)
+		}
+	}()
+	if err := os.WriteFile(filepath.Join(state.dir, viewerTokenFile), []byte(identityToken+"\n"), 0o600); err != nil {
+		fmt.Fprintf(stderr, "cli: write viewer identity: %v\n", err)
 		return exitFailure
 	}
 	if err := os.WriteFile(filepath.Join(state.dir, viewerURLFile), []byte(url+"\n"), 0o600); err != nil {
 		fmt.Fprintf(stderr, "cli: write viewer url: %v\n", err)
+		return exitFailure
+	}
+	if err := os.WriteFile(filepath.Join(state.dir, viewerExecutableFile), []byte(executableIdentity+"\n"), 0o600); err != nil {
+		fmt.Fprintf(stderr, "cli: write viewer executable identity: %v\n", err)
 		return exitFailure
 	}
 	mode := ""
@@ -202,6 +316,11 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "cli: write viewer mode: %v\n", err)
 		return exitFailure
 	}
+	if err := os.WriteFile(filepath.Join(state.dir, viewerPIDFile), []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+		fmt.Fprintf(stderr, "cli: write viewer pid: %v\n", err)
+		return exitFailure
+	}
+	published = true
 	fmt.Fprintf(stdout, "agentrec viewer: %s (pid %d)\n", url, pid)
 	if open {
 		if err := openViewBrowser(url); err != nil {
@@ -252,8 +371,10 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "agentrec viewer is not running")
 		return 0
 	}
-	// SIGTERM is what the viewer shuts down on; SIGKILL only if it does not.
-	if err := syscall.Kill(state.pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+	if err := requestViewerStop(state); err != nil {
+		if matches, probeErr := probeViewerIdentity(state); probeErr == nil && !matches {
+			clearViewerState(state.dir)
+		}
 		fmt.Fprintf(stderr, "cli: stop viewer (pid %d): %v\n", state.pid, err)
 		return exitFailure
 	}
@@ -262,11 +383,10 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if processAlive(state.pid) {
-		syscall.Kill(state.pid, syscall.SIGKILL)
-		fmt.Fprintf(stdout, "agentrec viewer (pid %d) did not stop in %s and was killed\n", state.pid, viewerStopWait)
-	} else {
-		fmt.Fprintf(stdout, "agentrec viewer stopped (pid %d)\n", state.pid)
+		fmt.Fprintf(stderr, "cli: viewer (pid %d) accepted the stop request but did not exit within %s; refusing to signal by PID\n", state.pid, viewerStopWait)
+		return exitFailure
 	}
+	fmt.Fprintf(stdout, "agentrec viewer stopped (pid %d)\n", state.pid)
 	clearViewerState(state.dir)
 	return 0
 }
