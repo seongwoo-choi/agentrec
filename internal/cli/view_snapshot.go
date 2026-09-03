@@ -170,12 +170,17 @@ var (
 )
 
 type viewStreamCache struct {
-	base  string
-	dir   string
-	mu    sync.Mutex
-	ready bool
-	items map[string]*cachedStream
-	order []string
+	base     string
+	dir      string
+	dirName  string
+	dataRoot *os.Root
+	baseRoot *os.Root
+	dirRoot  *os.Root
+	mu       sync.Mutex
+	ready    bool
+	closed   bool
+	items    map[string]*cachedStream
+	order    []string
 }
 
 type cachedStream struct {
@@ -191,14 +196,55 @@ func newViewStreamCache(base string) *viewStreamCache {
 // prepare makes this store's own cache directory, named after the process
 // that owns it, and removes the directories of viewers no longer alive.
 func (c *viewStreamCache) prepare() error {
+	if c.closed {
+		return errors.New("cli: viewer cache is closed")
+	}
 	if c.ready {
 		return nil
 	}
-	if err := os.MkdirAll(c.base, 0o700); err != nil {
+	dataRoot, err := os.OpenRoot(filepath.Dir(c.base))
+	if err != nil {
 		return fmt.Errorf("cli: create viewer cache: %w", err)
 	}
-	entries, err := os.ReadDir(c.base)
+	baseName := filepath.Base(c.base)
+	info, err := dataRoot.Lstat(baseName)
+	if errors.Is(err, os.ErrNotExist) {
+		err = dataRoot.Mkdir(baseName, 0o700)
+		if err == nil {
+			info, err = dataRoot.Lstat(baseName)
+		}
+	}
 	if err != nil {
+		dataRoot.Close()
+		return fmt.Errorf("cli: create viewer cache: %w", err)
+	}
+	if !info.IsDir() {
+		dataRoot.Close()
+		return errors.New("cli: viewer cache is not a directory")
+	}
+	baseRoot, err := dataRoot.OpenRoot(baseName)
+	if err != nil {
+		dataRoot.Close()
+		return fmt.Errorf("cli: read viewer cache: %w", err)
+	}
+	if err := requireOpenDirectoryAt(dataRoot, baseName, baseRoot); err != nil {
+		baseRoot.Close()
+		dataRoot.Close()
+		return fmt.Errorf("cli: read viewer cache: %w", err)
+	}
+	dir, err := baseRoot.Open(".")
+	if err != nil {
+		baseRoot.Close()
+		dataRoot.Close()
+		return fmt.Errorf("cli: read viewer cache: %w", err)
+	}
+	entries, err := dir.ReadDir(-1)
+	if closeErr := dir.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		baseRoot.Close()
+		dataRoot.Close()
 		return fmt.Errorf("cli: read viewer cache: %w", err)
 	}
 	for _, entry := range entries {
@@ -207,20 +253,85 @@ func (c *viewStreamCache) prepare() error {
 		if err != nil || processAlive(pid) {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(c.base, entry.Name())); err != nil {
+		if err := requireOpenDirectoryAt(dataRoot, baseName, baseRoot); err != nil {
+			baseRoot.Close()
+			dataRoot.Close()
+			return fmt.Errorf("cli: remove a stale viewer cache: %w", err)
+		}
+		if err := dataRoot.RemoveAll(filepath.Join(baseName, entry.Name())); err != nil {
+			baseRoot.Close()
+			dataRoot.Close()
 			return fmt.Errorf("cli: remove a stale viewer cache: %w", err)
 		}
 	}
-	dir, err := os.MkdirTemp(c.base, strconv.Itoa(os.Getpid())+"-")
-	if err != nil {
+	token := make([]byte, 8)
+	if _, err := rand.Read(token); err != nil {
+		baseRoot.Close()
+		dataRoot.Close()
 		return fmt.Errorf("cli: create viewer cache: %w", err)
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	dirName := strconv.Itoa(os.Getpid()) + "-" + hex.EncodeToString(token)
+	dirRel := filepath.Join(baseName, dirName)
+	if err := requireOpenDirectoryAt(dataRoot, baseName, baseRoot); err != nil {
+		baseRoot.Close()
+		dataRoot.Close()
+		return fmt.Errorf("cli: create viewer cache: %w", err)
+	}
+	if err := dataRoot.Mkdir(dirRel, 0o700); err != nil {
+		baseRoot.Close()
+		dataRoot.Close()
+		return fmt.Errorf("cli: create viewer cache: %w", err)
+	}
+	if err := dataRoot.Chmod(dirRel, 0o700); err != nil {
+		dataRoot.Remove(dirRel)
+		baseRoot.Close()
+		dataRoot.Close()
 		return fmt.Errorf("cli: restrict viewer cache: %w", err)
 	}
-	c.dir = dir
+	dirRoot, err := dataRoot.OpenRoot(dirRel)
+	if err != nil {
+		dataRoot.Remove(dirRel)
+		baseRoot.Close()
+		dataRoot.Close()
+		return fmt.Errorf("cli: hold viewer cache: %w", err)
+	}
+	if err := requireOpenDirectoryAt(dataRoot, dirRel, dirRoot); err != nil {
+		dirRoot.Close()
+		dataRoot.Remove(dirRel)
+		baseRoot.Close()
+		dataRoot.Close()
+		return fmt.Errorf("cli: hold viewer cache: %w", err)
+	}
+	c.dirName = dirName
+	c.dir = filepath.Join(c.base, dirName)
+	c.dataRoot = dataRoot
+	c.baseRoot = baseRoot
+	c.dirRoot = dirRoot
 	c.ready = true
 	return nil
+}
+
+func (c *viewStreamCache) dirPath() string {
+	return filepath.Join(filepath.Base(c.base), c.dirName)
+}
+
+func (c *viewStreamCache) entryPath(path string) string {
+	return filepath.Join(c.dirPath(), filepath.Base(path))
+}
+
+func (c *viewStreamCache) requireOwnedDirectories() error {
+	if err := requireOpenDirectoryAt(c.dataRoot, filepath.Base(c.base), c.baseRoot); err != nil {
+		return err
+	}
+	return requireOpenDirectoryAt(c.dataRoot, c.dirPath(), c.dirRoot)
+}
+
+func (c *viewStreamCache) removeEntry(path string) error {
+	err := c.dataRoot.Remove(c.entryPath(path))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // capture returns a read-only handle on the cached copy of an append-only
@@ -231,23 +342,26 @@ func (c *viewStreamCache) capture(ctx context.Context, runID, name string, sourc
 	if err := c.prepare(); err != nil {
 		return nil, err
 	}
+	if err := c.requireOwnedDirectories(); err != nil {
+		return nil, fmt.Errorf("cli: use viewer cache: %w", err)
+	}
 	key := runID + "/" + strings.ReplaceAll(name, "/", "_")
 	entry, ok := c.items[key]
 	if ok && (!os.SameFile(entry.src, info) || size < entry.size || !c.tailMatches(entry, source)) {
 		// Not the file that was copied, shorter than it, or rewritten
 		// under the same name: start over.
-		os.Remove(entry.path)
+		c.removeEntry(entry.path)
 		delete(c.items, key)
 		ok = false
 	}
 	if !ok {
 		entry = &cachedStream{path: filepath.Join(c.dir, strings.ReplaceAll(key, "/", "--")), size: 0}
-		if err := os.RemoveAll(entry.path); err != nil {
+		if err := c.removeEntry(entry.path); err != nil {
 			return nil, fmt.Errorf("cli: reset viewer cache entry: %w", err)
 		}
 	}
 	if !ok || size > entry.size {
-		w, err := os.OpenFile(entry.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		w, err := c.dataRoot.OpenFile(c.entryPath(entry.path), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 		if err != nil {
 			return nil, fmt.Errorf("cli: open viewer cache entry: %w", err)
 		}
@@ -262,7 +376,7 @@ func (c *viewStreamCache) capture(ctx context.Context, runID, name string, sourc
 			err = fmt.Errorf("the stream holds %d of the %d bytes seen", entry.size+n, size)
 		}
 		if err != nil {
-			os.Remove(entry.path)
+			c.removeEntry(entry.path)
 			delete(c.items, key)
 			return nil, fmt.Errorf("cli: extend viewer cache entry: %w", err)
 		}
@@ -275,7 +389,7 @@ func (c *viewStreamCache) capture(ctx context.Context, runID, name string, sourc
 	c.touch(key)
 	// Opened before anything is evicted: the reader must hold the copy it
 	// was promised even when this very entry is what the cap gives up.
-	copied, err := os.Open(entry.path)
+	copied, err := c.dataRoot.Open(c.entryPath(entry.path))
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +405,7 @@ func (c *viewStreamCache) tailMatches(entry *cachedStream, source *os.File) bool
 	if n == 0 {
 		return true
 	}
-	copied, err := os.Open(entry.path)
+	copied, err := c.dataRoot.Open(c.entryPath(entry.path))
 	if err != nil {
 		return false
 	}
@@ -330,7 +444,7 @@ func (c *viewStreamCache) evict() {
 		c.order = c.order[1:]
 		if e, ok := c.items[key]; ok {
 			total -= e.size
-			os.Remove(e.path)
+			c.removeEntry(e.path)
 			delete(c.items, key)
 		}
 	}
@@ -339,13 +453,25 @@ func (c *viewStreamCache) evict() {
 func (c *viewStreamCache) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.items = map[string]*cachedStream{}
-	c.order = nil
+	c.closed = true
 	if !c.ready {
 		return nil
 	}
 	c.ready = false
-	return os.RemoveAll(c.dir)
+	err := c.requireOwnedDirectories()
+	if err == nil {
+		for _, entry := range c.items {
+			err = errors.Join(err, c.removeEntry(entry.path))
+		}
+		err = errors.Join(err, c.dataRoot.Remove(c.dirPath()))
+	}
+	err = errors.Join(err, c.dirRoot.Close(), c.baseRoot.Close(), c.dataRoot.Close())
+	c.items = map[string]*cachedStream{}
+	c.order = nil
+	c.dataRoot = nil
+	c.baseRoot = nil
+	c.dirRoot = nil
+	return err
 }
 
 type viewContextReader struct {

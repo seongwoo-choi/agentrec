@@ -152,13 +152,32 @@ func listRuns(root, cwd string) ([]runSummary, int, error) {
 type runEnricher func(*os.Root, *runSummary) (bool, error)
 
 func scanRuns(root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
-	entries, err := os.ReadDir(root)
+	runsRoot, err := os.OpenRoot(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, 0, nil
 	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("cli: read runs directory: %w", err)
 	}
+	defer runsRoot.Close()
+	return scanRunsFromRoot(runsRoot, cwd, enrich)
+}
+
+func scanRunsFromRoot(root *os.Root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
+	dir, err := root.Open(".")
+	if err != nil {
+		return nil, 0, fmt.Errorf("cli: read runs directory: %w", err)
+	}
+	entries, err := dir.ReadDir(-1)
+	if closeErr := dir.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("cli: read runs directory: %w", err)
+	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int {
+		return strings.Compare(a.Name(), b.Name())
+	})
 
 	var runs []runSummary
 	unreadable := 0
@@ -166,7 +185,7 @@ func scanRuns(root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
 		if err := validateRunID(entry.Name()); err != nil {
 			continue
 		}
-		runRoot, err := openRunRoot(root, entry.Name())
+		runRoot, err := openRunRootFromRoot(root, entry.Name())
 		if err != nil {
 			continue
 		}
