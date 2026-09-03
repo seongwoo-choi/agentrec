@@ -583,15 +583,17 @@ func TestSessionServeReleasesTheSessionBeforeClosingOut(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
 	sessionSocketHome(t)
-	commitVerifyConfig(t, repo, "/bin/sleep", "2")
+	commitVerifyConfig(t, repo, "/bin/sleep", "5")
 	const sessionID = "session-resumed"
 
 	socket, done, stderr := serveInProcess(t, sessionID, repo, verifyFlag)
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup"}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "resume"}))
 
-	// The first recorder is now running a 2 s check. The session is free.
-	deadline := time.Now().Add(time.Second)
+	// The first recorder is now running a 5 s check. The session is free.
+	// Leave enough scheduler margin for loaded CI while staying well inside
+	// the check, so observing the absent socket still proves release came first.
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(socket); errors.Is(err, os.ErrNotExist) {
 			break
