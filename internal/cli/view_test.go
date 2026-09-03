@@ -23,6 +23,24 @@ import (
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
+func TestCloseViewReportsCleanupFailure(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "closed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+
+	if code := closeView(file, &stderr, 0); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "cli: close viewer:") {
+		t.Fatalf("stderr = %q, want viewer cleanup error", stderr.String())
+	}
+}
+
 func TestViewAPIIncludesRequestActionsEventsAndEvidence(t *testing.T) {
 	root := home(t)
 	b, err := storage.Create(root, "run-ui", storage.Manifest{

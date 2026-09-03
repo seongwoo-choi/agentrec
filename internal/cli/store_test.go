@@ -236,6 +236,122 @@ func TestViewSnapshotsGrowTheStreamCacheInsteadOfCopying(t *testing.T) {
 	}
 }
 
+func TestViewStreamCacheRefusesASymlinkedRoot(t *testing.T) {
+	root := home(t)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "999999-gone")
+	if err := os.Mkdir(victim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "evidence"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(filepath.Dir(root), viewCacheDirName)
+	if err := os.Symlink(outside, base); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := newViewStreamCache(base)
+	if err := cache.prepare(); err == nil {
+		t.Fatal("viewer cache accepted a symlinked root")
+	}
+	if got, err := os.ReadFile(filepath.Join(victim, "evidence")); err != nil || string(got) != "keep" {
+		t.Fatalf("external evidence = %q, %v, want untouched", got, err)
+	}
+	if cache.dir != "" {
+		t.Fatalf("cache directory = %q, want none", cache.dir)
+	}
+}
+
+func TestViewStreamCacheRefusesRelocatedDirectories(t *testing.T) {
+	for _, move := range []string{"base", "process"} {
+		t.Run(move, func(t *testing.T) {
+			root := home(t)
+			writeRun(t, root, "run-a", "claude", time.Now().Add(-time.Hour), "completed")
+			actions := filepath.Join(root, "run-a", actionsFile)
+			store := newViewSnapshotStore(root)
+			t.Cleanup(func() { store.Close() })
+			if _, err := store.create("run-a"); err != nil {
+				t.Fatal(err)
+			}
+			cached := filepath.Join(store.cache.dir, "run-a--"+actionsFile)
+			before := mustReadFile(t, cached)
+			moved := filepath.Join(t.TempDir(), "moved")
+			from := store.cache.dir
+			if move == "base" {
+				from = store.cache.base
+			}
+			if err := os.Rename(from, moved); err != nil {
+				t.Fatal(err)
+			}
+			if move == "base" {
+				cached = filepath.Join(moved, filepath.Base(store.cache.dir), filepath.Base(cached))
+			} else {
+				cached = filepath.Join(moved, filepath.Base(cached))
+			}
+			line := `{"schema_version":1,"id":"a-2","type":"file.read","at":"2026-01-01T00:00:00Z","source":"provider_reported","input":{"path":"later.txt"}}` + "\n"
+			if err := os.WriteFile(actions, append(mustReadFile(t, actions), line...), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := store.create("run-a"); err == nil {
+				t.Fatal("snapshot continued through a cache directory moved outside the data root")
+			}
+			if got := mustReadFile(t, cached); !bytes.Equal(got, before) {
+				t.Fatal("cache outside the data root was modified")
+			}
+		})
+	}
+}
+
+func TestViewStreamCacheDoesNotReopenAfterClose(t *testing.T) {
+	root := home(t)
+	cache := newViewStreamCache(filepath.Join(filepath.Dir(root), viewCacheDirName))
+	if err := cache.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.prepare(); err == nil {
+		t.Fatal("closed viewer cache reopened")
+	}
+	if entries, err := os.ReadDir(cache.base); err != nil || len(entries) != 0 {
+		t.Fatalf("cache entries after reopen attempt = %v, %v, want none", entries, err)
+	}
+}
+
+func TestViewStreamCacheCloseRefusesAReplacementProcessDirectory(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", time.Now().Add(-time.Hour), "completed")
+	store := newViewSnapshotStore(root)
+	if _, err := store.create("run-a"); err != nil {
+		t.Fatal(err)
+	}
+	cachedName := "run-a--" + actionsFile
+	moved := filepath.Join(t.TempDir(), "moved-process-cache")
+	if err := os.Rename(store.cache.dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store.cache.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(store.cache.dir, cachedName)
+	if err := os.WriteFile(replacement, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Close(); err == nil {
+		t.Fatal("viewer cache removed a replacement process directory")
+	}
+	if got := mustReadFile(t, replacement); string(got) != "replacement" {
+		t.Fatalf("replacement cache = %q, want untouched", got)
+	}
+	if _, err := os.Stat(filepath.Join(moved, cachedName)); err != nil {
+		t.Fatalf("moved cache entry deleted: %v", err)
+	}
+}
+
 func TestViewStreamCacheEvictsOldestAndStaysPerProcess(t *testing.T) {
 	root := home(t)
 	for _, id := range []string{"run-a", "run-b", "run-c"} {

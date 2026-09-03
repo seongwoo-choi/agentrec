@@ -97,6 +97,10 @@ func openRunRoot(root, runID string) (*os.Root, error) {
 		return nil, fmt.Errorf("cli: open runs root: %w", err)
 	}
 	defer runs.Close()
+	return openRunRootFromRoot(runs, runID)
+}
+
+func openRunRootFromRoot(runs *os.Root, runID string) (*os.Root, error) {
 	before, err := runs.Lstat(runID)
 	if err != nil {
 		return nil, fmt.Errorf("cli: inspect run %s: %w", runID, err)

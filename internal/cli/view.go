@@ -201,7 +201,6 @@ func runView(args []string, stdout, stderr io.Writer) int {
 	}
 
 	handler := newViewHandler(root, runID, allowRun)
-	defer handler.Close()
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -215,11 +214,20 @@ func runView(args []string, stdout, stderr io.Writer) int {
 		defer cancel()
 		_ = server.Shutdown(shutdown)
 	}()
+	code := 0
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(stderr, "cli: serve viewer: %v\n", err)
+		code = 1
+	}
+	return closeView(handler, stderr, code)
+}
+
+func closeView(closer io.Closer, stderr io.Writer, code int) int {
+	if err := closer.Close(); err != nil {
+		fmt.Fprintf(stderr, "cli: close viewer: %v\n", err)
 		return 1
 	}
-	return 0
+	return code
 }
 
 func parseViewArgs(args []string) (runID, listen string, open, allowRun, ok bool) {

@@ -37,6 +37,45 @@ func trashRootFor(runsRoot string) string {
 	return filepath.Join(filepath.Dir(runsRoot), trashDirName)
 }
 
+// openTrashParent holds the data root and refuses a trash entry that is not a
+// directory in its own right. Mutations through the returned root cannot
+// follow a trash symlink outside the data directory.
+func openTrashParent(runsRoot string, create bool) (*os.Root, error) {
+	parent, err := os.OpenRoot(filepath.Dir(runsRoot))
+	if err != nil {
+		return nil, fmt.Errorf("cli: open data directory: %w", err)
+	}
+	info, err := parent.Lstat(trashDirName)
+	if errors.Is(err, os.ErrNotExist) && create {
+		err = parent.Mkdir(trashDirName, 0o700)
+		if err == nil {
+			info, err = parent.Lstat(trashDirName)
+		}
+	}
+	if err != nil {
+		parent.Close()
+		return nil, fmt.Errorf("cli: open trash: %w", err)
+	}
+	if !info.IsDir() {
+		parent.Close()
+		return nil, errors.New("cli: trash is not a directory")
+	}
+	return parent, nil
+}
+
+func openTrashRoot(runsRoot string) (*os.Root, error) {
+	parent, err := openTrashParent(runsRoot, false)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	root, err := parent.OpenRoot(trashDirName)
+	if err != nil {
+		return nil, fmt.Errorf("cli: open trash: %w", err)
+	}
+	return root, nil
+}
+
 func checkRunID(runID string) error {
 	if runID == "" || validateRunID(runID) != nil || path.Base(runID) != runID {
 		return errors.New("cli: invalid run id")
@@ -63,15 +102,16 @@ func trashRun(root, runID string) error {
 			return err
 		}
 	}
-	trash := trashRootFor(root)
-	if err := os.MkdirAll(trash, 0o700); err != nil {
-		return fmt.Errorf("cli: create trash: %w", err)
+	parent, err := openTrashParent(root, true)
+	if err != nil {
+		return err
 	}
-	dst := filepath.Join(trash, runID)
-	if _, err := os.Lstat(dst); err == nil {
+	defer parent.Close()
+	dst := filepath.Join(trashDirName, runID)
+	if _, err := parent.Lstat(dst); err == nil {
 		return errRunExists
 	}
-	return os.Rename(src, dst)
+	return parent.Rename(filepath.Join(filepath.Base(root), runID), dst)
 }
 
 // closeOutGrace is how long after a run's recorded end its close-out — the
@@ -128,18 +168,83 @@ func restoreRun(root, runID string) error {
 	if err := checkRunID(runID); err != nil {
 		return err
 	}
-	src := filepath.Join(trashRootFor(root), runID)
-	if _, err := os.Lstat(src); err != nil {
+	parent, err := openTrashParent(root, false)
+	if errors.Is(err, os.ErrNotExist) {
 		return errNotInTrash
 	}
-	dst := filepath.Join(root, runID)
-	if _, err := os.Lstat(dst); err == nil {
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	src := filepath.Join(trashDirName, runID)
+	if _, err := parent.Lstat(src); err != nil {
+		return errNotInTrash
+	}
+	dst := filepath.Join(filepath.Base(root), runID)
+	if _, err := parent.Lstat(dst); err == nil {
 		return errRunExists
 	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	if err := parent.MkdirAll(filepath.Base(root), 0o700); err != nil {
 		return fmt.Errorf("cli: create runs directory: %w", err)
 	}
-	return os.Rename(src, dst)
+	return parent.Rename(src, dst)
+}
+
+func emptyTrash(root string, afterOpen func()) (int, error) {
+	parent, err := openTrashParent(root, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer parent.Close()
+	trashRoot, err := parent.OpenRoot(trashDirName)
+	if err != nil {
+		return 0, err
+	}
+	defer trashRoot.Close()
+	if afterOpen != nil {
+		afterOpen()
+	}
+	if err := requireOpenDirectoryAt(parent, trashDirName, trashRoot); err != nil {
+		return 0, err
+	}
+	dir, err := trashRoot.Open(".")
+	if err != nil {
+		return 0, err
+	}
+	entries, err := dir.ReadDir(-1)
+	if closeErr := dir.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return 0, err
+	}
+	for i, entry := range entries {
+		if err := requireOpenDirectoryAt(parent, trashDirName, trashRoot); err != nil {
+			return i, err
+		}
+		if err := parent.RemoveAll(filepath.Join(trashDirName, entry.Name())); err != nil {
+			return i, err
+		}
+	}
+	return len(entries), nil
+}
+
+func listTrash(root string, afterOpen func()) ([]runSummary, int, error) {
+	trashRoot, err := openTrashRoot(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	defer trashRoot.Close()
+	if afterOpen != nil {
+		afterOpen()
+	}
+	return scanRunsFromRoot(trashRoot, "", nil)
 }
 
 func runTrash(args []string, stdout, stderr io.Writer) int {
@@ -151,7 +256,7 @@ func runTrash(args []string, stdout, stderr io.Writer) int {
 	trash := trashRootFor(root)
 	switch {
 	case len(args) == 0:
-		runs, unreadable, err := listRuns(trash, "")
+		runs, unreadable, err := listTrash(root, nil)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return exitFailure
@@ -211,18 +316,10 @@ func runTrash(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	case len(args) == 1 && args[0] == "empty":
-		entries, err := os.ReadDir(trash)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		erased, err := emptyTrash(root, nil)
+		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return exitFailure
-		}
-		erased := 0
-		for _, entry := range entries {
-			if err := os.RemoveAll(filepath.Join(trash, entry.Name())); err != nil {
-				fmt.Fprintln(stderr, err)
-				return exitFailure
-			}
-			erased++
 		}
 		fmt.Fprintf(stdout, "erased %d run(s) from %s\n", erased, trash)
 		return 0

@@ -204,6 +204,134 @@ func TestViewRefusesToDeleteDuringCloseOutAndForgetsTheInitialRun(t *testing.T) 
 
 // The trash is a place, not a black hole: it can be listed, a run restored
 // from it, and it can be emptied on purpose.
+func TestTrashRunRefusesASymlinkedTrashRoot(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	outside := t.TempDir()
+	if err := os.Symlink(outside, trashRootFor(root)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := trashRun(root, "run-a"); err == nil {
+		t.Fatal("trashRun accepted a symlinked trash root")
+	}
+	if _, err := os.Stat(filepath.Join(root, "run-a", manifestFile)); err != nil {
+		t.Fatalf("run moved despite refusal: %v", err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("symlink target entries = %v, %v, want untouched", entries, err)
+	}
+}
+
+func TestTrashEmptyRefusesARelocatedTrashRoot(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	if err := trashRun(root, "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "moved-trash")
+	var moveErr error
+
+	if _, err := emptyTrash(root, func() {
+		moveErr = os.Rename(trashRootFor(root), moved)
+		if moveErr == nil {
+			writeRun(t, trashRootFor(root), "run-a", "codex", early, "completed")
+		}
+	}); err == nil {
+		t.Fatal("trash empty followed a trash root moved outside the data root")
+	}
+	if moveErr != nil {
+		t.Fatalf("move trash root: %v", moveErr)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "run-a", manifestFile)); err != nil {
+		t.Fatalf("moved run deleted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(trashRootFor(root), "run-a", manifestFile)); err != nil {
+		t.Fatalf("replacement run deleted: %v", err)
+	}
+}
+
+func TestTrashEmptyRefusesASymlinkedTrashRoot(t *testing.T) {
+	root := home(t)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "keep")
+	if err := os.Mkdir(victim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "evidence"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, trashRootFor(root)); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, _ := run(t, "trash", "empty"); code != exitFailure {
+		t.Fatalf("trash empty exit = %d, want %d for a symlinked trash root", code, exitFailure)
+	}
+	if got, err := os.ReadFile(filepath.Join(victim, "evidence")); err != nil || string(got) != "keep" {
+		t.Fatalf("external evidence = %q, %v, want untouched", got, err)
+	}
+}
+
+func TestRestoreRunRefusesASymlinkedTrashRoot(t *testing.T) {
+	root := home(t)
+	outside := t.TempDir()
+	writeRun(t, outside, "run-a", "claude", early, "completed")
+	if err := os.Symlink(outside, trashRootFor(root)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := restoreRun(root, "run-a"); err == nil {
+		t.Fatal("restoreRun accepted a symlinked trash root")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "run-a", manifestFile)); err != nil {
+		t.Fatalf("external run moved despite refusal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "run-a")); !os.IsNotExist(err) {
+		t.Fatalf("runs root entry = %v, want absent", err)
+	}
+}
+
+func TestTrashListRefusesASymlinkedTrashRoot(t *testing.T) {
+	root := home(t)
+	outside := t.TempDir()
+	writeRun(t, outside, "run-a", "claude", early, "completed")
+	if err := os.Symlink(outside, trashRootFor(root)); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, stdout, _ := run(t, "trash"); code != exitFailure {
+		t.Fatalf("trash list exit = %d, want %d; output:\n%s", code, exitFailure, stdout)
+	}
+}
+
+func TestTrashListKeepsTheOpenedRootAfterPathReplacement(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	if err := trashRun(root, "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	writeRun(t, outside, "run-b", "codex", late, "completed")
+	parked := filepath.Join(filepath.Dir(root), "trash-held")
+	var replaceErr error
+
+	runs, unreadable, err := listTrash(root, func() {
+		if replaceErr = os.Rename(trashRootFor(root), parked); replaceErr == nil {
+			replaceErr = os.Symlink(outside, trashRootFor(root))
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaceErr != nil {
+		t.Fatalf("replace trash root: %v", replaceErr)
+	}
+	if unreadable != 0 || len(runs) != 1 || runs[0].ID != "run-a" {
+		t.Fatalf("listed runs = %+v, unreadable %d, want held run-a", runs, unreadable)
+	}
+}
+
 func TestTrashCommandListsRestoresAndEmpties(t *testing.T) {
 	root := home(t)
 	at := time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
