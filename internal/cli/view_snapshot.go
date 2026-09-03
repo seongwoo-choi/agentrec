@@ -135,14 +135,15 @@ func (s *viewSnapshot) Close() error {
 }
 
 type viewSnapshotStore struct {
-	root      string
-	sem       chan struct{}
-	mu        sync.RWMutex
-	byID      map[string]*viewSnapshot
-	ids       []string
-	closed    bool
-	afterCopy func()
-	cache     *viewStreamCache
+	root              string
+	sem               chan struct{}
+	mu                sync.RWMutex
+	byID              map[string]*viewSnapshot
+	ids               []string
+	closed            bool
+	afterCopy         func()
+	beforeFingerprint func(context.Context)
+	cache             *viewStreamCache
 }
 
 func newViewSnapshotStore(root string) *viewSnapshotStore {
@@ -483,7 +484,33 @@ func (r viewContextReader) Read(buffer []byte) (int, error) {
 	if err := r.ctx.Err(); err != nil {
 		return 0, err
 	}
+	if len(buffer) > viewContextChunkSize {
+		buffer = buffer[:viewContextChunkSize]
+	}
 	return r.reader.Read(buffer)
+}
+
+const viewContextChunkSize = 64 << 10
+
+func hashViewBytesContext(ctx context.Context, data []byte) ([sha256.Size]byte, error) {
+	hash := sha256.New()
+	for start := 0; start < len(data); start += viewContextChunkSize {
+		if err := ctx.Err(); err != nil {
+			return [sha256.Size]byte{}, err
+		}
+		end := min(start+viewContextChunkSize, len(data))
+		_, _ = hash.Write(data[start:end])
+	}
+	if err := ctx.Err(); err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], hash.Sum(nil))
+	return digest, nil
+}
+
+func copyViewNContext(ctx context.Context, dst io.Writer, src io.Reader, size int64) (int64, error) {
+	return io.CopyN(dst, viewContextReader{ctx: ctx, reader: src}, size)
 }
 
 func captureViewRun(source *os.Root, expected map[string]viewFileIdentity, snapshot *viewSnapshot) error {
@@ -571,7 +598,11 @@ func captureViewDocumentContext(ctx context.Context, source *os.Root, name strin
 	if closeErr != nil {
 		return nil, fmt.Errorf("cli: close %s after viewer snapshot capture: %w", name, closeErr)
 	}
-	if !sameViewFileMetadata(expected.info, after) || sha256.Sum256(raw) != expected.digest {
+	digest, hashErr := hashViewBytesContext(ctx, raw)
+	if hashErr != nil {
+		return nil, fmt.Errorf("cli: hash %s after viewer snapshot capture: %w", name, hashErr)
+	}
+	if !sameViewFileMetadata(expected.info, after) || digest != expected.digest {
 		return nil, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
 	}
 	return raw, nil
@@ -681,7 +712,7 @@ func captureViewStreamWithUnlinkContext(ctx context.Context, source *os.Root, na
 		return cleanup(errors.New("cli: viewer stream snapshot changed before it was pinned"), readFile)
 	}
 	readHash := sha256.New()
-	if _, err := io.CopyN(readHash, readFile, size); err != nil {
+	if _, err := copyViewNContext(ctx, readHash, readFile, size); err != nil {
 		return cleanup(fmt.Errorf("cli: verify viewer stream snapshot: %w", err), readFile)
 	}
 	var readDigest [sha256.Size]byte
@@ -729,7 +760,10 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		}
 		return viewRunResponse{}, err
 	}
-	before, err := viewRunFingerprint(sourceRoot)
+	if s.beforeFingerprint != nil {
+		s.beforeFingerprint(ctx)
+	}
+	before, err := viewRunFingerprintContext(ctx, sourceRoot)
 	if err != nil {
 		return fail(err)
 	}
@@ -770,7 +804,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		snapshot.repoRoot = manifest.CWD
 	}
 	if manifest.UnparsedLines > 0 {
-		unparsedBefore, err := viewFileFingerprint(sourceRoot, unparsedFile)
+		unparsedBefore, err := viewFileFingerprintContext(ctx, sourceRoot, unparsedFile)
 		if err != nil {
 			return fail(err)
 		}
@@ -780,7 +814,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 				return fail(err)
 			}
 		}
-		unparsedAfter, err := viewFileFingerprint(sourceRoot, unparsedFile)
+		unparsedAfter, err := viewFileFingerprintContext(ctx, sourceRoot, unparsedFile)
 		if err != nil {
 			return fail(err)
 		}
@@ -788,7 +822,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 			return fail(errors.New("cli: run changed while the viewer snapshot was being created; retry"))
 		}
 	}
-	if err := validateCapturedUnparsed(snapshot, manifest.UnparsedLines); err != nil {
+	if err := validateCapturedUnparsed(ctx, snapshot, manifest.UnparsedLines); err != nil {
 		return fail(err)
 	}
 	prompt, err := decodeViewPrompt(snapshot.documents[promptFile], snapshot.documents[promptFile] != nil)
@@ -799,7 +833,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	if err != nil {
 		return fail(err)
 	}
-	if err := prepareViewChanges(snapshot); err != nil {
+	if err := prepareViewChangesContext(ctx, snapshot); err != nil {
 		return fail(err)
 	}
 	snapshot.changePaths = make(map[string]struct{}, len(snapshot.changes))
@@ -809,18 +843,18 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	if snapshot.actions == nil {
 		return fail(fmt.Errorf("cli: open %s: %w", actionsFile, os.ErrNotExist))
 	}
-	actionCount, err := countViewActions(snapshot.actions, snapshot.actionSize)
+	actionCount, err := countViewActionsContext(ctx, snapshot.actions, snapshot.actionSize)
 	if err != nil {
 		return fail(err)
 	}
 	eventCount := 0
 	if snapshot.events != nil {
-		eventCount, err = countViewEvents(snapshot.events, snapshot.eventSize)
+		eventCount, err = countViewEventsContext(ctx, snapshot.events, snapshot.eventSize)
 		if err != nil {
 			return fail(err)
 		}
 	}
-	after, err := viewRunFingerprint(sourceRoot)
+	after, err := viewRunFingerprintContext(ctx, sourceRoot)
 	if err != nil {
 		return fail(err)
 	}
@@ -844,6 +878,8 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		return fail(err)
 	}
 
+	exitReason := viewExitReason(manifest)
+	statusClass, statusLabel := viewRunStatus(exitReason, evidence.verificationStatus, evidence.verificationWarnings)
 	return viewRunResponse{
 		SchemaVersion: 1,
 		SnapshotID:    snapshot.id,
@@ -852,8 +888,9 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		Run: viewRunInfo{
 			ID: runID, Provider: manifest.Provider, ProviderVersion: manifest.ProviderVersion,
 			Project: projectName(manifest.CWD), CWD: manifest.CWD, Prompt: prompt,
-			StartedAt: manifest.StartedAt, EndedAt: manifest.EndedAt, ExitReason: viewExitReason(manifest),
-			WarningCount: manifest.WarningCount, UnparsedLines: manifest.UnparsedLines,
+			StartedAt: manifest.StartedAt, EndedAt: manifest.EndedAt, ExitReason: exitReason,
+			StatusClass: statusClass, StatusLabel: statusLabel,
+			WarningCount: manifest.WarningCount + evidence.verificationWarnings, UnparsedLines: manifest.UnparsedLines,
 			VersionUnverified: manifest.VersionUnverified,
 			Mode:              manifest.Mode, SessionID: manifest.SessionID,
 		},
@@ -864,9 +901,16 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 }
 
 func viewRunFingerprint(root *os.Root) (map[string]viewFileIdentity, error) {
+	return viewRunFingerprintContext(context.Background(), root)
+}
+
+func viewRunFingerprintContext(ctx context.Context, root *os.Root) (map[string]viewFileIdentity, error) {
 	fingerprint := make(map[string]viewFileIdentity, len(viewSnapshotFiles))
 	for _, name := range viewSnapshotFiles {
-		identity, err := viewFileFingerprint(root, name)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		identity, err := viewFileFingerprintContext(ctx, root, name)
 		if err != nil {
 			return nil, err
 		}
@@ -884,6 +928,13 @@ func viewRunFingerprint(root *os.Root) (map[string]viewFileIdentity, error) {
 var viewAppendOnly = map[string]bool{actionsFile: true, providerEventsFile: true}
 
 func viewFileFingerprint(root *os.Root, name string) (viewFileIdentity, error) {
+	return viewFileFingerprintContext(context.Background(), root, name)
+}
+
+func viewFileFingerprintContext(ctx context.Context, root *os.Root, name string) (viewFileIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return viewFileIdentity{}, err
+	}
 	file, err := openRegularFromRoot(root, name)
 	if errors.Is(err, os.ErrNotExist) {
 		return viewFileIdentity{}, nil
@@ -906,7 +957,7 @@ func viewFileFingerprint(root *os.Root, name string) (viewFileIdentity, error) {
 		return viewFileIdentity{present: true, info: info}, nil
 	}
 	hash := sha256.New()
-	if _, err := io.CopyN(hash, file, info.Size()); err != nil {
+	if _, err := io.CopyN(hash, viewContextReader{ctx: ctx, reader: file}, info.Size()); err != nil {
 		file.Close()
 		return viewFileIdentity{}, fmt.Errorf("cli: fingerprint %s for viewer snapshot: %w", name, err)
 	}
@@ -976,7 +1027,7 @@ func decodeViewPrompt(raw []byte, present bool) (string, error) {
 	return strings.TrimSuffix(string(raw), "\n"), nil
 }
 
-func validateCapturedUnparsed(snapshot *viewSnapshot, want int) error {
+func validateCapturedUnparsed(ctx context.Context, snapshot *viewSnapshot, want int) error {
 	validationErr := validateUnparsedCount(want)
 	if validationErr == nil && want > 0 {
 		switch {
@@ -986,7 +1037,7 @@ func validateCapturedUnparsed(snapshot *viewSnapshot, want int) error {
 			if _, err := snapshot.unparsed.Seek(0, io.SeekStart); err != nil {
 				validationErr = fmt.Errorf("cli: rewind %s: %w", unparsedFile, err)
 			} else {
-				validationErr = validateUnparsedFile(snapshot.unparsed, want)
+				validationErr = validateUnparsedFileContext(ctx, snapshot.unparsed, want)
 			}
 		}
 	}
@@ -1033,13 +1084,20 @@ func readCapturedViewEvidence(snapshot *viewSnapshot, manifest storage.Manifest)
 	if posthoc != nil {
 		posthoc.OwnRan = verification != nil
 	}
-	return viewEvidence{
+	out := viewEvidence{
 		ProviderUsage:       viewFields(providerUsageFields(usage)),
 		Supervisor:          viewFields(supervisorFields(manifest, result)),
 		Repository:          viewFields(repository),
 		Verification:        viewFields(verificationSummary),
 		PosthocVerification: posthoc,
-	}, nil
+	}
+	if verification != nil {
+		out.verificationStatus = verdict(verification.Status)
+		out.verificationWarnings = len(verification.Warnings)
+	} else {
+		out.verificationStatus = verificationNotRun
+	}
+	return out, nil
 }
 
 // viewPosthocVerificationOf reads a later verification captured with the
@@ -1074,10 +1132,17 @@ func newViewPosthocVerification(result *evidence.VerificationResult, meta *posth
 }
 
 func countViewActions(file *os.File, size int64) (int, error) {
-	scanner := bufio.NewScanner(io.NewSectionReader(file, 0, size))
+	return countViewActionsContext(context.Background(), file, size)
+}
+
+func countViewActionsContext(ctx context.Context, file *os.File, size int64) (int, error) {
+	scanner := bufio.NewScanner(viewContextReader{ctx: ctx, reader: io.NewSectionReader(file, 0, size)})
 	scanner.Buffer(nil, maxActionBytes)
 	count := 0
 	for line := 1; scanner.Scan(); line++ {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if len(strings.TrimSpace(scanner.Text())) == 0 {
 			continue
 		}
@@ -1097,10 +1162,17 @@ func countViewActions(file *os.File, size int64) (int, error) {
 }
 
 func countViewEvents(file *os.File, size int64) (int, error) {
-	scanner := bufio.NewScanner(io.NewSectionReader(file, 0, size))
+	return countViewEventsContext(context.Background(), file, size)
+}
+
+func countViewEventsContext(ctx context.Context, file *os.File, size int64) (int, error) {
+	scanner := bufio.NewScanner(viewContextReader{ctx: ctx, reader: io.NewSectionReader(file, 0, size)})
 	scanner.Buffer(nil, maxEventBytes)
 	count, tokens := 0, 0
 	for line := 1; scanner.Scan(); line++ {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		raw := bytes.TrimSpace(scanner.Bytes())
 		if len(raw) == 0 {
 			continue

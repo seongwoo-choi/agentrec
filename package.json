@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:ui": "node --test internal/cli/ui_assets/app.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "30.0.1"
+  }
+}

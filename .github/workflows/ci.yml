@@ -28,6 +28,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Install UI test dependencies
+        run: npm ci --include=dev
+
+      - name: Test viewer DOM behavior
+        run: npm run test:ui
+
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
 

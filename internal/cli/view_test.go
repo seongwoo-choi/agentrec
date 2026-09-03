@@ -9,10 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -838,6 +841,310 @@ func TestViewPagesAreAlsoBoundedByBytes(t *testing.T) {
 	}
 }
 
+type blockingCheckContext struct {
+	context.Context
+	reached   chan<- struct{}
+	once      sync.Once
+	remaining atomic.Int32
+}
+
+func (c *blockingCheckContext) Err() error {
+	if err := c.Context.Err(); err != nil {
+		return err
+	}
+	if c.remaining.Add(-1) >= 0 {
+		return nil
+	}
+	c.once.Do(func() { c.reached <- struct{}{} })
+	<-c.Context.Done()
+	return c.Context.Err()
+}
+
+func TestCancelledChangeParsingReleasesBothSnapshotSlots(t *testing.T) {
+	root := home(t)
+	store := newViewSnapshotStore(root)
+	t.Cleanup(func() { _ = store.Close() })
+	raw := []byte(`{"status":"available","attribution":"repository_observed","files":[],"totals":{"files":0,"additions":0,"deletions":0,"binary":0}}`)
+	reached := make(chan struct{}, 2)
+	done := make(chan error, 2)
+	cancels := make([]context.CancelFunc, 0, 2)
+	for range 2 {
+		base, cancel := context.WithCancel(context.Background())
+		cancels = append(cancels, cancel)
+		ctx := &blockingCheckContext{Context: base, reached: reached}
+		ctx.remaining.Store(3)
+		request := httptest.NewRequest(http.MethodGet, "/api/runs/run", nil).WithContext(ctx)
+		go func() {
+			done <- store.withSlot(request, func() error {
+				var target trackedChangeDocument
+				return decodeViewChangeDocumentContext(request.Context(), raw, "tracked", &target)
+			})
+		}()
+	}
+	for range 2 {
+		select {
+		case <-reached:
+		case <-time.After(2 * time.Second):
+			t.Fatal("two change parsers did not occupy both slots")
+		}
+	}
+	for _, cancel := range cancels {
+		cancel()
+	}
+	third := httptest.NewRequest(http.MethodGet, "/api/runs/run", nil)
+	thirdStarted := make(chan struct{})
+	thirdDone := make(chan error, 1)
+	go func() {
+		thirdDone <- store.withSlot(third, func() error {
+			close(thirdStarted)
+			return nil
+		})
+	}()
+	select {
+	case <-thirdStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("third request did not acquire a slot after parser cancellation")
+	}
+	for range 2 {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Errorf("cancelled parser error = %v, want context.Canceled", err)
+		}
+	}
+	if err := <-thirdDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCancelledSnapshotsReleaseBothSlotsBeforeBlockedWorkIsReleased(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run", "claude", early, "completed")
+	store := newViewSnapshotStore(root)
+	t.Cleanup(func() { _ = store.Close() })
+	started := make(chan struct{}, 2)
+	thirdStarted := make(chan struct{})
+	var calls atomic.Int32
+	store.beforeFingerprint = func(ctx context.Context) {
+		if calls.Add(1) <= 2 {
+			started <- struct{}{}
+			<-ctx.Done()
+		} else {
+			close(thirdStarted)
+		}
+	}
+
+	cancels := make([]context.CancelFunc, 0, 2)
+	done := make(chan error, 2)
+	for range 2 {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancels = append(cancels, cancel)
+		request := httptest.NewRequest(http.MethodGet, "/api/runs/run", nil).WithContext(ctx)
+		go func() {
+			done <- store.withSlot(request, func() error {
+				_, err := store.createContext(request.Context(), "run")
+				return err
+			})
+		}()
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("two snapshot requests did not occupy both slots")
+		}
+	}
+	for _, cancel := range cancels {
+		cancel()
+	}
+
+	thirdRequest := httptest.NewRequest(http.MethodGet, "/api/runs/run", nil)
+	thirdDone := make(chan error, 1)
+	go func() {
+		thirdDone <- store.withSlot(thirdRequest, func() error {
+			_, err := store.createContext(thirdRequest.Context(), "run")
+			return err
+		})
+	}()
+	select {
+	case <-thirdStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("third snapshot did not acquire a slot after both cancellations")
+	}
+	for range 2 {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Errorf("cancelled snapshot error = %v, want context.Canceled", err)
+		}
+	}
+	if err := <-thirdDone; err != nil {
+		t.Fatalf("third snapshot error = %v", err)
+	}
+}
+
+type cancelAfterRead struct {
+	reader io.Reader
+	cancel context.CancelFunc
+	read   bool
+}
+
+func (r *cancelAfterRead) Read(p []byte) (int, error) {
+	if len(p) > 16 {
+		p = p[:16]
+	}
+	n, err := r.reader.Read(p)
+	if !r.read {
+		r.read = true
+		r.cancel()
+	}
+	return n, err
+}
+
+type cancelAfterContextChecks struct {
+	context.Context
+	remaining int
+}
+
+func (c *cancelAfterContextChecks) Err() error {
+	if c.remaining == 0 {
+		return context.Canceled
+	}
+	c.remaining--
+	return nil
+}
+
+type recordingReader struct {
+	reader io.Reader
+	max    int
+}
+
+func (r *recordingReader) Read(p []byte) (int, error) {
+	if len(p) > r.max {
+		r.max = len(p)
+	}
+	return r.reader.Read(p)
+}
+
+func TestViewContextReaderBoundsEachRead(t *testing.T) {
+	data := bytes.Repeat([]byte("a"), 2*viewContextChunkSize)
+	recorder := &recordingReader{reader: bytes.NewReader(data)}
+	got := make([]byte, len(data))
+	if _, err := io.ReadFull(viewContextReader{ctx: context.Background(), reader: recorder}, got); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.max > viewContextChunkSize {
+		t.Fatalf("largest read buffer = %d, want <= %d", recorder.max, viewContextChunkSize)
+	}
+}
+
+func TestViewChangeDocumentRejectsUnterminatedOversizedObject(t *testing.T) {
+	raw := []byte(`{"status":"available","attribution":"repository_observed","baseline":"HEAD","files":[{"path":"file.txt","additions":1,"deletions":1` + strings.Repeat(" ", 2*viewContextChunkSize))
+	var target trackedChangeDocument
+	err := decodeViewChangeDocumentContext(context.Background(), raw, "tracked.json", &target)
+	if err == nil || !strings.Contains(err.Error(), "nested JSON object exceeds") {
+		t.Fatalf("decode error = %v, want nested object bound", err)
+	}
+}
+
+func TestViewChangeDocumentRejectsOversizedSingleField(t *testing.T) {
+	raw := []byte(`{"status":"available","attribution":"repository_observed","baseline":"HEAD","files":[{"path":"` + strings.Repeat("a", viewContextChunkSize+1) + `","additions":1,"deletions":0}],"totals":{"files":1,"additions":1,"deletions":0}}`)
+	var document trackedChangeDocument
+	if err := decodeViewChangeDocumentContext(context.Background(), raw, "tracked-stat.json", &document); err == nil || !strings.Contains(err.Error(), "JSON string exceeds") {
+		t.Fatalf("decode error = %v, want bounded-string rejection", err)
+	}
+}
+
+func TestViewLinearPassesStopWhenCancelledMidWork(t *testing.T) {
+	data := bytes.Repeat([]byte("a"), 2*viewContextChunkSize)
+	t.Run("document hash", func(t *testing.T) {
+		ctx := &cancelAfterContextChecks{Context: context.Background(), remaining: 1}
+		if _, err := hashViewBytesContext(ctx, data); !errors.Is(err, context.Canceled) {
+			t.Fatalf("hash error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("UTF-8 validation", func(t *testing.T) {
+		ctx := &cancelAfterContextChecks{Context: context.Background(), remaining: 1}
+		if _, err := validViewUTF8Context(ctx, data); !errors.Is(err, context.Canceled) {
+			t.Fatalf("UTF-8 error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("snapshot rehash", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		reader := &cancelAfterRead{reader: bytes.NewReader(data), cancel: cancel}
+		if _, err := copyViewNContext(ctx, io.Discard, reader, int64(len(data))); !errors.Is(err, context.Canceled) {
+			t.Fatalf("copy error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+func TestViewParsersStopWhenCancelledMidRead(t *testing.T) {
+	t.Run("unparsed", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		reader := &cancelAfterRead{reader: strings.NewReader("one\ntwo\n"), cancel: cancel}
+		if err := validateUnparsedReaderContext(ctx, reader, int64(len("one\ntwo\n")), 2); !errors.Is(err, context.Canceled) {
+			t.Fatalf("unparsed error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("change document reader", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		reader := &cancelAfterRead{reader: strings.NewReader(`{"attribution":"repository_observed","baseline":"base","status":"available","reason":"","files":[]}`), cancel: cancel}
+		var target trackedChangeDocument
+		if err := decodeViewChangeReaderContext(ctx, reader, "tracked", &target); !errors.Is(err, context.Canceled) {
+			t.Fatalf("change document reader error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("change document parse", func(t *testing.T) {
+		var raw strings.Builder
+		raw.WriteString(`{"status":"available","attribution":"repository_observed","files":[`)
+		for i := range 5000 {
+			if i > 0 {
+				raw.WriteByte(',')
+			}
+			fmt.Fprintf(&raw, `{"path":"file-%d","additions":1,"deletions":1}`, i)
+		}
+		raw.WriteString(`],"totals":{"files":5000,"additions":5000,"deletions":5000,"binary":0}}`)
+		ctx := &cancelAfterContextChecks{Context: context.Background(), remaining: 20}
+		var target trackedChangeDocument
+		if err := decodeViewChangeDocumentContext(ctx, []byte(raw.String()), "tracked", &target); !errors.Is(err, context.Canceled) {
+			t.Fatalf("change document parse error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+func TestViewExpensivePreparationStopsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := prepareViewChangesContext(ctx, &viewSnapshot{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("prepare changes error = %v, want context.Canceled", err)
+	}
+	file, err := os.CreateTemp(t.TempDir(), "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.WriteString("{}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := countViewActionsContext(ctx, file, 3); !errors.Is(err, context.Canceled) {
+		t.Fatalf("count actions error = %v, want context.Canceled", err)
+	}
+	if _, err := countViewEventsContext(ctx, file, 3); !errors.Is(err, context.Canceled) {
+		t.Fatalf("count events error = %v, want context.Canceled", err)
+	}
+}
+
+func TestViewFingerprintStopsAfterCancellation(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-cancelled-fingerprint", "claude", early, "completed")
+	runRoot, err := openRunRoot(root, "run-cancelled-fingerprint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runRoot.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := viewRunFingerprintContext(ctx, runRoot); !errors.Is(err, context.Canceled) {
+		t.Fatalf("fingerprint error = %v, want context.Canceled", err)
+	}
+}
+
 func TestViewFingerprintDetectsReplacedEvidenceFile(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-fingerprint", "claude", early, "completed")
@@ -1254,6 +1561,404 @@ func TestViewChangesUIUsesSnapshotBackedChangeAndPatchViews(t *testing.T) {
 	}
 }
 
+func TestViewRunListPreservesExplicitInitialRunBeyondFirstPage(t *testing.T) {
+	root := home(t)
+	var oldest string
+	for i := range 55 {
+		runID := early.Add(time.Duration(i)*time.Second).UTC().Format(runIDTimeLayout) + fmt.Sprintf("-%08x", i)
+		writeRun(t, root, runID, "claude", early.Add(time.Duration(i)*time.Second), "completed")
+		if i == 0 {
+			oldest = runID
+		}
+	}
+	handler := newViewHandler(root, oldest, false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var page struct {
+		InitialRunID string           `json:"initialRunId"`
+		Runs         []viewRunSummary `json:"runs"`
+	}
+	viewJSONRequest(t, handler, "/api/runs", &page)
+	if page.InitialRunID != oldest {
+		t.Fatalf("initial run = %q, want %q", page.InitialRunID, oldest)
+	}
+	for _, run := range page.Runs {
+		if run.ID == oldest {
+			t.Fatal("fixture did not place the explicit run beyond page one")
+		}
+	}
+}
+
+func TestViewRunIndexSupportsFreshMissingDataDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing", "runs")
+	page, err := scanViewRunPage(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.runs) != 0 || page.total != 0 {
+		t.Fatalf("fresh page = %d runs, total %d", len(page.runs), page.total)
+	}
+}
+
+func TestViewRunIndexRejectsCountLargerThanFile(t *testing.T) {
+	root := home(t)
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(filepath.Dir(root), viewRunIndexFile)
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("%s %020d\n", viewRunIndexHeader, int(^uint(0)>>1))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readAllViewRunIndex(root)
+	if err == nil || !strings.Contains(err.Error(), "count exceeds file size") {
+		t.Fatalf("read error = %v, want file-size count bound", err)
+	}
+}
+
+func TestViewRunIndexDirtyMarkerRebuildsBeforeNextUpdate(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	if err := writeViewRunIndex(root, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(root), viewRunIndexDirty), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeRun(t, root, "run-b", "codex", early.Add(time.Second), "completed")
+	err := updateViewRunIndex(root, func(entries []viewRunIndexEntry) []viewRunIndexEntry {
+		return upsertViewRunIndexEntry(entries, viewRunIndexEntry{id: "run-b", startedAt: early.Add(time.Second)})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := scanViewRunPage(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.runs) != 2 || page.runs[0].ID != "run-b" || page.runs[1].ID != "run-a" {
+		t.Fatalf("recovered runs = %+v", page.runs)
+	}
+}
+
+func TestViewRunIndexSerializesMigrationWithCreate(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "claude", early, "completed")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	beforeViewRunIndexRebuildPublish = func() {
+		close(entered)
+		<-release
+	}
+	t.Cleanup(func() { beforeViewRunIndexRebuildPublish = nil })
+	migrationDone := make(chan error, 1)
+	go func() { migrationDone <- ensureViewRunIndex(root) }()
+	<-entered
+	writeRun(t, root, "run-b", "codex", early.Add(time.Second), "completed")
+	createDone := make(chan error, 1)
+	go func() {
+		err := updateViewRunIndex(root, func(entries []viewRunIndexEntry) []viewRunIndexEntry {
+			return upsertViewRunIndexEntry(entries, viewRunIndexEntry{id: "run-b", startedAt: early.Add(time.Second)})
+		})
+		createDone <- err
+	}()
+	close(release)
+	if err := <-migrationDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-createDone; err != nil {
+		t.Fatal(err)
+	}
+	beforeViewRunIndexRebuildPublish = nil
+	page, err := scanViewRunPage(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.runs) != 2 || page.runs[0].ID != "run-b" || page.runs[1].ID != "run-a" {
+		t.Fatalf("serialized runs = %+v", page.runs)
+	}
+}
+
+func TestViewRunIndexRejectsExternalSymlink(t *testing.T) {
+	root := home(t)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "outside-index")
+	const sentinel = "outside-sentinel"
+	if err := os.WriteFile(external, []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(filepath.Dir(root), viewRunIndexFile)); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := openViewRunIndex(root); err == nil {
+		file.Close()
+		t.Fatal("open accepted an external run-index symlink")
+	}
+	if _, err := scanViewRunPage(root, ""); err == nil {
+		t.Fatal("scan accepted an external run-index symlink")
+	}
+	got, err := os.ReadFile(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != sentinel {
+		t.Fatalf("external index = %q, want untouched sentinel", got)
+	}
+}
+
+func TestViewRunPageReadsOnlyOneCanonicalPage(t *testing.T) {
+	root := home(t)
+	entries := make([]viewRunIndexEntry, 0, 120)
+	for i := range 120 {
+		startedAt := early.Add(time.Duration(i) * time.Second)
+		runID := startedAt.UTC().Format(runIDTimeLayout) + fmt.Sprintf("-%08x", i)
+		if err := os.MkdirAll(filepath.Join(root, runID), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, viewRunIndexEntry{id: runID, startedAt: startedAt})
+	}
+	if err := writeViewRunIndex(root, entries); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(filepath.Dir(root), viewRunIndexFile)
+	indexRaw, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldest := bytes.IndexByte(indexRaw, '\n') + 1
+	if oldest <= 0 || oldest >= len(indexRaw) {
+		t.Fatal("run index has no oldest record")
+	}
+	indexRaw[oldest] = '!'
+	if err := os.WriteFile(indexPath, indexRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	read := func(_ *os.Root, runID string) (runSummary, error) {
+		reads++
+		return runSummary{ID: runID, StartedAt: early}, nil
+	}
+	first, err := scanViewRunPageWithRead(root, "", read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.runs) != viewRunPageSize || reads != viewRunPageSize || first.nextCursor == "" {
+		t.Fatalf("first page = %d runs, %d reads, cursor %q", len(first.runs), reads, first.nextCursor)
+	}
+	reads = 0
+	second, err := scanViewRunPageWithRead(root, first.nextCursor, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.runs) != viewRunPageSize || reads != viewRunPageSize {
+		t.Fatalf("second page = %d runs, %d reads", len(second.runs), reads)
+	}
+}
+
+func TestViewRunListUIUsesExplicitCursorContinuation(t *testing.T) {
+	root := home(t)
+	handler := newViewHandler(root, "", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	get := func(path string) []byte {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Host = "localhost:42817"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d", path, response.Code)
+		}
+		return response.Body.Bytes()
+	}
+	index := get("/")
+	app := get("/assets/app.js")
+	if !bytes.Contains(index, []byte(`id="run-load-more"`)) {
+		t.Fatal("run list has no explicit load-more control")
+	}
+	for _, source := range []string{
+		"/api/runs?cursor=${encodeURIComponent(cursor)}",
+		"applyRunList(list, true)",
+	} {
+		if !strings.Contains(string(app), source) {
+			t.Fatalf("app.js missing %q", source)
+		}
+	}
+}
+
+func TestViewRunListCacheDropsNewlyUnreadableRecentRun(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-cache-unreadable", "claude", early, "completed")
+	cache := newViewRunListCache(root)
+	first, err := cache.list()
+	if err != nil || len(first.runs) != 1 {
+		t.Fatalf("first list = %+v, %v", first, err)
+	}
+	manifestPath := filepath.Join(root, "run-cache-unreadable", manifestFile)
+	original, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := cache.list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.runs) != 0 || second.unreadable != 1 {
+		t.Fatalf("second list = %d runs, %d unreadable", len(second.runs), second.unreadable)
+	}
+	if err := os.WriteFile(manifestPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	third, err := cache.list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(third.runs) != 1 || third.unreadable != 0 {
+		t.Fatalf("third list = %d runs, %d unreadable", len(third.runs), third.unreadable)
+	}
+}
+
+func TestViewRunListCacheAvoidsFullRescanOnUnchangedPoll(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-cache", "claude", early, "completed")
+	cache := newViewRunListCache(root)
+	fullScans := 0
+	cache.scan = func(cursor string) (viewRunPage, error) {
+		fullScans++
+		return scanViewRunPage(root, cursor)
+	}
+	if _, err := cache.list(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.list(); err != nil {
+		t.Fatal(err)
+	}
+	if fullScans != 1 {
+		t.Fatalf("full scans = %d, want 1", fullScans)
+	}
+}
+
+func TestViewRunListUsesBoundedCursorPages(t *testing.T) {
+	root := home(t)
+	for i := range 55 {
+		writeRun(t, root, fmt.Sprintf("run-%02d", i), "claude", early.Add(time.Duration(i)*time.Second), "completed")
+	}
+	handler := newViewHandler(root, "", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	type page struct {
+		Runs       []viewRunSummary `json:"runs"`
+		Total      int              `json:"total"`
+		NextCursor string           `json:"nextCursor"`
+	}
+	var first page
+	viewJSONRequest(t, handler, "/api/runs", &first)
+	if len(first.Runs) != 50 || first.Total != 55 || first.NextCursor == "" {
+		t.Fatalf("first page = %d runs, total %d, cursor %q", len(first.Runs), first.Total, first.NextCursor)
+	}
+	if first.NextCursor == first.Runs[len(first.Runs)-1].ID {
+		t.Fatal("continuation cursor exposes the last run ID")
+	}
+	var second page
+	viewJSONRequest(t, handler, "/api/runs?cursor="+url.QueryEscape(first.NextCursor), &second)
+	if len(second.Runs) != 5 || second.Total != 55 || second.NextCursor != "" {
+		t.Fatalf("second page = %d runs, total %d, cursor %q", len(second.Runs), second.Total, second.NextCursor)
+	}
+	seen := make(map[string]bool, 55)
+	for _, run := range append(first.Runs, second.Runs...) {
+		if seen[run.ID] {
+			t.Fatalf("run %q appeared on both pages", run.ID)
+		}
+		seen[run.ID] = true
+	}
+}
+
+func TestViewRunListIncludesVerificationIntegrityWarnings(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run", "claude", early, "completed")
+	writeVerification(t, root, "run", map[string]any{
+		"status":      "passed",
+		"attribution": evidence.VerificationAttribution,
+		"checks":      []any{},
+		"warnings": []any{map[string]any{
+			"code":  "verification_mutated_repository",
+			"paths": []string{"changed.txt"},
+		}},
+	})
+	handler := newViewHandler(root, "run", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	request := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
+	request.Host = "127.0.0.1"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Runs []struct {
+			StatusClass string `json:"statusClass"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Runs) != 1 || body.Runs[0].StatusClass != "warn" {
+		t.Fatalf("runs = %+v, want one warning-classified run", body.Runs)
+	}
+}
+
+func TestViewRunDetailUsesCanonicalAggregateStatus(t *testing.T) {
+	tests := []struct {
+		name, exit, verification string
+		warnings                 []any
+		wantClass                string
+		wantWarnings             int
+	}{
+		{name: "verification mutation", exit: "completed", verification: "passed", warnings: []any{map[string]any{"code": "verification_mutated_repository", "paths": []string{"changed.txt"}}}, wantClass: "warn", wantWarnings: 1},
+		{name: "lost session", exit: reasonSessionLost, verification: "passed", wantClass: "fail"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := home(t)
+			writeRun(t, root, "run", "claude", early, test.exit)
+			writeVerification(t, root, "run", map[string]any{
+				"status":      test.verification,
+				"attribution": evidence.VerificationAttribution,
+				"checks":      []any{},
+				"warnings":    test.warnings,
+			})
+			handler := newViewHandler(root, "run", false)
+			t.Cleanup(func() { _ = handler.Close() })
+			request := httptest.NewRequest(http.MethodGet, "/api/runs/run", nil)
+			request.Host = "127.0.0.1"
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+			}
+			var body struct {
+				Run struct {
+					StatusClass  string `json:"statusClass"`
+					WarningCount int    `json:"warningCount"`
+				} `json:"run"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Run.StatusClass != test.wantClass || body.Run.WarningCount != test.wantWarnings {
+				t.Fatalf("run status = %q, warnings = %d; want %q, %d", body.Run.StatusClass, body.Run.WarningCount, test.wantClass, test.wantWarnings)
+			}
+		})
+	}
+}
+
+func TestViewRunStatusIncludesVerificationIntegrityWarnings(t *testing.T) {
+	gotClass, gotLabel := viewRunStatus("completed", "PASS", 1)
+	if gotClass != "warn" || gotLabel != "PASS" {
+		t.Fatalf("status = (%q, %q), want (warn, PASS)", gotClass, gotLabel)
+	}
+}
+
 func TestViewRunListKeepsUnavailableVerificationNeutral(t *testing.T) {
 	tests := []struct {
 		name, exit, verification, wantClass, wantLabel string
@@ -1261,6 +1966,7 @@ func TestViewRunListKeepsUnavailableVerificationNeutral(t *testing.T) {
 		{"unavailable verification", "completed", "NOT RUN", "", "NOT RUN"},
 		{"passed verification", "completed", "PASS", "pass", "PASS"},
 		{"failed verification", "completed", "FAIL", "fail", "FAIL"},
+		{"tainted verification", "completed", "TAINTED", "warn", "TAINTED"},
 		{"unknown verification", "completed", "FUTURE", "", "FUTURE"},
 		{"process failure", "storage_error", "PASS", "fail", "storage_error"},
 	}

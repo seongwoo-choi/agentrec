@@ -290,7 +290,7 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 
 	// There is no invocation to record: the operator started the provider, not
 	// agentrec, and what they typed is not known here.
-	bundle, err := storage.Create(root, runID, storage.Manifest{
+	bundle, err := createIndexedRun(root, runID, storage.Manifest{
 		Provider:     opts.provider,
 		Mode:         storage.ModeSession,
 		SessionID:    opts.sessionID,

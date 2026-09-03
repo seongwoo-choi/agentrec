@@ -127,7 +127,7 @@ func record(req recordRequest, stderr io.Writer) recordOutcome {
 	// The manifest records the invocation exactly as it will be launched,
 	// executable included, so the recorded argv is the command that ran and not
 	// the one the operator typed. Storage sets the redaction rule version.
-	bundle, err := storage.Create(req.RunsRoot, runID, storage.Manifest{
+	bundle, err := createIndexedRun(req.RunsRoot, runID, storage.Manifest{
 		Provider:          req.Provider,
 		ProviderVersion:   req.Command.Version,
 		VersionUnverified: req.Command.VersionUnverified,

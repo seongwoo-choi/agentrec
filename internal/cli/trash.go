@@ -111,7 +111,11 @@ func trashRun(root, runID string) error {
 	if _, err := parent.Lstat(dst); err == nil {
 		return errRunExists
 	}
-	return parent.Rename(filepath.Join(filepath.Base(root), runID), dst)
+	if err := parent.Rename(filepath.Join(filepath.Base(root), runID), dst); err != nil {
+		return err
+	}
+	removeViewRunIndexEntry(root, runID)
+	return nil
 }
 
 // closeOutGrace is how long after a run's recorded end its close-out — the
@@ -187,7 +191,11 @@ func restoreRun(root, runID string) error {
 	if err := parent.MkdirAll(filepath.Base(root), 0o700); err != nil {
 		return fmt.Errorf("cli: create runs directory: %w", err)
 	}
-	return parent.Rename(src, dst)
+	if err := parent.Rename(src, dst); err != nil {
+		return err
+	}
+	restoreViewRunIndexEntry(root, runID)
+	return nil
 }
 
 func emptyTrash(root string, afterOpen func()) (int, error) {

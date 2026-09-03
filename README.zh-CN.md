@@ -438,6 +438,8 @@ agentrec 不声称什么：
 ## 开发
 
 ```sh
+npm ci --include=dev
+npm run test:ui
 go test ./... -count=1 -timeout=420s
 go test -race ./... -count=1 -timeout=600s
 go vet ./...
