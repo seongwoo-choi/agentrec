@@ -93,11 +93,22 @@ var yamlTags = []string{"", "!!map", "!!seq", "!!str", "!!int", "!!bool", "!!nul
 type VerificationOptions struct {
 	Sanitize       func(string) (string, error)
 	MaxOutputBytes int64
+	// DirName is the directory under the run that holds the result; the
+	// run-end verification uses the default, a later one its own.
+	DirName string
+	// Attribution names the evidence layer the result is filed under.
+	Attribution string
 }
 
 func (o VerificationOptions) withDefaults() VerificationOptions {
 	if o.MaxOutputBytes <= 0 {
 		o.MaxOutputBytes = defaultMaxOutputBytes
+	}
+	if o.DirName == "" {
+		o.DirName = verifyDirName
+	}
+	if o.Attribution == "" {
+		o.Attribution = VerificationAttribution
 	}
 	if o.Sanitize == nil {
 		o.Sanitize = func(s string) (string, error) { return s, nil }
@@ -225,12 +236,16 @@ func PinVerification(ctx context.Context, repoRoot, runDir, configPath string, o
 		return nil, err
 	}
 
+	opts = opts.withDefaults()
+	if opts.DirName != filepath.Base(opts.DirName) || opts.DirName == "." || opts.DirName == ".." {
+		return nil, fmt.Errorf("evidence: %s is not a directory name", strconv.Quote(opts.DirName))
+	}
 	p := &PinnedVerification{
 		repoRoot:   repoRoot,
-		dir:        filepath.Join(runDir, verifyDirName),
+		dir:        filepath.Join(runDir, opts.DirName),
 		configPath: configPath,
 		configSum:  hashOf(raw),
-		opts:       opts.withDefaults(),
+		opts:       opts,
 	}
 	if p.configRel, err = p.opts.Sanitize(rel); err != nil {
 		return nil, fmt.Errorf("evidence: sanitize the verification config path: %w", err)
@@ -354,7 +369,7 @@ func (p *PinnedVerification) document(status, reason string, checks []Verificati
 	return VerificationResult{
 		Status:       status,
 		Reason:       reason,
-		Attribution:  VerificationAttribution,
+		Attribution:  p.opts.Attribution,
 		Config:       p.configRel,
 		ConfigSHA256: p.configSum,
 		Checks:       checks,

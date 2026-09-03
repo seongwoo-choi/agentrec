@@ -4,7 +4,7 @@
   const POLL_MS = 5000;
   const LIVE_MS = 3000;
   const SEARCH_MS = 400;
-  const state = { lang: 'en', runs: [], run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, token: '' };
+  const state = { lang: 'en', runs: [], run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -43,6 +43,8 @@
       'Pick a run from the list to inspect its recorded evidence.': '목록에서 실행을 선택하면 기록된 증거를 확인할 수 있습니다.',
       'No recorded runs': '기록된 실행 없음',
       '{n} recorded run(s)': '기록된 실행 {n}개',
+      '{size} on disk': '디스크 사용량 {size}',
+      '{size} in the trash': '휴지통 {size}',
       'Could not load recorded runs': '기록된 실행을 불러오지 못했습니다',
       'Could not load the latest run': '최신 실행을 불러오지 못했습니다',
       '{error} — retrying; pick a run from the list to try another.': '{error} — 다시 시도 중입니다. 목록에서 다른 실행을 선택할 수도 있습니다.',
@@ -235,7 +237,39 @@
       'Live · updated {time}': '실시간 · {time} 갱신',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '현재 작업 트리 — {time} 측정, 실행 중에 관측된 것으로 에이전트가 원인이라는 증명은 아닙니다',
       'Working tree': '작업 트리',
-      'WORKING TREE STATUS': '작업 트리 상태'
+      'WORKING TREE STATUS': '작업 트리 상태',
+      'Compare with…': '다른 실행과 비교…',
+      'Compare runs': '실행 비교',
+      'Pick another recorded run to compare with {id}.': '{id}과(와) 비교할 다른 실행을 선택합니다.',
+      'Find a run to compare': '비교할 실행 검색',
+      'No other runs to compare.': '비교할 다른 실행이 없습니다.',
+      'Loading comparison…': '비교 불러오는 중…',
+      'Could not load comparison: {error}': '비교를 불러오지 못했습니다: {error}',
+      'Pick another run': '다른 실행 선택',
+      'This run': '이 실행',
+      'Provider version': '프로바이더 버전',
+      Started: '시작',
+      'Actions by type': '유형별 액션',
+      'Files changed': '변경된 파일',
+      'Repository status': '저장소 상태',
+      'Only in {id}': '{id}에만 있음',
+      'Some changed files were not read; this split is incomplete.': '변경된 파일 일부를 읽지 않았습니다. 이 구분은 완전하지 않습니다.',
+      'In both': '양쪽 모두',
+      'No files': '파일 없음',
+      '+{n} more': '+{n}개 더',
+      'counted from the first {n} actions': '처음 {n}개 액션 기준',
+      'Verify now': '지금 검증',
+      'Verifying…': '검증 중…',
+      'Verified later': '사후 검증',
+      'This run was not verified when it ended.': '이 run은 끝났을 때 검증되지 않았습니다.',
+      'Measured at {time}': '{time} 측정',
+      'Runs the checks committed in the repository now, in the run\'s repository.': '실행의 저장소에서, 커밋된 검증 체크를 지금 실행합니다.',
+      'Run later, against the repository as it is now — not the state the run left behind.': '나중에 현재 상태의 저장소를 대상으로 실행한 결과입니다. 실행이 남긴 상태가 아닙니다.',
+      'Run later, against the repository as it is now — not the state the run left behind; the repository HEAD has moved since.': '나중에 현재 상태의 저장소를 대상으로 실행한 결과입니다. 실행이 남긴 상태가 아니며, 그 사이 저장소 HEAD가 바뀌었습니다.',
+      'Run later, against the repository as it is now — not the state the run left behind; the repository HEAD has not moved since.': '나중에 현재 상태의 저장소를 대상으로 실행한 결과입니다. 실행이 남긴 상태가 아니며, 그 사이 저장소 HEAD는 바뀌지 않았습니다.',
+      'Run later, against the repository as it is now — not the state the run left behind; whether the repository HEAD moved since is not known.': '나중에 현재 상태의 저장소를 대상으로 실행한 결과입니다. 실행이 남긴 상태가 아니며, 그 사이 저장소 HEAD가 바뀌었는지는 알 수 없습니다.',
+      'Cannot verify: {error}': '검증할 수 없습니다: {error}',
+      'Observed by verification checks, run later': '검증 체크가 관측 (사후 실행)'
     },
     ja: {
       'Action Timeline': 'アクションタイムライン',
@@ -261,6 +295,8 @@
       'Pick a run from the list to inspect its recorded evidence.': '一覧から実行を選ぶと、記録された証跡を確認できます。',
       'No recorded runs': '記録された実行なし',
       '{n} recorded run(s)': '記録された実行 {n} 件',
+      '{size} on disk': 'ディスク使用量 {size}',
+      '{size} in the trash': 'ゴミ箱 {size}',
       'Could not load recorded runs': '記録された実行を読み込めませんでした',
       'Could not load the latest run': '最新の実行を読み込めませんでした',
       '{error} — retrying; pick a run from the list to try another.': '{error} — 再試行しています。一覧から別の実行を選ぶこともできます。',
@@ -453,7 +489,39 @@
       'Live · updated {time}': 'ライブ · {time} 更新',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '現在の作業ツリー — {time} に計測。実行中に観測されたもので、エージェントが原因であることの証明ではありません',
       'Working tree': '作業ツリー',
-      'WORKING TREE STATUS': '作業ツリーの状態'
+      'WORKING TREE STATUS': '作業ツリーの状態',
+      'Compare with…': '他の実行と比較…',
+      'Compare runs': '実行の比較',
+      'Pick another recorded run to compare with {id}.': '{id} と比較する別の実行を選びます。',
+      'Find a run to compare': '比較する実行を検索',
+      'No other runs to compare.': '比較できる他の実行はありません。',
+      'Loading comparison…': '比較を読み込んでいます…',
+      'Could not load comparison: {error}': '比較を読み込めませんでした: {error}',
+      'Pick another run': '別の実行を選ぶ',
+      'This run': 'この実行',
+      'Provider version': 'プロバイダーのバージョン',
+      Started: '開始',
+      'Actions by type': '種類別アクション',
+      'Files changed': '変更されたファイル',
+      'Repository status': 'リポジトリの状態',
+      'Only in {id}': '{id} のみ',
+      'Some changed files were not read; this split is incomplete.': '変更されたファイルの一部は読み取っていません。この区分は完全ではありません。',
+      'In both': '両方にあり',
+      'No files': 'ファイルなし',
+      '+{n} more': '他 {n} 件',
+      'counted from the first {n} actions': '最初の {n} 件のアクションで集計',
+      'Verify now': '今すぐ検証',
+      'Verifying…': '検証しています…',
+      'Verified later': '事後検証',
+      'This run was not verified when it ended.': 'この run は終了時に検証されていません。',
+      'Measured at {time}': '{time} に計測',
+      'Runs the checks committed in the repository now, in the run\'s repository.': '実行のリポジトリで、コミット済みの検証チェックを今すぐ実行します。',
+      'Run later, against the repository as it is now — not the state the run left behind.': '後から、現在の状態のリポジトリに対して実行した結果です。実行が残した状態ではありません。',
+      'Run later, against the repository as it is now — not the state the run left behind; the repository HEAD has moved since.': '後から、現在の状態のリポジトリに対して実行した結果です。実行が残した状態ではなく、その後リポジトリの HEAD は移動しています。',
+      'Run later, against the repository as it is now — not the state the run left behind; the repository HEAD has not moved since.': '後から、現在の状態のリポジトリに対して実行した結果です。実行が残した状態ではなく、その後リポジトリの HEAD は移動していません。',
+      'Run later, against the repository as it is now — not the state the run left behind; whether the repository HEAD moved since is not known.': '後から、現在の状態のリポジトリに対して実行した結果です。実行が残した状態ではなく、その後リポジトリの HEAD が移動したかどうかは分かりません。',
+      'Cannot verify: {error}': '検証できません: {error}',
+      'Observed by verification checks, run later': '検証チェックが観測（事後実行）'
     },
     'zh-CN': {
       'Action Timeline': '操作时间线',
@@ -479,6 +547,8 @@
       'Pick a run from the list to inspect its recorded evidence.': '从列表中选择一个运行以查看其记录的证据。',
       'No recorded runs': '没有记录的运行',
       '{n} recorded run(s)': '已记录 {n} 个运行',
+      '{size} on disk': '占用磁盘 {size}',
+      '{size} in the trash': '回收站 {size}',
       'Could not load recorded runs': '无法加载记录的运行',
       'Could not load the latest run': '无法加载最新的运行',
       '{error} — retrying; pick a run from the list to try another.': '{error} — 正在重试；也可以从列表中选择其他运行。',
@@ -671,7 +741,39 @@
       'Live · updated {time}': '实时 · {time} 更新',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '当前工作树 — 测量于 {time}，在运行期间观测到，并非代理造成的证明',
       'Working tree': '工作树',
-      'WORKING TREE STATUS': '工作树状态'
+      'WORKING TREE STATUS': '工作树状态',
+      'Compare with…': '与其他运行比较…',
+      'Compare runs': '比较运行',
+      'Pick another recorded run to compare with {id}.': '选择另一个运行与 {id} 进行比较。',
+      'Find a run to compare': '搜索要比较的运行',
+      'No other runs to compare.': '没有其他可比较的运行。',
+      'Loading comparison…': '正在加载比较…',
+      'Could not load comparison: {error}': '无法加载比较：{error}',
+      'Pick another run': '选择其他运行',
+      'This run': '当前运行',
+      'Provider version': '提供方版本',
+      Started: '开始时间',
+      'Actions by type': '按类型统计的操作',
+      'Files changed': '变更的文件',
+      'Repository status': '仓库状态',
+      'Only in {id}': '仅在 {id} 中',
+      'Some changed files were not read; this split is incomplete.': '部分改动文件未被读取，此划分并不完整。',
+      'In both': '两者都有',
+      'No files': '没有文件',
+      '+{n} more': '还有 {n} 个',
+      'counted from the first {n} actions': '按前 {n} 个操作统计',
+      'Verify now': '立即验证',
+      'Verifying…': '正在验证…',
+      'Verified later': '事后验证',
+      'This run was not verified when it ended.': '这条运行记录在结束时没有经过验证。',
+      'Measured at {time}': '测量于 {time}',
+      'Runs the checks committed in the repository now, in the run\'s repository.': '在该运行的仓库中，立即运行已提交的验证检查。',
+      'Run later, against the repository as it is now — not the state the run left behind.': '事后针对仓库当前状态运行的结果，并非该运行留下的状态。',
+      'Run later, against the repository as it is now — not the state the run left behind; the repository HEAD has moved since.': '事后针对仓库当前状态运行的结果，并非该运行留下的状态；此后仓库 HEAD 已发生变化。',
+      'Run later, against the repository as it is now — not the state the run left behind; the repository HEAD has not moved since.': '事后针对仓库当前状态运行的结果，并非该运行留下的状态；此后仓库 HEAD 没有变化。',
+      'Run later, against the repository as it is now — not the state the run left behind; whether the repository HEAD moved since is not known.': '事后针对仓库当前状态运行的结果，并非该运行留下的状态；此后仓库 HEAD 是否变化未知。',
+      'Cannot verify: {error}': '无法验证：{error}',
+      'Observed by verification checks, run later': '由验证检查观测（事后运行）'
     }
   };
 
@@ -784,7 +886,17 @@
     $('inspector-status').textContent = message;
   }
 
-  function shortID(id) {
+  function humanBytes(n) {
+  if (n < 1024) return `${n} B`;
+  let v = n;
+  for (const unit of ['KB', 'MB', 'GB', 'TB']) {
+    v /= 1024;
+    if (v < 1024 || unit === 'TB') return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${unit}`;
+  }
+  return '';
+}
+
+function shortID(id) {
     return id.length > 30 ? `${id.slice(0, 21)}…${id.slice(-6)}` : id;
   }
 
@@ -837,6 +949,7 @@
     provider_reported: (provider) => t('Reported by {provider}', { provider: provider || t('provider') }),
     supervisor_observed: () => t('Observed by agentrec'),
     verification_observed: () => t('Observed by verification checks'),
+    'verification_observed (post-hoc)': () => t('Observed by verification checks, run later'),
     'observed during run, not causal proof': () => t(NOT_CAUSAL),
     'observed, not causal proof': () => t(NOT_CAUSAL)
   };
@@ -930,6 +1043,23 @@
     return known && known.value ? t(known.detail) : t('The run ended with {label}.', { label });
   }
 
+  // runItem is one card of a run list; the sidebar and the compare-runs picker draw the same card.
+  function runItem(run, active) {
+    const button = node('button', `run-item${active ? ' active' : ''}`);
+    button.type = 'button';
+    button.dataset.runId = run.id;
+    if (active) button.setAttribute('aria-current', 'true');
+    const head = node('div', 'run-item-head');
+    head.append(node('span', 'run-project', run.project || t('unknown project')), node('span', 'run-time', relativeTime(run.startedAt)));
+    const foot = node('div', 'run-item-foot');
+    const status = statusNode('span', `mini-status ${run.statusClass}`, statusToken(run.statusLabel), explainStatus(run.statusLabel));
+    foot.append(node('span', 'run-provider', run.provider || t('unknown')), status);
+    button.append(head, node('div', 'run-id', shortID(run.id)), foot);
+    return button;
+  }
+
+  const runMatches = (run, query) => !query || `${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase().includes(query);
+
   function renderRunList() {
     const query = $('run-search').value.trim().toLowerCase();
     const list = $('run-list');
@@ -937,25 +1067,22 @@
     list.replaceChildren();
     let shown = 0;
     for (const run of state.runs) {
-      const haystack = `${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase();
-      if (query && !haystack.includes(query)) continue;
+      if (!runMatches(run, query)) continue;
       shown += 1;
-      const active = Boolean(state.run && state.run.run.id === run.id);
-      const button = node('button', `run-item${active ? ' active' : ''}`);
-      button.type = 'button';
-      button.dataset.runId = run.id;
-      if (active) button.setAttribute('aria-current', 'true');
-      const head = node('div', 'run-item-head');
-      head.append(node('span', 'run-project', run.project || t('unknown project')), node('span', 'run-time', relativeTime(run.startedAt)));
-      const foot = node('div', 'run-item-foot');
-      const status = statusNode('span', `mini-status ${run.statusClass}`, statusToken(run.statusLabel), explainStatus(run.statusLabel));
-      foot.append(node('span', 'run-provider', run.provider || t('unknown')), status);
-      button.append(head, node('div', 'run-id', shortID(run.id)), foot);
+      const button = runItem(run, Boolean(state.run && state.run.run.id === run.id));
       button.addEventListener('click', () => loadRun(run.id));
       list.append(button);
       if (focused === run.id) button.focus({ preventScroll: true });
     }
     $('run-count').textContent = String(state.runs.length);
+    const size = $('store-size');
+    // What the Delete button fills is part of what the store costs, and it is
+    // not freed until the trash is emptied: both numbers or neither.
+    const parts = [];
+    if (state.storeBytes) parts.push(t('{size} on disk', { size: humanBytes(state.storeBytes) }));
+    if (state.trashBytes) parts.push(t('{size} in the trash', { size: humanBytes(state.trashBytes) }));
+    size.textContent = parts.join(' · ');
+    size.classList.toggle('hidden', parts.length === 0);
     const empty = $('run-list-empty');
     if (shown === 0) {
       empty.textContent = t(state.runs.length === 0 ? 'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.' : 'No runs match this search.');
@@ -1555,6 +1682,7 @@
         for (const field of fields) grid.append(labelled('span', 'field-name', t(field.name), field.name), fieldValue(describeField(title, field.name, String(field.value), map, provider)));
       }
       block.append(grid);
+      if (title === 'Verification') renderPosthoc(block);
       holder.append(block);
     }
   }
@@ -1772,7 +1900,11 @@
       state.confirmDelete = true;
       renderRunActions();
     });
-    holder.append(button);
+    const compareWith = node('button', 'load-more', t('Compare with…'));
+    compareWith.type = 'button';
+    compareWith.id = 'compare-with';
+    compareWith.addEventListener('click', () => openDiff());
+    holder.append(compareWith, button);
   }
 
   async function deleteRun(id) {
@@ -1948,9 +2080,12 @@
     try {
       compare.info = await getJSON('/api/shadow');
     } catch (error) {
-      compare.info = { allowRun: false, runners: [{ name: 'claude', available: true }, { name: 'codex', available: true }], jobs: [] };
+      // What the viewer allows is not known from a failed request: the last
+      // answer stands, so a moment's trouble does not hide the controls.
+      compare.info = { allowRun: state.allowRun, runners: [{ name: 'claude', available: true }, { name: 'codex', available: true }], jobs: [] };
       showCompareError(t('Could not load comparison status: {error}', { error: errorText(error) }));
     }
+    setAllowRun(compare.info.allowRun);
     const latest = (compare.info.jobs || [])[0];
     if (latest && (!compare.job || compare.job.id !== latest.id)) adoptCompareJob(latest);
     else if (compare.job && compare.job.status === 'running' && !compare.poll) pollCompareJob();
@@ -2022,25 +2157,376 @@
   $('compare-copy').addEventListener('click', copyCompareCommand);
   $('compare-cwd').addEventListener('input', () => { compare.cwdTouched = true; });
   // Escape closes; Tab stays inside the sheet while it is open.
-  $('compare-panel').addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closeCompare();
-      return;
+  function sheetKeys(panel, close) {
+    panel.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = Array.from(panel.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea, [tabindex="0"]')).filter((el) => el.offsetParent !== null);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+  }
+  sheetKeys($('compare-panel'), closeCompare);
+
+  // setAllowRun records whether the viewer may run things (agentrec start --allow-run); the Verify now button follows it.
+  function setAllowRun(allowed) {
+    const next = Boolean(allowed);
+    if (next === state.allowRun) return;
+    state.allowRun = next;
+    if (state.run) renderEvidence();
+  }
+
+  // ── Verify later ──────────────────────────────────────────────────────────
+  // POST /api/runs/{id}/verify runs the repository's committed checks now, against the repository as it is now. The result
+  // reaches the page as evidence.posthocVerification and is drawn under the run's own verification, never in its place.
+  const verify = { runId: '', busy: false, error: '' };
+  const verdictOf = (status) => {
+    const raw = String(status || '');
+    const lower = raw.toLowerCase();
+    return lower === 'passed' ? 'PASS' : (lower === 'failed' ? 'FAIL' : raw.toUpperCase());
+  };
+  const quoteArgv = (argv) => (Array.isArray(argv) ? argv : []).map((arg) => JSON.stringify(String(arg))).join(' ');
+
+  // checkSummary spells one check the way the server's Check field does, so describeField draws both alike.
+  function checkSummary(check) {
+    const parts = [`${check.status ? verdictOf(check.status) : 'PENDING'} ${check.name || ''}`, quoteArgv(check.command)];
+    if (check.durationMs > 0) parts.push(check.durationMs < 1000 ? `${check.durationMs}ms` : `${(check.durationMs / 1000).toFixed(1)}s`);
+    if (typeof check.exitCode === 'number') parts.push(`exit ${check.exitCode}`);
+    if (check.signal) parts.push(`signal ${check.signal}`);
+    return parts.join('  ');
+  }
+
+  function posthocFields(doc) {
+    const fields = [{ name: 'Status', value: verdictOf(doc.status) }];
+    if (doc.reason) fields.push({ name: 'Reason', value: doc.reason });
+    for (const check of doc.checks || []) fields.push({ name: 'Check', value: checkSummary(check) });
+    return fields;
+  }
+
+  // renderPosthoc adds the Verify now control and, when a later verification exists, its own sub-section to the Verification block.
+  function renderPosthoc(block) {
+    const data = state.run;
+    const id = data.run.id;
+    const doc = data.evidence.posthocVerification;
+    const busy = verify.busy && verify.runId === id;
+    if (state.allowRun && !isLive()) {
+      const actions = node('div', 'verify-actions');
+      const button = node('button', 'load-more', t(busy ? 'Verifying…' : 'Verify now'));
+      button.type = 'button';
+      button.id = 'verify-now';
+      button.disabled = verify.busy;
+      button.title = t('Runs the checks committed in the repository now, in the run\'s repository.');
+      button.setAttribute('aria-busy', String(busy));
+      button.addEventListener('click', () => verifyRun(id));
+      actions.append(button);
+      block.append(actions);
     }
-    if (event.key !== 'Tab') return;
-    const items = Array.from($('compare-panel').querySelectorAll('button:not(:disabled), input:not(:disabled), textarea, [tabindex="0"]')).filter((el) => el.offsetParent !== null);
-    if (items.length === 0) return;
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
+    if (verify.error && verify.runId === id) block.append(node('p', 'compare-error verify-error', verify.error));
+    if (!doc) return;
+    // A later verdict must not stand in for the run's own: when the run was never
+    // verified at its end, the block says so before the later section is drawn.
+    if (doc.ownRan === false) block.append(node('p', 'posthoc-caveat', t('This run was not verified when it ended.')));
+    const sub = node('section', 'posthoc');
+    const heading = node('div', 'evidence-title');
+    heading.append(node('span', '', t('Verified later')), node('span', 'evidence-source', t('Measured at {time}', { time: doc.measuredAt ? new Date(doc.measuredAt).toLocaleString(state.lang) : '—' })));
+    // The page-authored caveat is shown; the server's own sentence, when it sends one, stays in the title.
+    // Whether HEAD moved has three answers: moved, did not move, and not
+    // known. Saying nothing in the last case would read as "it did not move".
+    const caveatKey = doc.headMovedSince === true
+      ? 'Run later, against the repository as it is now — not the state the run left behind; the repository HEAD has moved since.'
+      : doc.headMovedSince === false
+        ? 'Run later, against the repository as it is now — not the state the run left behind; the repository HEAD has not moved since.'
+        : 'Run later, against the repository as it is now — not the state the run left behind; whether the repository HEAD moved since is not known.';
+    const caveat = labelled('p', 'posthoc-caveat', t(caveatKey), doc.caveat);
+    const grid = node('div', 'evidence-fields');
+    // The server sends the rows ready-made (fields, like evidence.verification); a bare document with checks[] is spelled here.
+    const fields = Array.isArray(doc.fields) ? doc.fields : posthocFields(doc);
+    const map = fieldsMap(fields);
+    for (const field of fields) grid.append(labelled('span', 'field-name', t(field.name), field.name), fieldValue(describeField('Verification', field.name, String(field.value), map, data.run.provider)));
+    sub.append(heading, caveat, grid);
+    for (const check of doc.checks || []) {
+      if (!check.stdout && !check.stderr) continue;
+      const details = node('details', 'posthoc-output');
+      details.append(node('summary', '', check.name || ''));
+      addPayload(details, 'STDOUT', check.stdout);
+      addPayload(details, 'STDERR', check.stderr);
+      sub.append(details);
     }
-  });
+    block.append(sub);
+  }
+
+  async function verifyRun(id) {
+    if (verify.busy) return;
+    Object.assign(verify, { runId: id, busy: true, error: '' });
+    renderEvidence();
+    try {
+      const result = await mutate('POST', `/api/runs/${encodeURIComponent(id)}/verify`);
+      const fresh = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`);
+      // ponytail: the snapshot carries the document; if it does not yet, the reply (the document itself, or wrapped) stands in.
+      const doc = result && Array.isArray(result.fields) ? result : (result && result.verification ? Object.assign({ measuredAt: result.measuredAt, headMovedSince: null }, result.verification) : null);
+      if (doc && !fresh.evidence.posthocVerification) fresh.evidence.posthocVerification = doc;
+      if (state.run && state.run.run.id === id) {
+        state.run = fresh;
+        live.signature = runSignature(fresh);
+        renderRunHeader();
+      }
+    } catch (error) {
+      verify.error = t('Cannot verify: {error}', { error: errorText(error) });
+    } finally {
+      verify.busy = false;
+      if (state.run && state.run.run.id === id) renderEvidence();
+    }
+  }
+
+  // ── Compare two runs ──────────────────────────────────────────────────────
+  // Client-side only: both snapshots come from GET /api/runs/{id}; their change lists and action types are paged to the end
+  // from the snapshot streams. The sheet is the compare-runners one with a run picker where the form would be.
+  const DIFF_ACTION_PAGES = 40;
+  const DIFF_CHANGE_PAGES = 40;
+  const DIFF_FILE_CAP = 300;
+  const diff = { a: '', b: '', bundles: null, generation: 0, returnFocus: null };
+
+  async function pageAll(path, maxPages = Infinity) {
+    const items = [];
+    let page = null;
+    let cursor = 0;
+    for (let n = 0; n < maxPages && cursor !== null; n += 1) {
+      page = await getJSON(`${path}?cursor=${cursor}`);
+      items.push(...(page.items || []));
+      cursor = page.nextCursor === undefined ? null : page.nextCursor;
+    }
+    return { items, page, truncated: cursor !== null };
+  }
+
+  async function loadRunBundle(id) {
+    const run = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`);
+    const base = `/api/snapshots/${encodeURIComponent(run.snapshotId)}`;
+    const [changes, actions] = await Promise.all([pageAll(`${base}/changes`, DIFF_CHANGE_PAGES), run.actionCount ? pageAll(`${base}/actions`, DIFF_ACTION_PAGES) : { items: [], truncated: false }]);
+    const types = new Map();
+    for (const action of actions.items) {
+      const type = action.type || 'unknown';
+      types.set(type, (types.get(type) || 0) + 1);
+    }
+    return { run, changes: changes.items, changesTruncated: changes.truncated, types, actionsCounted: actions.items.length, actionsTruncated: actions.truncated };
+  }
+
+  const num = (value) => (value === undefined || value === null || value === '' || Number.isNaN(Number(value)) ? '' : Number(value).toLocaleString(state.lang));
+
+  // bundleFacts is the comparison's row set, in row order: a string, a node, or '' when the run has no such fact.
+  function bundleFacts(bundle) {
+    const data = bundle.run;
+    const run = data.run;
+    const usage = fieldsMap(data.evidence.providerUsage);
+    const supervisor = fieldsMap(data.evidence.supervisor);
+    const process = outcome(run.exitReason, supervisor);
+    const verification = verificationSummary(data.evidence.verification);
+    const changes = data.changes || {};
+    const repoStatus = String(changes.status || 'unavailable').toUpperCase();
+    const repoWord = repoStatus === 'AVAILABLE' ? 'AVAILABLE' : (repoStatus === 'PENDING' || fieldsMap(data.evidence.repository).get('Status') === 'PENDING' ? 'PENDING' : 'NOT RECORDED');
+    const top = [...bundle.types.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).slice(0, 6);
+    const types = node('div', 'diff-types');
+    for (const [type, count] of top) types.append(node('div', '', `${t(TYPE_LABELS[type] || type)} ${count}`));
+    if (bundle.actionsTruncated) types.append(node('div', 'diff-note', t('counted from the first {n} actions', { n: bundle.actionsCounted })));
+    const pill = (token, tone) => statusNode('span', `mini-status${tone ? ` ${tone}` : ''}`, token);
+    return {
+      Provider: run.provider || '',
+      Model: usage.get('Model') || '',
+      'Provider version': run.providerVersion || '',
+      Started: run.startedAt ? new Date(run.startedAt).toLocaleString(state.lang) : '',
+      Duration: supervisor.has('Duration') ? t(supervisor.get('Duration')) : duration({ startedAt: run.startedAt || '', finishedAt: run.endedAt || '' }),
+      'Exit Reason': pill(process.value, process.tone),
+      'Input Tokens': num(usage.get('Input Tokens')),
+      'Cached Input Tokens': num(usage.get('Cached Input Tokens')),
+      'Cache Creation Input Tokens': num(usage.get('Cache Creation Input Tokens')),
+      'Output Tokens': num(usage.get('Output Tokens')),
+      'Cost USD': usage.get('Cost USD') || '',
+      Actions: num(data.actionCount || 0),
+      'Provider events': num(data.eventCount || 0),
+      'Actions by type': top.length ? types : '',
+      'Files changed': repoStatus === 'AVAILABLE' ? num(changes.total || 0) : '',
+      Verification: pill(verification.value, verification.tone),
+      'Repository status': pill(repoWord, '')
+    };
+  }
+
+  function diffHeader(run, current) {
+    const th = node('th', '', shortID(run.id));
+    th.scope = 'col';
+    th.title = run.id;
+    if (current) th.append(node('span', 'diff-current', t('This run')));
+    return th;
+  }
+
+  // diffFiles is the three-column file list: only in A, only in B, in both (with both kinds when they differ).
+  function diffFiles(a, b) {
+    const kindOf = (change) => change.kind || changeFamily(change);
+    const mapA = new Map(a.changes.map((change) => [change.path, change]));
+    const mapB = new Map(b.changes.map((change) => [change.path, change]));
+    const only = (from, other) => [...from.values()].filter((change) => !other.has(change.path)).map((change) => [change, null]);
+    const both = [...mapA.values()].filter((change) => mapB.has(change.path)).map((change) => [change, mapB.get(change.path)]);
+    const column = (title, entries) => {
+      const col = node('div', 'diff-col');
+      col.append(node('div', 'diff-col-head', `${title} · ${entries.length}`));
+      const list = node('ul');
+      for (const [x, y] of entries.slice(0, DIFF_FILE_CAP)) {
+        const li = node('li', '', x.path);
+        const kinds = [kindOf(x)];
+        if (y && kindOf(y) !== kinds[0]) kinds.push(kindOf(y));
+        li.append(node('span', 'diff-kind', kinds.map((kind) => t(kind)).join(' / ')));
+        list.append(li);
+      }
+      if (entries.length > DIFF_FILE_CAP) list.append(node('li', 'diff-note', t('+{n} more', { n: entries.length - DIFF_FILE_CAP })));
+      if (entries.length === 0) list.append(node('li', 'diff-note', t('No files')));
+      col.append(list);
+      return col;
+    };
+    const files = node('div', 'diff-files');
+    files.append(column(t('Only in {id}', { id: shortID(a.run.run.id) }), only(mapA, mapB)), column(t('Only in {id}', { id: shortID(b.run.run.id) }), only(mapB, mapA)), column(t('In both'), both));
+    // A change list that was cut short is not a full answer, and the split
+    // into only-here and only-there would read as one.
+    if (a.changesTruncated || b.changesTruncated) files.append(node('p', 'diff-note', t('Some changed files were not read; this split is incomplete.')));
+    return files;
+  }
+
+  function renderDiff(a, b) {
+    const holder = $('diff-result');
+    holder.replaceChildren();
+    const again = node('button', 'load-more', t('Pick another run'));
+    again.type = 'button';
+    again.addEventListener('click', showDiffPicker);
+    const actions = node('div', 'diff-actions');
+    actions.append(again);
+    const factsA = bundleFacts(a);
+    const factsB = bundleFacts(b);
+    const table = node('table', 'diff-table');
+    const thead = node('thead');
+    const head = node('tr');
+    head.append(node('th', '', ''), diffHeader(a.run.run, true), diffHeader(b.run.run, false));
+    thead.append(head);
+    const tbody = node('tbody');
+    for (const label of Object.keys(factsA)) {
+      const valueA = factsA[label];
+      const valueB = factsB[label];
+      if (valueA === '' && valueB === '') continue;
+      const row = node('tr');
+      const cellA = node('td');
+      const cellB = node('td');
+      cellA.append(valueA === '' ? '—' : valueA);
+      cellB.append(valueB === '' ? '—' : valueB);
+      if (cellA.textContent !== cellB.textContent) row.classList.add('differs');
+      const name = labelled('th', '', t(label), label);
+      name.scope = 'row';
+      row.append(name, cellA, cellB);
+      tbody.append(row);
+    }
+    table.append(thead, tbody);
+    holder.append(actions, table, diffFiles(a, b));
+  }
+
+  function renderDiffList() {
+    const query = $('diff-search').value.trim().toLowerCase();
+    const list = $('diff-list');
+    list.replaceChildren();
+    let shown = 0;
+    for (const run of state.runs) {
+      if (run.id === diff.a || !runMatches(run, query)) continue;
+      shown += 1;
+      const button = runItem(run, false);
+      button.addEventListener('click', () => loadDiff(diff.a, run.id));
+      list.append(button);
+    }
+    const empty = $('diff-list-empty');
+    empty.textContent = t(state.runs.length < 2 ? 'No other runs to compare.' : 'No runs match this search.');
+    empty.classList.toggle('hidden', shown > 0);
+  }
+
+  // The hash names an open comparison (#compare=a,b) so the page can reopen it; it is cleared when the sheet closes.
+  function setDiffHash() {
+    const hash = diff.a && diff.b ? `#compare=${encodeURIComponent(diff.a)},${encodeURIComponent(diff.b)}` : '';
+    if (hash) {
+      if (location.hash !== hash) history.replaceState(null, '', hash);
+    } else if (location.hash.startsWith('#compare=')) {
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  }
+
+  function showDiffPicker() {
+    diff.b = '';
+    diff.bundles = null;
+    setDiffHash();
+    $('diff-result').classList.add('hidden');
+    $('diff-picker').classList.remove('hidden');
+    renderDiffList();
+    $('diff-search').focus();
+  }
+
+  async function loadDiff(aID, bID) {
+    const generation = ++diff.generation;
+    diff.b = bID;
+    diff.bundles = null;
+    setDiffHash();
+    $('diff-error').classList.add('hidden');
+    $('diff-picker').classList.add('hidden');
+    const result = $('diff-result');
+    result.classList.remove('hidden');
+    result.replaceChildren(node('div', 'diff-status', t('Loading comparison…')));
+    try {
+      const bundles = await Promise.all([loadRunBundle(aID), loadRunBundle(bID)]);
+      if (generation !== diff.generation) return;
+      diff.bundles = bundles;
+      renderDiff(bundles[0], bundles[1]);
+    } catch (error) {
+      if (generation !== diff.generation) return;
+      const el = $('diff-error');
+      el.textContent = t('Could not load comparison: {error}', { error: errorText(error) });
+      el.classList.remove('hidden');
+      showDiffPicker();
+    }
+  }
+
+  function renderDiffSheet() {
+    if ($('diff-panel').classList.contains('hidden')) return;
+    $('diff-intro').textContent = t('Pick another recorded run to compare with {id}.', { id: shortID(diff.a) });
+    if (diff.bundles) renderDiff(diff.bundles[0], diff.bundles[1]); else if (!diff.b) renderDiffList();
+  }
+
+  function openDiff(bID = '') {
+    if (!state.run) return;
+    diff.returnFocus = document.activeElement;
+    diff.a = state.run.run.id;
+    $('diff-error').classList.add('hidden');
+    $('diff-backdrop').classList.remove('hidden');
+    $('diff-panel').classList.remove('hidden');
+    renderDiffSheet();
+    if (bID && bID !== diff.a) loadDiff(diff.a, bID); else showDiffPicker();
+  }
+
+  function closeDiff() {
+    diff.generation += 1;
+    diff.b = '';
+    diff.bundles = null;
+    setDiffHash();
+    $('diff-backdrop').classList.add('hidden');
+    $('diff-panel').classList.add('hidden');
+    if (diff.returnFocus && diff.returnFocus.focus) diff.returnFocus.focus();
+  }
+
+  $('diff-close').addEventListener('click', closeDiff);
+  $('diff-backdrop').addEventListener('click', closeDiff);
+  $('diff-search').addEventListener('input', renderDiffList);
+  sheetKeys($('diff-panel'), closeDiff);
 
   // ── Live run ──────────────────────────────────────────────────────────────
   // A run that is still recording is re-read every LIVE_MS: the header redraws when its facts changed, each fully loaded
@@ -2277,6 +2763,9 @@
       if (generation !== state.loadGeneration) return;
       state.run = run;
       state.confirmDelete = false;
+      // The comparison sheet may already be open on the run that was showing:
+      // its repository path follows the run in view until someone edits it.
+      if (!compare.cwdTouched && run.run.cwd) $('compare-cwd').value = run.run.cwd;
       Object.assign(live, { updatedAt: new Date(), signature: runSignature(run), changes: null, error: '' });
       // shown counts the rows the filter lets through, across every page loaded so far.
       state.streams = {
@@ -2322,6 +2811,7 @@
     }
     if (changed) {
       renderRunList();
+      if (!$('diff-panel').classList.contains('hidden') && !diff.b) renderDiffList();
     } else {
       const byID = new Map(runs.map((run) => [run.id, run]));
       document.querySelectorAll('.run-item').forEach((button) => {
@@ -2344,6 +2834,8 @@
     state.pollController = new AbortController();
     try {
       const list = await getJSON('/api/runs', state.pollController.signal);
+      state.storeBytes = list.storeBytes || 0;
+      state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
       await autoSelect(list);
     } catch (error) {
@@ -2367,10 +2859,20 @@
     setLang(detectLang());
     $('top-meta').textContent = t('Loading recorded evidence…');
     $('workspace-empty-title').textContent = t('Loading recorded evidence…');
+    // ponytail: the overview says whether --allow-run is on; a failure leaves the Verify now button hidden.
+    getJSON('/api/shadow').then((info) => setAllowRun(info.allowRun)).catch(() => {});
     try {
       const list = await getJSON('/api/runs');
+      state.storeBytes = list.storeBytes || 0;
+      state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
       await autoSelect(list);
+      const reopen = /^#compare=([^,]+),(.+)$/.exec(location.hash);
+      if (reopen) {
+        const [a, b] = [decodeURIComponent(reopen[1]), decodeURIComponent(reopen[2])];
+        if (!state.run || state.run.run.id !== a) await loadRun(a);
+        if (state.run && state.run.run.id === a) openDiff(b);
+      }
     } catch (error) {
       $('workspace-empty-title').textContent = t('Could not load recorded runs');
       $('workspace-empty-body').textContent = error instanceof Error ? error.message : String(error);
@@ -2396,6 +2898,7 @@
     if (state.run) renderRun(); else { renderRunList(); renderWorkspaceState(); }
     renderCompareForm();
     renderCompareJob();
+    renderDiffSheet();
     if (search.open) renderSearch();
   });
   $('run-search').addEventListener('input', renderRunList);

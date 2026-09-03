@@ -1106,8 +1106,15 @@ func TestViewSnapshotKeepsImmutableStreamBytes(t *testing.T) {
 	}
 	viewJSONRequest(t, handler, "/api/runs/run-immutable", &detail)
 	snapshot := handler.snapshots.byID[detail.SnapshotID]
-	if _, err := os.Stat(snapshot.actions.Name()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("action snapshot still has a reachable pathname: %v", err)
+	// The append-only streams are served from the viewer's own cache, a
+	// 0700 directory beside the runs whose copies only ever grow; every
+	// other capture is an unlinked temp file.
+	cacheDir := handler.snapshots.cache.dir
+	if rel, err := filepath.Rel(cacheDir, snapshot.actions.Name()); err != nil || strings.HasPrefix(rel, "..") {
+		t.Fatalf("action snapshot is served from %s, want the viewer cache", snapshot.actions.Name())
+	}
+	if info, err := os.Stat(cacheDir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("viewer cache dir: %v, mode %v", err, info.Mode())
 	}
 	if _, err := snapshot.actions.WriteAt([]byte("x"), 0); err == nil {
 		t.Fatal("action snapshot retained write capability")

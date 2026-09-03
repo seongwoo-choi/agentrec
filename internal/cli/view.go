@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -93,10 +94,24 @@ type viewRunInfo struct {
 }
 
 type viewEvidence struct {
-	ProviderUsage []viewField `json:"providerUsage,omitempty"`
-	Supervisor    []viewField `json:"supervisor"`
-	Repository    []viewField `json:"repository"`
-	Verification  []viewField `json:"verification"`
+	ProviderUsage       []viewField              `json:"providerUsage,omitempty"`
+	Supervisor          []viewField              `json:"supervisor"`
+	Repository          []viewField              `json:"repository"`
+	Verification        []viewField              `json:"verification"`
+	PosthocVerification *viewPosthocVerification `json:"posthocVerification"`
+}
+
+// viewPosthocVerification is a verification run after the fact: the same
+// rows as the run-end one, with when it was measured and whether HEAD moved.
+type viewPosthocVerification struct {
+	// OwnRan is false when the run itself was never verified, so the page
+	// can say so rather than let a later verdict stand for the run's own.
+	OwnRan         bool        `json:"ownRan"`
+	MeasuredAt     time.Time   `json:"measuredAt,omitzero"`
+	HeadMovedSince *bool       `json:"headMovedSince"`
+	Status         string      `json:"status"`
+	Caveat         string      `json:"caveat"`
+	Fields         []viewField `json:"fields"`
 }
 
 type viewProviderEvents struct {
@@ -132,6 +147,8 @@ type viewRunListResponse struct {
 	SchemaVersion int              `json:"schemaVersion"`
 	InitialRunID  string           `json:"initialRunId"`
 	Unreadable    int              `json:"unreadable"`
+	StoreBytes    int64            `json:"storeBytes"`
+	TrashBytes    int64            `json:"trashBytes"`
 	Runs          []viewRunSummary `json:"runs"`
 }
 
@@ -283,8 +300,32 @@ func (h *viewHandler) Close() error {
 	return h.snapshots.Close()
 }
 
+// viewStoreSizes remembers what the store and the trash take on disk for a
+// little while, so a list refresh does not walk every run each time.
+type viewStoreSizes struct {
+	root  string
+	mu    sync.Mutex
+	at    time.Time
+	store int64
+	trash int64
+}
+
+const viewStoreSizeTTL = 30 * time.Second
+
+func (c *viewStoreSizes) get() (int64, int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.at.IsZero() || time.Since(c.at) > viewStoreSizeTTL {
+		c.store = storeBytes(c.root)
+		c.trash = storeBytes(trashRootFor(c.root))
+		c.at = time.Now()
+	}
+	return c.store, c.trash
+}
+
 func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
 	snapshots := newViewSnapshotStore(root)
+	sizes := &viewStoreSizes{root: root}
 	token := newViewToken()
 	jobs := newShadowJobs(root, allowRun)
 	mux := http.NewServeMux()
@@ -367,6 +408,37 @@ func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
 		}
 		writeViewMutation(w, restoreRun(root, r.PathValue("runID")))
 	})
+	verifying := make(chan struct{}, 1)
+	mux.HandleFunc("POST /api/runs/{runID}/verify", func(w http.ResponseWriter, r *http.Request) {
+		if !viewMutationAllowed(r, token) {
+			writeViewError(w, http.StatusForbidden, errors.New("a request that changes the store must come from this page"))
+			return
+		}
+		if !allowRun {
+			writeViewError(w, http.StatusForbidden, errors.New("start the viewer with --allow-run to verify a run from this page"))
+			return
+		}
+		select {
+		case verifying <- struct{}{}:
+			defer func() { <-verifying }()
+		default:
+			writeViewError(w, http.StatusConflict, errVerifyBusy)
+			return
+		}
+		result, meta, err := verifyRunLater(r.Context(), root, r.PathValue("runID"))
+		switch {
+		case err == nil:
+			writeViewJSON(w, newViewPosthocVerification(&result, &meta))
+		case errors.Is(err, os.ErrNotExist):
+			writeViewError(w, http.StatusNotFound, err)
+		case errors.Is(err, errRunOpen), errors.Is(err, errRunClosing), errors.Is(err, errVerifyBusy):
+			writeViewError(w, http.StatusConflict, err)
+		case errors.Is(err, errVerifyNoRepo), errors.Is(err, errVerifyRepoGone), errors.Is(err, errVerifyNoConfig):
+			writeViewError(w, http.StatusUnprocessableEntity, err)
+		default:
+			writeViewError(w, http.StatusInternalServerError, err)
+		}
+	})
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 		serveViewAsset(w, "ui_assets/index.html", "text/html; charset=utf-8")
 	})
@@ -401,7 +473,8 @@ func newViewHandler(root, initialRunID string, allowRun bool) *viewHandler {
 				}
 			}
 		}
-		writeViewJSON(w, viewRunListResponse{1, initial, unreadable, out})
+		store, trash := sizes.get()
+		writeViewJSON(w, viewRunListResponse{1, initial, unreadable, store, trash, out})
 	})
 	mux.HandleFunc("GET /api/runs/{runID}/live", func(w http.ResponseWriter, r *http.Request) {
 		live, err := readLiveChanges(root, r.PathValue("runID"))

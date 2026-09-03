@@ -188,6 +188,11 @@ func readRunFromRoot(root *os.Root) (report.Report, error) {
 		Verification:  verificationFields(verification),
 	}
 	rep.Repository, rep.Verification = appendSessionEvidence(manifest, rep.Repository, rep.Verification)
+	posthoc, meta, err := readPosthocVerificationFromRoot(root)
+	if err != nil {
+		return report.Report{}, err
+	}
+	rep.Verification = append(rep.Verification, posthocFields(posthoc, meta, len(rep.Verification) > 0)...)
 	return rep, nil
 }
 
@@ -362,6 +367,12 @@ func readVerificationFromRoot(root *os.Root) (*evidence.VerificationResult, erro
 }
 
 func decodeVerification(raw []byte, name string) (*evidence.VerificationResult, error) {
+	return decodeVerificationAs(raw, name, evidence.VerificationAttribution)
+}
+
+// decodeVerificationAs reads a verification document that must carry the
+// attribution the reader expects: the run-end one, or a later one.
+func decodeVerificationAs(raw []byte, name, attribution string) (*evidence.VerificationResult, error) {
 	var res evidence.VerificationResult
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fmt.Errorf("cli: read %s: %w", name, err)
@@ -369,7 +380,7 @@ func decodeVerification(raw []byte, name string) (*evidence.VerificationResult, 
 	switch {
 	case res.Status == "":
 		return nil, fmt.Errorf("cli: %s does not say how the verification ended", name)
-	case res.Attribution != evidence.VerificationAttribution:
+	case res.Attribution != attribution:
 		return nil, fmt.Errorf("cli: %s claims %q, want the recorded attribution", name, res.Attribution)
 	case len(res.Checks) > maxEvidenceItems:
 		return nil, fmt.Errorf("cli: %s holds more than %d checks", name, maxEvidenceItems)

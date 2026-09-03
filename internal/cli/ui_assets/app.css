@@ -76,6 +76,7 @@ button { cursor: pointer; }
 /* shell: sidebar + workspace, each scrolls on its own */
 .shell { height: calc(100vh - 52px); display: grid; grid-template-columns: 288px minmax(0,1fr); }
 .sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-right: 1px solid var(--border); padding: 16px 12px 12px; overflow: hidden; }
+.store-size { color: var(--muted); font: 11px var(--mono); font-variant-numeric: tabular-nums; margin: -4px 6px 8px; }
 .sidebar-head { display: flex; justify-content: space-between; align-items: center; padding: 0 6px 10px; }
 .count { color: var(--muted); font: 12px var(--mono); font-variant-numeric: tabular-nums; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
 .search, .timeline-search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--surface); border-radius: 8px; color: var(--muted); padding: 7px 10px; }
@@ -303,6 +304,42 @@ h1 { margin: 6px 0; font: 600 20px/1.3 var(--mono); letter-spacing: -.01em; over
 .search-snippet { flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--secondary); font-size: 13px; }
 .search-match { background: var(--warn-bg); color: var(--text); border-radius: 3px; padding: 0 1px; }
 
+/* compare two runs: the same sheet, wider; a run picker, then the facts side by side and the files in three columns */
+.diff-panel { width: min(880px, 100vw); }
+.diff-picker { display: grid; gap: 8px; min-width: 0; }
+.diff-picker .search { margin: 0; }
+.diff-list { max-height: 60vh; }
+.diff-result { display: grid; gap: 14px; min-width: 0; }
+.diff-actions { display: flex; align-items: center; gap: 8px; }
+.diff-status { color: var(--muted); font-size: 13px; }
+.diff-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.diff-table th, .diff-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.diff-table thead th { color: var(--text); font: 600 12px var(--mono); }
+.diff-table thead th:first-child { width: 28%; }
+.diff-table tbody th { color: var(--muted); font-size: 12px; font-weight: 600; }
+.diff-table td { color: var(--secondary); font: 12px/1.5 var(--mono); font-variant-numeric: tabular-nums; }
+.diff-table tr.differs td { color: var(--text); }
+.diff-table tr.differs th { box-shadow: inset 2px 0 0 var(--warn); }
+.diff-current { display: block; color: var(--quiet); font: 11px var(--sans); }
+.diff-types { display: grid; gap: 1px; }
+.diff-note { color: var(--quiet); font-family: var(--sans); }
+.diff-files { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
+.diff-col { min-width: 0; border: 1px solid var(--border-subtle); background: var(--code-bg); border-radius: 8px; padding: 8px 10px; }
+.diff-col-head { margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.diff-col ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 320px; overflow: auto; }
+.diff-col li { color: var(--secondary); font: 12px/1.45 var(--mono); overflow-wrap: anywhere; }
+.diff-kind { margin-left: 6px; color: var(--quiet); }
+.mini-status.warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+.mini-status.warn::before { background: var(--warn); }
+
+/* verify later: the control under the run's verification, the later result as its own dashed-off sub-section */
+.verify-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.verify-error { margin-top: 8px; }
+.posthoc { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 10px; }
+.posthoc-caveat { margin: 6px 0 0; color: var(--warn); font-size: 12px; line-height: 1.45; }
+.posthoc-output { margin-top: 8px; }
+.posthoc-output summary { cursor: pointer; color: var(--muted); font: 12px var(--mono); }
+
 /* live run: the pill above the verdict, the working-tree caption on the Changes tab */
 .live-pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px 3px 8px; background: var(--accent-soft); color: var(--accent); font: 500 12px var(--sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: live-pulse 1.6s ease-in-out infinite; }
@@ -327,6 +364,7 @@ h1 { margin: 6px 0; font: 600 20px/1.3 var(--mono); letter-spacing: -.01em; over
   .tabs { height: 40px; }
   .timeline-search { width: 100%; }
   .action-row, .change-row { grid-template-columns: 60px 22px minmax(0,1fr); }
+  .diff-files { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }

@@ -32,6 +32,7 @@
         <span class="eyebrow" data-i18n="Recorded runs">Recorded runs</span>
         <span class="count" id="run-count">0</span>
       </div>
+      <p id="store-size" class="store-size hidden"></p>
       <label class="search"><span aria-hidden="true">⌕</span><input id="run-search" type="search" placeholder="Find a run or project" autocomplete="off" aria-label="Find a run or project" data-i18n-placeholder="Find a run or project"></label>
       <p id="run-list-empty" class="list-empty hidden"></p>
       <nav id="run-list" class="run-list" aria-label="Recorded runs"></nav>
@@ -124,6 +125,23 @@
         <pre id="compare-log" class="compare-log" tabindex="0" aria-label="Comparison log" data-i18n-label="Comparison log"></pre>
         <div id="compare-links" class="compare-links"></div>
       </section>
+    </div>
+  </aside>
+  <div id="diff-backdrop" class="compare-backdrop hidden"></div>
+  <aside id="diff-panel" class="compare-panel diff-panel hidden" role="dialog" aria-modal="true" aria-labelledby="diff-title">
+    <div class="compare-head">
+      <h2 id="diff-title" data-i18n="Compare runs">Compare runs</h2>
+      <button id="diff-close" class="compare-close" type="button" aria-label="Close" data-i18n-label="Close">×</button>
+    </div>
+    <div class="compare-body">
+      <p id="diff-intro" class="compare-intro"></p>
+      <p id="diff-error" class="compare-error hidden" role="alert"></p>
+      <div id="diff-picker" class="diff-picker">
+        <label class="search"><span aria-hidden="true">⌕</span><input id="diff-search" type="search" placeholder="Find a run to compare" autocomplete="off" aria-label="Find a run to compare" data-i18n-placeholder="Find a run to compare"></label>
+        <p id="diff-list-empty" class="list-empty hidden"></p>
+        <div id="diff-list" class="run-list diff-list"></div>
+      </div>
+      <div id="diff-result" class="diff-result hidden" aria-live="polite"></div>
     </div>
   </aside>
   <template id="trash-icon"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.5 7v4M9.5 7v4"/></svg></template>

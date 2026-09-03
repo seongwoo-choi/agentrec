@@ -304,7 +304,16 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	if unreadable > 0 {
 		fmt.Fprintf(stdout, " (%d unreadable)", unreadable)
 	}
-	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, ", %s on disk\n", humanBytes(storeBytes(root)))
+	if trashed, trashUnreadable, err := listRuns(trashRootFor(root), ""); err == nil && len(trashed)+trashUnreadable > 0 {
+		fmt.Fprintf(stdout, "trash     %d run(s), %s (agentrec trash empty)\n", len(trashed)+trashUnreadable, humanBytes(storeBytes(trashRootFor(root))))
+	}
+	// A running viewer's stream copies are the store's too; they go when it
+	// stops, and saying nothing about them would understate the disk.
+	cache := filepath.Join(filepath.Dir(root), viewCacheDirName)
+	if size := storeBytes(cache); size > 0 {
+		fmt.Fprintf(stdout, "cache     %s in %s (a running viewer's copies, removed when it stops)\n", humanBytes(size), cache)
+	}
 	for _, provider := range []string{"claude", "codex"} {
 		path, err := hooksFile(provider, false)
 		if err != nil {

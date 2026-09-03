@@ -22,7 +22,7 @@ import (
 
 const (
 	trashDirName = "trash"
-	trashUsage   = "usage: agentrec trash [restore <run-id> | empty]\n"
+	trashUsage   = "usage: agentrec trash [restore <run-id> | empty | sweep <age> [--dry-run]]\n"
 )
 
 var (
@@ -167,7 +167,7 @@ func runTrash(args []string, stdout, stderr io.Writer) int {
 		if unreadable > 0 {
 			fmt.Fprintf(stdout, "(%d unreadable)\n", unreadable)
 		}
-		fmt.Fprintf(stdout, "\n%d in %s. Restore one with 'agentrec trash restore <run-id>'; erase them all with 'agentrec trash empty'.\n", len(runs)+unreadable, trash)
+		fmt.Fprintf(stdout, "\n%d in %s. Restore one with 'agentrec trash restore <run-id>'; erase them all with 'agentrec trash empty'. Old runs go there with 'agentrec trash sweep 30d'.\n", len(runs)+unreadable, trash)
 		return 0
 	case len(args) == 2 && args[0] == "restore":
 		if err := restoreRun(root, args[1]); err != nil {
@@ -175,6 +175,40 @@ func runTrash(args []string, stdout, stderr io.Writer) int {
 			return exitFailure
 		}
 		fmt.Fprintf(stdout, "restored %s\n", args[1])
+		return 0
+	case (len(args) == 2 || len(args) == 3 && args[2] == "--dry-run") && args[0] == "sweep":
+		age, err := parseAge(args[1])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		dryRun := len(args) == 3
+		result, err := sweepRuns(root, age, time.Now(), dryRun)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitFailure
+		}
+		verb := "moved"
+		if dryRun {
+			verb = "would move"
+		}
+		for _, id := range result.Moved {
+			fmt.Fprintf(stdout, "%s %s\n", verb, id)
+		}
+		fmt.Fprintf(stdout, "%s %d run(s) that started more than %s ago to the trash", verb, len(result.Moved), args[1])
+		if len(result.Kept) > 0 {
+			fmt.Fprintf(stdout, "; kept %d still held by a recorder", len(result.Kept))
+		}
+		if result.Skipped > 0 {
+			fmt.Fprintf(stdout, "; left %d that could not be dated", result.Skipped)
+		}
+		fmt.Fprintln(stdout, ". Erase the trash with 'agentrec trash empty'.")
+		for _, err := range result.Failed {
+			fmt.Fprintln(stderr, err)
+		}
+		if len(result.Failed) > 0 {
+			return exitFailure
+		}
 		return 0
 	case len(args) == 1 && args[0] == "empty":
 		entries, err := os.ReadDir(trash)

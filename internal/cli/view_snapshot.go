@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +28,7 @@ import (
 const (
 	viewPageSize     = 250
 	viewPageBytes    = 1 << 20
-	maxViewSnapshots = 4
+	maxViewSnapshots = 10
 )
 
 type viewAction struct {
@@ -81,22 +82,26 @@ var viewSnapshotFiles = []string{
 	gitDir + "/" + untrackedChangesFile,
 	gitDir + "/" + trackedPatchFile,
 	verifyDir + "/" + verifyResults,
+	verifyPosthocDir + "/" + verifyResults,
+	verifyPosthocDir + "/" + verifyPosthocMeta,
 	providerUsageFile,
 }
 
 var viewSnapshotFileLimits = map[string]int64{
-	manifestFile:                        maxDocumentBytes,
-	promptFile:                          maxDocumentBytes,
-	actionsFile:                         maxActionStreamBytes,
-	providerEventsFile:                  maxEventStreamBytes,
-	unparsedFile:                        maxActionStreamBytes,
-	processDir + "/" + resultFile:       maxDocumentBytes,
-	gitDir + "/" + resultFile:           maxDocumentBytes,
-	gitDir + "/" + trackedStatFile:      maxViewChangeDocBytes,
-	gitDir + "/" + untrackedChangesFile: maxViewChangeDocBytes,
-	gitDir + "/" + trackedPatchFile:     maxViewPatchBytes,
-	verifyDir + "/" + verifyResults:     maxDocumentBytes,
-	providerUsageFile:                   maxDocumentBytes,
+	manifestFile:                               maxDocumentBytes,
+	promptFile:                                 maxDocumentBytes,
+	actionsFile:                                maxActionStreamBytes,
+	providerEventsFile:                         maxEventStreamBytes,
+	unparsedFile:                               maxActionStreamBytes,
+	processDir + "/" + resultFile:              maxDocumentBytes,
+	gitDir + "/" + resultFile:                  maxDocumentBytes,
+	gitDir + "/" + trackedStatFile:             maxViewChangeDocBytes,
+	gitDir + "/" + untrackedChangesFile:        maxViewChangeDocBytes,
+	gitDir + "/" + trackedPatchFile:            maxViewPatchBytes,
+	verifyDir + "/" + verifyResults:            maxDocumentBytes,
+	verifyPosthocDir + "/" + verifyResults:     maxDocumentBytes,
+	verifyPosthocDir + "/" + verifyPosthocMeta: maxDocumentBytes,
+	providerUsageFile:                          maxDocumentBytes,
 }
 
 type viewFileIdentity struct {
@@ -137,10 +142,210 @@ type viewSnapshotStore struct {
 	ids       []string
 	closed    bool
 	afterCopy func()
+	cache     *viewStreamCache
 }
 
 func newViewSnapshotStore(root string) *viewSnapshotStore {
-	return &viewSnapshotStore{root: root, sem: make(chan struct{}, 2), byID: make(map[string]*viewSnapshot)}
+	return &viewSnapshotStore{root: root, sem: make(chan struct{}, 2), byID: make(map[string]*viewSnapshot), cache: newViewStreamCache(filepath.Join(filepath.Dir(root), viewCacheDirName))}
+}
+
+// A run being followed is snapshotted every few seconds, and each snapshot
+// used to copy its whole action and event streams. The cache keeps one
+// growing copy per run and stream in a directory of this process's own
+// beside the runs: a later snapshot appends only what the source gained
+// since the copy was made, and every snapshot reads the copy through a
+// section bounded by the size it captured, so appends never move under a
+// reader. A source that is another file, that shrank, or whose last bytes
+// no longer match the copy is copied afresh. Bounded by entries and bytes,
+// oldest out first; gone with the store, and a viewer that died leaves a
+// directory the next one removes.
+const (
+	viewCacheDirName = "viewer-cache"
+	viewCacheTail    = 64 << 10
+)
+
+var (
+	viewCacheEntries = 16
+	viewCacheBytes   = int64(1 << 30)
+)
+
+type viewStreamCache struct {
+	base  string
+	dir   string
+	mu    sync.Mutex
+	ready bool
+	items map[string]*cachedStream
+	order []string
+}
+
+type cachedStream struct {
+	path string
+	size int64
+	src  os.FileInfo
+}
+
+func newViewStreamCache(base string) *viewStreamCache {
+	return &viewStreamCache{base: base, items: map[string]*cachedStream{}}
+}
+
+// prepare makes this store's own cache directory, named after the process
+// that owns it, and removes the directories of viewers no longer alive.
+func (c *viewStreamCache) prepare() error {
+	if c.ready {
+		return nil
+	}
+	if err := os.MkdirAll(c.base, 0o700); err != nil {
+		return fmt.Errorf("cli: create viewer cache: %w", err)
+	}
+	entries, err := os.ReadDir(c.base)
+	if err != nil {
+		return fmt.Errorf("cli: read viewer cache: %w", err)
+	}
+	for _, entry := range entries {
+		owner, _, _ := strings.Cut(entry.Name(), "-")
+		pid, err := strconv.Atoi(owner)
+		if err != nil || processAlive(pid) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(c.base, entry.Name())); err != nil {
+			return fmt.Errorf("cli: remove a stale viewer cache: %w", err)
+		}
+	}
+	dir, err := os.MkdirTemp(c.base, strconv.Itoa(os.Getpid())+"-")
+	if err != nil {
+		return fmt.Errorf("cli: create viewer cache: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("cli: restrict viewer cache: %w", err)
+	}
+	c.dir = dir
+	c.ready = true
+	return nil
+}
+
+// capture returns a read-only handle on the cached copy of an append-only
+// stream, brought up to size from the source, and the size to read it to.
+func (c *viewStreamCache) capture(ctx context.Context, runID, name string, source *os.File, info os.FileInfo, size int64) (*os.File, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.prepare(); err != nil {
+		return nil, err
+	}
+	key := runID + "/" + strings.ReplaceAll(name, "/", "_")
+	entry, ok := c.items[key]
+	if ok && (!os.SameFile(entry.src, info) || size < entry.size || !c.tailMatches(entry, source)) {
+		// Not the file that was copied, shorter than it, or rewritten
+		// under the same name: start over.
+		os.Remove(entry.path)
+		delete(c.items, key)
+		ok = false
+	}
+	if !ok {
+		entry = &cachedStream{path: filepath.Join(c.dir, strings.ReplaceAll(key, "/", "--")), size: 0}
+		if err := os.RemoveAll(entry.path); err != nil {
+			return nil, fmt.Errorf("cli: reset viewer cache entry: %w", err)
+		}
+	}
+	if !ok || size > entry.size {
+		w, err := os.OpenFile(entry.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("cli: open viewer cache entry: %w", err)
+		}
+		n, err := io.Copy(w, viewContextReader{ctx: ctx, reader: io.NewSectionReader(source, entry.size, size-entry.size)})
+		if closeErr := w.Close(); err == nil {
+			err = closeErr
+		}
+		// A source that shrank between the look and the copy gives fewer
+		// bytes than were asked for; recording the size as reached would
+		// leave a hole every later append reads across.
+		if err == nil && n != size-entry.size {
+			err = fmt.Errorf("the stream holds %d of the %d bytes seen", entry.size+n, size)
+		}
+		if err != nil {
+			os.Remove(entry.path)
+			delete(c.items, key)
+			return nil, fmt.Errorf("cli: extend viewer cache entry: %w", err)
+		}
+		entry.size = size
+	}
+	entry.src = info
+	if !ok {
+		c.items[key] = entry
+	}
+	c.touch(key)
+	// Opened before anything is evicted: the reader must hold the copy it
+	// was promised even when this very entry is what the cap gives up.
+	copied, err := os.Open(entry.path)
+	if err != nil {
+		return nil, err
+	}
+	c.evict()
+	return copied, nil
+}
+
+// tailMatches reports whether the last bytes of the copy are still the
+// source's: a stream rewritten in place under the same inode is caught
+// here, since an append-only stream never changes what it already holds.
+func (c *viewStreamCache) tailMatches(entry *cachedStream, source *os.File) bool {
+	n := min(entry.size, viewCacheTail)
+	if n == 0 {
+		return true
+	}
+	copied, err := os.Open(entry.path)
+	if err != nil {
+		return false
+	}
+	defer copied.Close()
+	ours := make([]byte, n)
+	theirs := make([]byte, n)
+	if _, err := copied.ReadAt(ours, entry.size-n); err != nil {
+		return false
+	}
+	if _, err := source.ReadAt(theirs, entry.size-n); err != nil {
+		return false
+	}
+	return bytes.Equal(ours, theirs)
+}
+
+func (c *viewStreamCache) touch(key string) {
+	for i, k := range c.order {
+		if k == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+	c.order = append(c.order, key)
+}
+
+func (c *viewStreamCache) evict() {
+	var total int64
+	for _, e := range c.items {
+		total += e.size
+	}
+	// The newest entry is never given up: it is what the snapshot just
+	// asked for, and dropping it would make a cache smaller than one
+	// stream copy the whole thing again on every single snapshot.
+	for len(c.order) > 1 && (len(c.order) > viewCacheEntries || total > viewCacheBytes) {
+		key := c.order[0]
+		c.order = c.order[1:]
+		if e, ok := c.items[key]; ok {
+			total -= e.size
+			os.Remove(e.path)
+			delete(c.items, key)
+		}
+	}
+}
+
+func (c *viewStreamCache) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = map[string]*cachedStream{}
+	c.order = nil
+	if !c.ready {
+		return nil
+	}
+	c.ready = false
+	return os.RemoveAll(c.dir)
 }
 
 type viewContextReader struct {
@@ -160,6 +365,12 @@ func captureViewRun(source *os.Root, expected map[string]viewFileIdentity, snaps
 }
 
 func captureViewRunContext(ctx context.Context, source *os.Root, expected map[string]viewFileIdentity, snapshot *viewSnapshot) error {
+	return captureViewRunCached(ctx, source, expected, snapshot, nil, "")
+}
+
+// captureViewRunCached captures a run, taking its append-only streams
+// through the cache when one is given.
+func captureViewRunCached(ctx context.Context, source *os.Root, expected map[string]viewFileIdentity, snapshot *viewSnapshot, cache *viewStreamCache, runID string) error {
 	snapshot.documents = make(map[string][]byte)
 	for _, name := range viewSnapshotFiles {
 		if err := ctx.Err(); err != nil {
@@ -171,7 +382,14 @@ func captureViewRunContext(ctx context.Context, source *os.Root, expected map[st
 		}
 		switch name {
 		case actionsFile, providerEventsFile, unparsedFile, gitDir + "/" + trackedPatchFile:
-			file, size, err := captureViewStreamContext(ctx, source, name, identity)
+			var file *os.File
+			var size int64
+			var err error
+			if cache != nil && viewAppendOnly[name] {
+				file, size, err = captureViewStreamCached(ctx, source, name, identity, cache, runID)
+			} else {
+				file, size, err = captureViewStreamContext(ctx, source, name, identity)
+			}
 			if err != nil {
 				return err
 			}
@@ -231,6 +449,34 @@ func captureViewDocumentContext(ctx context.Context, source *os.Root, name strin
 		return nil, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
 	}
 	return raw, nil
+}
+
+// captureViewStreamCached brings the cache's copy of an append-only stream
+// up to the size seen at the first look and hands back a reader on it.
+func captureViewStreamCached(ctx context.Context, source *os.Root, name string, expected viewFileIdentity, cache *viewStreamCache, runID string) (*os.File, int64, error) {
+	file, err := openRegularFromRoot(source, name)
+	if err != nil {
+		return nil, 0, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot: %w", name, err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("cli: inspect %s while capturing viewer snapshot: %w", name, err)
+	}
+	if !viewStreamStill(name, expected.info, info) {
+		return nil, 0, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
+	}
+	size := expected.info.Size()
+	copied, err := cache.capture(ctx, runID, name, file, info, size)
+	if err != nil {
+		return nil, 0, err
+	}
+	after, err := file.Stat()
+	if err != nil || !viewStreamStill(name, expected.info, after) {
+		copied.Close()
+		return nil, 0, fmt.Errorf("cli: run changed while capturing %s for viewer snapshot", name)
+	}
+	return copied, size, nil
 }
 
 func captureViewStream(source *os.Root, name string, expected viewFileIdentity) (*os.File, int64, error) {
@@ -364,7 +610,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
-	if err := captureViewRunContext(ctx, sourceRoot, before, snapshot); err != nil {
+	if err := captureViewRunCached(ctx, sourceRoot, before, snapshot, s.cache, runID); err != nil {
 		return fail(err)
 	}
 	if s.afterCopy != nil {
@@ -654,12 +900,51 @@ func readCapturedViewEvidence(snapshot *viewSnapshot, manifest storage.Manifest)
 		return viewEvidence{}, err
 	}
 	repository, verificationSummary := appendSessionEvidence(manifest, repositoryFields(git), verificationFields(verification))
+	posthoc, err := viewPosthocVerificationOf(snapshot)
+	if err != nil {
+		return viewEvidence{}, err
+	}
+	if posthoc != nil {
+		posthoc.OwnRan = verification != nil
+	}
 	return viewEvidence{
-		ProviderUsage: viewFields(providerUsageFields(usage)),
-		Supervisor:    viewFields(supervisorFields(manifest, result)),
-		Repository:    viewFields(repository),
-		Verification:  viewFields(verificationSummary),
+		ProviderUsage:       viewFields(providerUsageFields(usage)),
+		Supervisor:          viewFields(supervisorFields(manifest, result)),
+		Repository:          viewFields(repository),
+		Verification:        viewFields(verificationSummary),
+		PosthocVerification: posthoc,
 	}, nil
+}
+
+// viewPosthocVerificationOf reads a later verification captured with the
+// snapshot, nil when the run has none.
+func viewPosthocVerificationOf(snapshot *viewSnapshot) (*viewPosthocVerification, error) {
+	name := verifyPosthocDir + "/" + verifyResults
+	raw, err := capturedViewDocument(snapshot, name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	result, err := decodeVerificationAs(raw, name, posthocAttribution)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := decodePosthocMeta(capturedViewDocument(snapshot, verifyPosthocDir+"/"+verifyPosthocMeta))
+	if err != nil {
+		return nil, err
+	}
+	return newViewPosthocVerification(result, meta), nil
+}
+
+func newViewPosthocVerification(result *evidence.VerificationResult, meta *posthocMeta) *viewPosthocVerification {
+	out := &viewPosthocVerification{Status: verdict(result.Status), Caveat: posthocCaveat(meta), Fields: viewFields(verificationFields(result))}
+	if meta != nil {
+		out.MeasuredAt = meta.MeasuredAt
+		out.HeadMovedSince = meta.HeadMovedSince
+	}
+	return out
 }
 
 func countViewActions(file *os.File, size int64) (int, error) {
@@ -941,6 +1226,9 @@ func (s *viewSnapshotStore) Close() error {
 	}
 	s.byID = make(map[string]*viewSnapshot)
 	s.ids = nil
+	if s.cache != nil {
+		errs = append(errs, s.cache.Close())
+	}
 	return errors.Join(errs...)
 }
 
