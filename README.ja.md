@@ -55,7 +55,7 @@
 
 ## クイックスタート
 
-> **ステータス:** 最新リリースは v0.7.0 です。run は後からでも検証できます。リポジトリに
+> **ステータス:** v0.7.1 が最新リリースです。run は後から再検証できます。リポジトリに
 > コミット済みの検査を今日もう一度実行し、その結果を独立した後日の測定として記録し、
 > HEAD がその間に動いたかどうかも残します。任意の 2 つの run をページ上で並べて比較する
 > こともできます。ストアが何を消費しているかも分かるようになりました。`agentrec status`
@@ -78,14 +78,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.7.0_darwin_arm64.tar.gz
+archive=agentrec_0.7.1_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.7.0_darwin_arm64/agentrec version
+./agentrec_0.7.1_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.1
 ```
 
 各タグ付きリリースには `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64`
@@ -483,7 +483,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.7.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.7.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` はリリースアーカイブをローカルでビルドするだけで、何も公開

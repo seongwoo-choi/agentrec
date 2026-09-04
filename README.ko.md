@@ -54,7 +54,7 @@
 
 ## 빠른 시작
 
-> **상태:** v0.7.0이 최신 릴리스입니다. run을 사후에 검증할 수 있습니다. 저장소에
+> **상태:** v0.7.1이 최신 릴리스입니다. run을 사후에 검증할 수 있습니다. 저장소에
 > 커밋된 검사를 오늘 다시 실행하고, 그 결과를 별도의 사후 측정으로 기록하며 HEAD가
 > 그동안 움직였는지 함께 남깁니다. 임의의 두 run을 화면에서 나란히 비교할 수도
 > 있습니다. 저장소가 얼마나 드는지도 이제 말해 줍니다. `agentrec status`가 디스크
@@ -77,14 +77,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.7.0_darwin_arm64.tar.gz
+archive=agentrec_0.7.1_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.7.0_darwin_arm64/agentrec version
+./agentrec_0.7.1_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.1
 ```
 
 태그된 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`
@@ -471,7 +471,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.7.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.7.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 릴리스 아카이브를 로컬에서 빌드할 뿐 아무것도
