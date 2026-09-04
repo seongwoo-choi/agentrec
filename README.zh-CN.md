@@ -52,7 +52,7 @@
 
 ## 快速开始
 
-> **状态：** v0.7.0 是最新发布版本。运行记录可以事后再验证一次——仓库中已提交的检查
+> **状态：** v0.7.1 是最新发布版本。运行记录可以事后再验证一次——仓库中已提交的检查
 > 今天重新运行，作为独立的事后测量记录下来，并说明 HEAD 在此期间是否移动过——任意
 > 两条运行记录也可以在页面上并排比较。存储的开销现在也能看见：`agentrec status` 会
 > 报告它占用的磁盘空间，`agentrec trash sweep 30d` 会把陈旧的运行记录移入回收站，跟随
@@ -73,14 +73,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.7.0_darwin_arm64.tar.gz
+archive=agentrec_0.7.1_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.7.0_darwin_arm64/agentrec version
+./agentrec_0.7.1_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.1
 ```
 
 每个已打标签的发布版本都包含 `darwin_amd64`、`darwin_arm64`、`linux_amd64` 和
@@ -445,7 +445,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.7.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.7.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 在本地构建发布归档，不发布任何内容；其输出目录必须
