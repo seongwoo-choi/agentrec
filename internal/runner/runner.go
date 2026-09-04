@@ -218,7 +218,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	go func() { streamed <- tee(output.stdout, pw, req.Bundle) }()
 
 	signaller := &groupSignaller{pid: cmd.Process.Pid}
-	leaderExit := observeLeaderExit(cmd.Process.Pid)
+	leaderExit := ObserveLeaderExit(cmd.Process.Pid)
 	watcher := watch(ctx, req, grace, signaller)
 
 	// Observe exit without reaping. The leader remains a zombie, so its process-

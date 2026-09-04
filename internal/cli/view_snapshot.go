@@ -82,26 +82,28 @@ var viewSnapshotFiles = []string{
 	gitDir + "/" + untrackedChangesFile,
 	gitDir + "/" + trackedPatchFile,
 	verifyDir + "/" + verifyResults,
+	verifyPosthocDir + "/" + verifyPosthocCurrent,
 	verifyPosthocDir + "/" + verifyResults,
 	verifyPosthocDir + "/" + verifyPosthocMeta,
 	providerUsageFile,
 }
 
 var viewSnapshotFileLimits = map[string]int64{
-	manifestFile:                               maxDocumentBytes,
-	promptFile:                                 maxDocumentBytes,
-	actionsFile:                                maxActionStreamBytes,
-	providerEventsFile:                         maxEventStreamBytes,
-	unparsedFile:                               maxActionStreamBytes,
-	processDir + "/" + resultFile:              maxDocumentBytes,
-	gitDir + "/" + resultFile:                  maxDocumentBytes,
-	gitDir + "/" + trackedStatFile:             maxViewChangeDocBytes,
-	gitDir + "/" + untrackedChangesFile:        maxViewChangeDocBytes,
-	gitDir + "/" + trackedPatchFile:            maxViewPatchBytes,
-	verifyDir + "/" + verifyResults:            maxDocumentBytes,
-	verifyPosthocDir + "/" + verifyResults:     maxDocumentBytes,
-	verifyPosthocDir + "/" + verifyPosthocMeta: maxDocumentBytes,
-	providerUsageFile:                          maxDocumentBytes,
+	manifestFile:                                  maxDocumentBytes,
+	promptFile:                                    maxDocumentBytes,
+	actionsFile:                                   maxActionStreamBytes,
+	providerEventsFile:                            maxEventStreamBytes,
+	unparsedFile:                                  maxActionStreamBytes,
+	processDir + "/" + resultFile:                 maxDocumentBytes,
+	gitDir + "/" + resultFile:                     maxDocumentBytes,
+	gitDir + "/" + trackedStatFile:                maxViewChangeDocBytes,
+	gitDir + "/" + untrackedChangesFile:           maxViewChangeDocBytes,
+	gitDir + "/" + trackedPatchFile:               maxViewPatchBytes,
+	verifyDir + "/" + verifyResults:               maxDocumentBytes,
+	verifyPosthocDir + "/" + verifyPosthocCurrent: 64,
+	verifyPosthocDir + "/" + verifyResults:        maxDocumentBytes,
+	verifyPosthocDir + "/" + verifyPosthocMeta:    maxDocumentBytes,
+	providerUsageFile:                             maxDocumentBytes,
 }
 
 type viewFileIdentity struct {
@@ -564,6 +566,25 @@ func captureViewRunCached(ctx context.Context, source *os.Root, expected map[str
 			snapshot.documents[name] = raw
 		}
 	}
+	currentName := filepath.Join(verifyPosthocDir, verifyPosthocCurrent)
+	if current, ok := snapshot.documents[currentName]; ok {
+		generation, err := parsePosthocGeneration(currentName, current)
+		if err != nil {
+			return err
+		}
+		for _, file := range []string{verifyResults, verifyPosthocMeta} {
+			name := filepath.Join(verifyPosthocDir, generation, file)
+			identity := expected[name]
+			if !identity.present {
+				continue
+			}
+			raw, err := captureViewDocumentContext(ctx, source, name, identity)
+			if err != nil {
+				return err
+			}
+			snapshot.documents[name] = raw
+		}
+	}
 	return nil
 }
 
@@ -916,6 +937,25 @@ func viewRunFingerprintContext(ctx context.Context, root *os.Root) (map[string]v
 		}
 		fingerprint[name] = identity
 	}
+	currentName := filepath.Join(verifyPosthocDir, verifyPosthocCurrent)
+	if fingerprint[currentName].present {
+		current, err := readDocumentFromRoot(root, currentName)
+		if err != nil {
+			return nil, err
+		}
+		generation, err := parsePosthocGeneration(currentName, current)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range []string{verifyResults, verifyPosthocMeta} {
+			name := filepath.Join(verifyPosthocDir, generation, file)
+			identity, err := viewFileFingerprintContext(ctx, root, name)
+			if err != nil {
+				return nil, err
+			}
+			fingerprint[name] = identity
+		}
+	}
 	return fingerprint, nil
 }
 
@@ -947,7 +987,14 @@ func viewFileFingerprintContext(ctx context.Context, root *os.Root, name string)
 		file.Close()
 		return viewFileIdentity{}, fmt.Errorf("cli: inspect %s for viewer snapshot: %w", name, err)
 	}
-	limit := viewSnapshotFileLimits[name]
+	limit, ok := viewSnapshotFileLimits[name]
+	if !ok && isPosthocGenerationFile(name) {
+		limit = maxDocumentBytes
+	}
+	if limit <= 0 {
+		file.Close()
+		return viewFileIdentity{}, fmt.Errorf("cli: no viewer limit for %s", name)
+	}
 	if info.Size() > limit {
 		file.Close()
 		return viewFileIdentity{}, fmt.Errorf("cli: %s is larger than %d bytes", name, limit)
@@ -970,8 +1017,14 @@ func viewFileFingerprintContext(ctx context.Context, root *os.Root, name string)
 }
 
 func sameViewFingerprint(a, b map[string]viewFileIdentity) bool {
-	for _, name := range viewSnapshotFiles {
-		left, right := a[name], b[name]
+	if len(a) != len(b) {
+		return false
+	}
+	for name, left := range a {
+		right, ok := b[name]
+		if !ok {
+			return false
+		}
 		if left.present != right.present {
 			return false
 		}
@@ -989,6 +1042,16 @@ func sameViewFingerprint(a, b map[string]viewFileIdentity) bool {
 		}
 	}
 	return true
+}
+
+func isPosthocGenerationFile(name string) bool {
+	dir, file := filepath.Split(name)
+	if file != verifyResults && file != verifyPosthocMeta {
+		return false
+	}
+	generation := filepath.Base(filepath.Clean(dir))
+	parent := filepath.Dir(filepath.Clean(dir))
+	return parent == verifyPosthocDir && strings.HasPrefix(generation, "generation-") && len(generation) == len("generation-")+32
 }
 
 // viewStreamStill says whether a stream file is still the one that was
@@ -1103,20 +1166,10 @@ func readCapturedViewEvidence(snapshot *viewSnapshot, manifest storage.Manifest)
 // viewPosthocVerificationOf reads a later verification captured with the
 // snapshot, nil when the run has none.
 func viewPosthocVerificationOf(snapshot *viewSnapshot) (*viewPosthocVerification, error) {
-	name := verifyPosthocDir + "/" + verifyResults
-	raw, err := capturedViewDocument(snapshot, name)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	result, err := decodeVerificationAs(raw, name, posthocAttribution)
-	if err != nil {
-		return nil, err
-	}
-	meta, err := decodePosthocMeta(capturedViewDocument(snapshot, verifyPosthocDir+"/"+verifyPosthocMeta))
-	if err != nil {
+	result, meta, err := readPosthocVerificationWith(func(name string) ([]byte, error) {
+		return capturedViewDocument(snapshot, name)
+	})
+	if err != nil || result == nil {
 		return nil, err
 	}
 	return newViewPosthocVerification(result, meta), nil

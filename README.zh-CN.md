@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.7.0.md) ·
+[发布说明](docs/releases/v0.7.1.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -425,7 +425,7 @@ agentrec 不声称什么：
 
 ## 文档
 
-- [v0.7.0 发布说明](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.7.1 发布说明](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [飞行记录仪设计](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——recorder](docs/dogfood/2026-07-28-evidence.md)：一个固定的 20 次

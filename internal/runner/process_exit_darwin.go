@@ -8,9 +8,9 @@ import (
 	"syscall"
 )
 
-// observeLeaderExit reports process exit without reaping it. Keeping the leader
+// ObserveLeaderExit reports process exit without reaping it. Keeping the leader
 // as a zombie preserves its process-group id until Run has finished every signal.
-func observeLeaderExit(pid int) <-chan error {
+func ObserveLeaderExit(pid int) <-chan error {
 	done := make(chan error, 1)
 	kq, err := syscall.Kqueue()
 	if err != nil {

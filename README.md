@@ -41,7 +41,7 @@ comes from a different observer, and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.7.0.md) ·
+[Release notes](docs/releases/v0.7.1.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -464,7 +464,7 @@ directory.
 
 ## Documentation
 
-- [Release notes for v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [Release notes for v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed

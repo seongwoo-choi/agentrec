@@ -13,9 +13,9 @@ import (
 
 const leaderExitPollInterval = 5 * time.Millisecond
 
-// observeLeaderExit reports process exit without reaping it. An unreaped child
+// ObserveLeaderExit reports process exit without reaping it. An unreaped child
 // remains in /proc with zombie state, which keeps its process-group id reserved.
-func observeLeaderExit(pid int) <-chan error {
+func ObserveLeaderExit(pid int) <-chan error {
 	done := make(chan error, 1)
 	path := "/proc/" + strconv.Itoa(pid) + "/stat"
 	go func() {
