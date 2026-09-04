@@ -106,7 +106,7 @@ func openRunRootFromRoot(runs *os.Root, runID string) (*os.Root, error) {
 		return nil, fmt.Errorf("cli: inspect run %s: %w", runID, err)
 	}
 	if !before.IsDir() || before.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("cli: run %s is not a real directory", runID)
+		return nil, fmt.Errorf("cli: run %s is not a run: not a real directory", runID)
 	}
 	runRoot, err := runs.OpenRoot(runID)
 	if err != nil {

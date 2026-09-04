@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/lock"
@@ -89,19 +88,21 @@ func trashRun(root, runID string) error {
 	if err := checkRunID(runID); err != nil {
 		return err
 	}
-	src := filepath.Join(root, runID)
-	info, err := os.Stat(src)
+	runRoot, err := openRunRoot(root, runID)
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("cli: %s is not a run", strconv.Quote(runID))
-	}
-	if m, err := readManifest(src); err == nil {
-		if err := runOpen(root, src, m); err != nil {
+	if m, err := readManifestFromRoot(runRoot); err == nil {
+		if err := runOpenFromRoot(root, runRoot, m); err != nil {
+			runRoot.Close()
 			return err
 		}
 	}
+	verificationLock, err := acquirePosthocVerificationLock(runRoot)
+	if err != nil {
+		return err
+	}
+	defer verificationLock.Close()
 	parent, err := openTrashParent(root, true)
 	if err != nil {
 		return err
@@ -129,6 +130,15 @@ const closeOutGrace = time.Hour
 // a run with no recorded ending whose recorder may still be alive, or one
 // whose close-out has not filed the report yet.
 func runOpen(root, dir string, m storage.Manifest) error {
+	runRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer runRoot.Close()
+	return runOpenFromRoot(root, runRoot, m)
+}
+
+func runOpenFromRoot(root string, runRoot *os.Root, m storage.Manifest) error {
 	if m.Mode == storage.ModeSession && sessionRecorderAlive(m.SessionID) {
 		return errRunOpen
 	}
@@ -138,12 +148,12 @@ func runOpen(root, dir string, m storage.Manifest) error {
 		}
 		// No ending and no live recorder: the recorder died. The run may
 		// go — once nothing has touched it for the close-out grace.
-		if info, err := os.Stat(filepath.Join(dir, manifestFile)); err == nil && time.Since(info.ModTime()) < closeOutGrace {
+		if info, err := runRoot.Stat(manifestFile); err == nil && time.Since(info.ModTime()) < closeOutGrace {
 			return errRunOpen
 		}
 		return nil
 	}
-	if _, err := os.Stat(filepath.Join(dir, reportFile)); err != nil && m.EndedAt != nil && time.Since(*m.EndedAt) < closeOutGrace {
+	if _, err := runRoot.Stat(reportFile); err != nil && m.EndedAt != nil && time.Since(*m.EndedAt) < closeOutGrace {
 		return errRunClosing
 	}
 	return nil

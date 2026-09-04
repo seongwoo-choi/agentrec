@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/evidence"
@@ -29,14 +31,21 @@ const (
 	// pinned must not destroy the measurement that is already there.
 	verifyPosthocPending = verifyPosthocDir + ".pending"
 	verifyPosthocMeta    = "meta.json"
+	verifyPosthocCurrent = "current"
+	verifyPosthocLock    = ".verification-posthoc.lock"
 	posthocAttribution   = evidence.VerificationAttribution + " (post-hoc)"
 )
 
 var (
-	errVerifyNoRepo   = errors.New("cli: the run recorded no repository to verify in")
-	errVerifyRepoGone = errors.New("cli: the run's repository is no longer there")
-	errVerifyNoConfig = errors.New("cli: the repository has no committed " + verifyConfigFile)
-	errVerifyBusy     = errors.New("cli: another verification is running")
+	errVerifyNoRepo              = errors.New("cli: the run recorded no repository to verify in")
+	errVerifyRepoGone            = errors.New("cli: the run's repository is no longer there")
+	errVerifyNoConfig            = errors.New("cli: the repository has no committed " + verifyConfigFile)
+	errVerifyBusy                = errors.New("cli: another verification is running")
+	errVerifyPublishedNotDurable = errors.New("cli: later verification was published but directory sync failed")
+	pinPosthocVerification       = evidence.PinVerificationBytesRoot
+	syncPosthocDirectory         = syncPosthocDir
+	openPosthocRunRoot           = openRunRoot
+	acquireVerifyPosthocLock     = acquirePosthocVerificationLock
 )
 
 type posthocMeta struct {
@@ -54,12 +63,25 @@ func verifyRunLater(ctx context.Context, root, runID string) (evidence.Verificat
 	if err := checkRunID(runID); err != nil {
 		return none, posthocMeta{}, err
 	}
-	dir := filepath.Join(root, runID)
-	m, err := readManifest(dir)
+	runRoot, err := openPosthocRunRoot(root, runID)
+	if err != nil {
+		return none, posthocMeta{}, fmt.Errorf("cli: open run for verification: %w", err)
+	}
+	m, err := readManifestFromRoot(runRoot)
+	if err != nil {
+		runRoot.Close()
+		return none, posthocMeta{}, err
+	}
+	if err := runOpenFromRoot(root, runRoot, m); err != nil {
+		runRoot.Close()
+		return none, posthocMeta{}, err
+	}
+	lock, err := acquireVerifyPosthocLock(runRoot)
 	if err != nil {
 		return none, posthocMeta{}, err
 	}
-	if err := runOpen(root, dir, m); err != nil {
+	defer lock.Close()
+	if err := requireInstalledRun(root, runID, lock.root); err != nil {
 		return none, posthocMeta{}, err
 	}
 	repoRoot := m.RepoRoot
@@ -92,12 +114,11 @@ func verifyRunLater(ctx context.Context, root, runID string) (evidence.Verificat
 	}
 	head, _ := gitAsked(pinCtx, repoRoot, "rev-parse", "HEAD")
 
-	pending := filepath.Join(dir, verifyPosthocPending)
-	if err := os.RemoveAll(pending); err != nil {
+	if err := lock.root.RemoveAll(verifyPosthocPending); err != nil {
 		return none, posthocMeta{}, fmt.Errorf("cli: clear an unfinished later verification: %w", err)
 	}
 	red := redaction.New()
-	verifier, err := evidence.PinVerification(pinCtx, repoRoot, dir, configPath, evidence.VerificationOptions{
+	verifier, err := pinPosthocVerification(pinCtx, repoRoot, lock.root, configPath, committed, evidence.VerificationOptions{
 		Sanitize:    func(text string) (string, error) { return redactFreeText(red, text) },
 		DirName:     verifyPosthocPending,
 		Attribution: posthocAttribution,
@@ -110,12 +131,12 @@ func verifyRunLater(ctx context.Context, root, runID string) (evidence.Verificat
 		runErr = err
 	}
 	if runErr != nil {
-		os.RemoveAll(pending)
+		_ = lock.root.RemoveAll(verifyPosthocPending)
 		return none, posthocMeta{}, runErr
 	}
 
 	meta := posthocMeta{MeasuredAt: time.Now().UTC().Truncate(time.Second), HeadNow: strings.TrimSpace(string(head))}
-	if g, err := readGitResult(dir); err == nil && g != nil {
+	if g, err := readGitResultFromRoot(lock.root); err == nil && g != nil {
 		meta.HeadAtRun = g.Baseline
 	}
 	if meta.HeadAtRun != "" && meta.HeadNow != "" {
@@ -126,20 +147,156 @@ func verifyRunLater(ctx context.Context, root, runID string) (evidence.Verificat
 	if err != nil {
 		return none, posthocMeta{}, err
 	}
-	if err := os.WriteFile(filepath.Join(pending, verifyPosthocMeta), append(raw, '\n'), 0o600); err != nil {
-		os.RemoveAll(pending)
+	if err := writePosthocFile(lock.root, filepath.Join(verifyPosthocPending, verifyPosthocMeta), append(raw, '\n')); err != nil {
+		_ = lock.root.RemoveAll(verifyPosthocPending)
 		return none, posthocMeta{}, fmt.Errorf("cli: file the later verification: %w", err)
 	}
-	// Only now does the new measurement take the place of the earlier one.
-	final := filepath.Join(dir, verifyPosthocDir)
-	if err := os.RemoveAll(final); err != nil {
-		os.RemoveAll(pending)
-		return none, posthocMeta{}, fmt.Errorf("cli: replace the earlier later verification: %w", err)
-	}
-	if err := os.Rename(pending, final); err != nil {
+	if err := publishPosthocVerification(lock.root); err != nil {
 		return none, posthocMeta{}, fmt.Errorf("cli: file the later verification: %w", err)
 	}
 	return result, meta, nil
+}
+
+func writePosthocFile(root *os.Root, name string, raw []byte) (err error) {
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	installed := false
+	defer func() {
+		if installed {
+			return
+		}
+		removeErr := root.Remove(name)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+		err = errors.Join(err, removeErr, syncPosthocDirectory(root, filepath.Dir(name)))
+	}()
+	if _, err = f.Write(raw); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = syncPosthocDirectory(root, filepath.Dir(name)); err != nil {
+		return err
+	}
+	installed = true
+	return nil
+}
+
+func publishPosthocVerification(root *os.Root) error {
+	if info, err := root.Lstat(verifyPosthocDir); errors.Is(err, os.ErrNotExist) {
+		if err := root.Mkdir(verifyPosthocDir, 0o700); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else if !info.IsDir() {
+		return errors.New("the later verification container is not a directory")
+	}
+	// Retry the parent sync even when a prior failed attempt left the
+	// container entry behind. Its existence is not evidence of durability.
+	if err := syncPosthocDirectory(root, "."); err != nil {
+		return err
+	}
+
+	generation := "generation-" + newViewToken()
+	generationPath := filepath.Join(verifyPosthocDir, generation)
+	if err := root.Rename(verifyPosthocPending, generationPath); err != nil {
+		return err
+	}
+	if err := syncPosthocDirectory(root, "."); err != nil {
+		return err
+	}
+	if err := syncPosthocDirectory(root, verifyPosthocDir); err != nil {
+		return err
+	}
+	temporaryCurrent := filepath.Join(verifyPosthocDir, ".current-"+newViewToken())
+	if err := writePosthocFile(root, temporaryCurrent, []byte(generation+"\n")); err != nil {
+		return err
+	}
+	if err := root.Rename(temporaryCurrent, filepath.Join(verifyPosthocDir, verifyPosthocCurrent)); err != nil {
+		removeErr := root.Remove(temporaryCurrent)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+		return errors.Join(err, removeErr, syncPosthocDirectory(root, verifyPosthocDir))
+	}
+	if err := syncPosthocDirectory(root, verifyPosthocDir); err != nil {
+		return fmt.Errorf("%w: %v", errVerifyPublishedNotDurable, err)
+	}
+	return nil
+}
+
+func syncPosthocDir(root *os.Root, name string) error {
+	dir, err := root.Open(name)
+	if err != nil {
+		return err
+	}
+	err = dir.Sync()
+	if closeErr := dir.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+type posthocVerificationLock struct {
+	root *os.Root
+	file *os.File
+}
+
+func acquirePosthocVerificationLock(root *os.Root) (*posthocVerificationLock, error) {
+	file, err := root.OpenFile(verifyPosthocLock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		root.Close()
+		return nil, fmt.Errorf("cli: open verification lock: %w", err)
+	}
+	info, statErr := root.Lstat(verifyPosthocLock)
+	held, heldErr := file.Stat()
+	if statErr != nil || heldErr != nil || !info.Mode().IsRegular() || !held.Mode().IsRegular() || !os.SameFile(info, held) {
+		file.Close()
+		root.Close()
+		return nil, errors.New("cli: verification lock is not the run's regular lock file")
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		root.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errVerifyBusy
+		}
+		return nil, fmt.Errorf("cli: lock later verification: %w", err)
+	}
+	return &posthocVerificationLock{root: root, file: file}, nil
+}
+
+func requireInstalledRun(root, runID string, held *os.Root) error {
+	current, err := openRunRoot(root, runID)
+	if err != nil {
+		return fmt.Errorf("cli: run moved before verification lock: %w", err)
+	}
+	defer current.Close()
+	heldInfo, err := held.Stat(".")
+	if err != nil {
+		return fmt.Errorf("cli: inspect held run after verification lock: %w", err)
+	}
+	currentInfo, err := current.Stat(".")
+	if err != nil {
+		return fmt.Errorf("cli: inspect installed run after verification lock: %w", err)
+	}
+	if !os.SameFile(heldInfo, currentInfo) {
+		return errors.New("cli: run moved before verification lock")
+	}
+	return nil
+}
+
+func (l *posthocVerificationLock) Close() error {
+	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	return errors.Join(err, l.file.Close(), l.root.Close())
 }
 
 // gitAsked reads a fact out of a repository without letting the repository's
@@ -172,25 +329,54 @@ func redactFreeText(red *redaction.Redactor, text string) (string, error) {
 // readPosthocVerification reads a later verification filed under the run,
 // nil when there is none.
 func readPosthocVerification(dir string) (*evidence.VerificationResult, *posthocMeta, error) {
-	raw, err := readDocument(dir, filepath.Join(verifyPosthocDir, verifyResults))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil, nil
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	result, err := decodeVerificationAs(raw, filepath.Join(verifyPosthocDir, verifyResults), posthocAttribution)
-	if err != nil {
-		return nil, nil, err
-	}
-	meta, err := decodePosthocMeta(readDocument(dir, filepath.Join(verifyPosthocDir, verifyPosthocMeta)))
-	return result, meta, err
+	read := func(name string) ([]byte, error) { return readDocument(dir, name) }
+	return readPosthocVerificationWith(read)
 }
 
 func readPosthocVerificationFromRoot(root *os.Root) (*evidence.VerificationResult, *posthocMeta, error) {
-	name := filepath.Join(verifyPosthocDir, verifyResults)
-	raw, err := readDocumentFromRoot(root, name)
+	read := func(name string) ([]byte, error) { return readDocumentFromRoot(root, name) }
+	return readPosthocVerificationWith(read)
+}
+
+func parsePosthocGeneration(name string, raw []byte) (string, error) {
+	const prefix = "generation-"
+	if len(raw) != len(prefix)+32+1 || raw[len(raw)-1] != '\n' {
+		return "", fmt.Errorf("cli: decode %s: invalid generation", name)
+	}
+	generation := string(raw[:len(raw)-1])
+	if filepath.Base(generation) != generation || !strings.HasPrefix(generation, prefix) {
+		return "", fmt.Errorf("cli: decode %s: invalid generation", name)
+	}
+	for _, c := range generation[len(prefix):] {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return "", fmt.Errorf("cli: decode %s: invalid generation", name)
+		}
+	}
+	return generation, nil
+}
+
+func readPosthocVerificationWith(read func(string) ([]byte, error)) (*evidence.VerificationResult, *posthocMeta, error) {
+	base := verifyPosthocDir
+	selected := false
+	currentName := filepath.Join(verifyPosthocDir, verifyPosthocCurrent)
+	current, err := read(currentName)
+	if err == nil {
+		generation, err := parsePosthocGeneration(currentName, current)
+		if err != nil {
+			return nil, nil, err
+		}
+		base = filepath.Join(verifyPosthocDir, generation)
+		selected = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, err
+	}
+
+	name := filepath.Join(base, verifyResults)
+	raw, err := read(name)
 	if errors.Is(err, os.ErrNotExist) {
+		if selected {
+			return nil, nil, fmt.Errorf("cli: read %s selected by %s: %w", name, currentName, err)
+		}
 		return nil, nil, nil
 	}
 	if err != nil {
@@ -200,7 +386,12 @@ func readPosthocVerificationFromRoot(root *os.Root) (*evidence.VerificationResul
 	if err != nil {
 		return nil, nil, err
 	}
-	meta, err := decodePosthocMeta(readDocumentFromRoot(root, filepath.Join(verifyPosthocDir, verifyPosthocMeta)))
+	metaName := filepath.Join(base, verifyPosthocMeta)
+	metaRaw, metaReadErr := read(metaName)
+	if selected && errors.Is(metaReadErr, os.ErrNotExist) {
+		return nil, nil, fmt.Errorf("cli: read %s selected by %s: %w", metaName, currentName, metaReadErr)
+	}
+	meta, err := decodePosthocMeta(metaRaw, metaReadErr)
 	return result, meta, err
 }
 
@@ -283,7 +474,9 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		}
 		runID = runs[0].ID
 	}
-	result, meta, err := verifyRunLater(context.Background(), root, runID)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	result, meta, err := verifyRunLater(ctx, root, runID)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailure

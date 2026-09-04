@@ -19,6 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/seongwoo-choi/agentrec/internal/runner"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -78,6 +80,8 @@ const (
 // verifyWaitDelay bounds how long a killed check's pipes are waited on, so a
 // process that ignored its ending cannot hold the run open indefinitely.
 const verifyWaitDelay = 5 * time.Second
+
+var stopVerificationProcess = stopVerificationProcessGroup
 
 // verifyConfigVersion is the only schema this package reads. A configuration
 // written for another one is refused rather than interpreted as this one.
@@ -188,6 +192,10 @@ type PinnedVerification struct {
 	// so that a directory replaced or moved while the provider works cannot
 	// decide where the evidence lands.
 	root *os.Root
+	// parent is caller-owned and is used only to create or abort this
+	// verification beneath the held run root without reopening its pathname.
+	parent  *os.Root
+	dirName string
 
 	// resultInfo identifies the status document as this verification wrote it,
 	// so the one file this package replaces is only ever replaced while it is
@@ -210,11 +218,36 @@ func (p *PinnedVerification) Dir() string { return p.dir }
 // read from are hashed, so that the run can tell afterwards whether it is
 // still about to execute what an operator reviewed.
 func PinVerification(ctx context.Context, repoRoot, runDir, configPath string, opts VerificationOptions) (*PinnedVerification, error) {
+	return pinVerification(ctx, repoRoot, runDir, nil, configPath, readVerifyConfig, opts)
+}
+
+// PinVerificationBytes pins checks from bytes the caller has already validated
+// while retaining configPath for the pre-execution mutation check.
+func PinVerificationBytes(ctx context.Context, repoRoot, runDir, configPath string, raw []byte, opts VerificationOptions) (*PinnedVerification, error) {
+	raw = bytes.Clone(raw)
+	return pinVerification(ctx, repoRoot, runDir, nil, configPath, func(string) ([]byte, error) { return raw, nil }, opts)
+}
+
+// PinVerificationBytesRoot pins already validated bytes and creates its
+// evidence beneath runRoot. runRoot remains owned by the caller.
+func PinVerificationBytesRoot(ctx context.Context, repoRoot string, runRoot *os.Root, configPath string, raw []byte, opts VerificationOptions) (*PinnedVerification, error) {
+	if runRoot == nil {
+		return nil, errors.New("evidence: nil run root")
+	}
+	raw = bytes.Clone(raw)
+	return pinVerification(ctx, repoRoot, runRoot.Name(), runRoot, configPath, func(string) ([]byte, error) { return raw, nil }, opts)
+}
+
+func pinVerification(ctx context.Context, repoRoot, runDir string, runRoot *os.Root, configPath string, readConfig func(string) ([]byte, error), opts VerificationOptions) (*PinnedVerification, error) {
 	if err := existingDir("repository root", repoRoot); err != nil {
 		return nil, err
 	}
-	if err := existingDir("run directory", runDir); err != nil {
-		return nil, err
+	if runRoot == nil {
+		if err := existingDir("run directory", runDir); err != nil {
+			return nil, err
+		}
+	} else if info, err := runRoot.Stat("."); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("evidence: run root is not an existing directory")
 	}
 	// The snapshots below are taken with Git and are scoped to the directory
 	// they are taken in: a subdirectory would measure part of the work while
@@ -227,7 +260,7 @@ func PinVerification(ctx context.Context, repoRoot, runDir, configPath string, o
 	if err != nil {
 		return nil, err
 	}
-	raw, err := readVerifyConfig(configPath)
+	raw, err := readConfig(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +276,8 @@ func PinVerification(ctx context.Context, repoRoot, runDir, configPath string, o
 	p := &PinnedVerification{
 		repoRoot:   repoRoot,
 		dir:        filepath.Join(runDir, opts.DirName),
+		parent:     runRoot,
+		dirName:    opts.DirName,
 		configPath: configPath,
 		configSum:  hashOf(raw),
 		opts:       opts,
@@ -256,15 +291,30 @@ func PinVerification(ctx context.Context, repoRoot, runDir, configPath string, o
 
 	// Mkdir, not MkdirAll: a directory already there belongs to something else,
 	// and a symlink there would put this run's evidence wherever it points.
-	if err := os.Mkdir(p.dir, dirMode); err != nil {
+	if runRoot != nil {
+		err = runRoot.Mkdir(opts.DirName, dirMode)
+	} else {
+		err = os.Mkdir(p.dir, dirMode)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("evidence: create %s: %w", strconv.Quote(p.dir), err)
 	}
 	// Set again after creation, because the umask masks the mode passed to
 	// Mkdir and is not this package's to trust.
-	if err := os.Chmod(p.dir, dirMode); err != nil {
+	if runRoot != nil {
+		err = runRoot.Chmod(opts.DirName, dirMode)
+	} else {
+		err = os.Chmod(p.dir, dirMode)
+	}
+	if err != nil {
 		return nil, p.abort(fmt.Errorf("evidence: restrict %s: %w", strconv.Quote(p.dir), err))
 	}
-	root, err := os.OpenRoot(p.dir)
+	var root *os.Root
+	if runRoot != nil {
+		root, err = runRoot.OpenRoot(opts.DirName)
+	} else {
+		root, err = os.OpenRoot(p.dir)
+	}
 	if err != nil {
 		return nil, p.abort(fmt.Errorf("evidence: hold %s open: %w", strconv.Quote(p.dir), err))
 	}
@@ -352,8 +402,12 @@ func (p *PinnedVerification) abort(err error) error {
 	if cerr := p.Close(); cerr != nil {
 		err = errors.Join(err, cerr)
 	}
-	os.Remove(filepath.Join(p.dir, verifyResultFile))
-	os.Remove(p.dir)
+	if p.parent != nil {
+		_ = p.parent.RemoveAll(p.dirName)
+	} else {
+		os.Remove(filepath.Join(p.dir, verifyResultFile))
+		os.Remove(p.dir)
+	}
 	return err
 }
 
@@ -495,7 +549,7 @@ func (p *PinnedVerification) execute(ctx context.Context, pc pinnedCheck) (Verif
 	// The argv is this package's own copy, handed to the process directly:
 	// there is no shell between the two, so punctuation in an argument is an
 	// argument and nothing else.
-	cmd := exec.CommandContext(runCtx, pc.argv[0], pc.argv[1:]...)
+	cmd := exec.Command(pc.argv[0], pc.argv[1:]...)
 	cmd.Dir = p.repoRoot
 	stdout := &boundedBuffer{limit: p.opts.MaxOutputBytes}
 	stderr := &boundedBuffer{limit: p.opts.MaxOutputBytes}
@@ -504,19 +558,45 @@ func (p *PinnedVerification) execute(ctx context.Context, pc pinnedCheck) (Verif
 	// started: a test runner's children would otherwise go on writing to the
 	// repository after the run had reported it measured.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			// It ended on its own between the deadline and the signal, which is
-			// the outcome this wanted.
-			return nil
-		}
-		return err
-	}
 	cmd.WaitDelay = verifyWaitDelay
 
 	start := time.Now()
-	err := cmd.Run()
+	var err error
+	if err = runCtx.Err(); err == nil {
+		err = cmd.Start()
+	}
+	if err == nil {
+		leaderExit := runner.ObserveLeaderExit(cmd.Process.Pid)
+		stopWatcher := make(chan struct{})
+		watcherDone := make(chan error, 1)
+		go func() {
+			select {
+			case <-runCtx.Done():
+				watcherDone <- stopVerificationProcess(cmd)
+			case <-stopWatcher:
+				watcherDone <- nil
+			}
+		}()
+
+		observeErr := <-leaderExit
+		close(stopWatcher)
+		watchErr := <-watcherDone
+		cleanupErr := stopVerificationProcess(cmd)
+		if errors.Is(cleanupErr, syscall.EPERM) && observeErr == nil {
+			cleanupErr = nil
+		}
+		waitErr := cmd.Wait()
+		switch {
+		case observeErr != nil:
+			return VerificationCheck{}, fmt.Errorf("evidence: observe verification process exit: %w", observeErr)
+		case cleanupErr != nil:
+			return VerificationCheck{}, fmt.Errorf("evidence: stop verification process group: %w", cleanupErr)
+		case watchErr != nil:
+			return VerificationCheck{}, fmt.Errorf("evidence: stop cancelled verification process group: %w", watchErr)
+		default:
+			err = waitErr
+		}
+	}
 	end := time.Now()
 	out.StartedAt, out.EndedAt = start.UTC(), end.UTC()
 	out.DurationMS = end.Sub(start).Milliseconds()
@@ -552,6 +632,17 @@ func (p *PinnedVerification) execute(ctx context.Context, pc pinnedCheck) (Verif
 		return VerificationCheck{}, err
 	}
 	return out, nil
+}
+
+func stopVerificationProcessGroup(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
 }
 
 // text is what a check's stream may be written down as. Output that is not

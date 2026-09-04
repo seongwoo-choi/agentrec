@@ -63,6 +63,28 @@ func runVerifyHelper(args []string) {
 			if err := child.Start(); err != nil {
 				os.Exit(97)
 			}
+		case "spawn-wait":
+			path, resume := args[0], args[1]
+			args = args[2:]
+			child := exec.Command(os.Args[0], "-test.run=^TestVerifyHelper$", "helper", "wait", resume, "write", path)
+			child.Stdout = os.Stdout
+			child.Stderr = os.Stderr
+			if err := child.Start(); err != nil {
+				os.Exit(97)
+			}
+		case "wait":
+			path := args[0]
+			args = args[1:]
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := os.Stat(path); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					os.Exit(96)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 		case "exit":
 			n, _ := strconv.Atoi(args[0])
 			os.Exit(n)
@@ -413,6 +435,65 @@ func TestTimeoutKillsTheWholeProcessGroup(t *testing.T) {
 	time.Sleep(4 * time.Second)
 	if exists(survivor) {
 		t.Error("a descendant outlived the check it was started by")
+	}
+}
+
+func TestSuccessfulCheckStopsProcessGroupBeforeReapingLeader(t *testing.T) {
+	repo, run := gitRepo(t), runDir(t)
+	writeConfig(t, repo, configYAML(checkSpec{
+		name:    "success",
+		timeout: "10s",
+		argv:    helperArgv(t, "exit", "0"),
+	}))
+
+	originalStop := stopVerificationProcess
+	called := false
+	calledAfterReap := false
+	stopVerificationProcess = func(cmd *exec.Cmd) error {
+		called = true
+		calledAfterReap = cmd.ProcessState != nil
+		return nil
+	}
+	t.Cleanup(func() { stopVerificationProcess = originalStop })
+
+	res, err := pin(t, repo, run).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := checkByName(t, res, "success").Status; got != "passed" {
+		t.Fatalf("status = %q, want passed", got)
+	}
+	if !called {
+		t.Fatal("the process group was not stopped")
+	}
+	if calledAfterReap {
+		t.Error("the process group was signalled after its leader was reaped")
+	}
+}
+
+func TestSuccessfulCheckWithInheritedPipesPassesAfterDescendantCleanup(t *testing.T) {
+	repo, run := gitRepo(t), runDir(t)
+	survivor := filepath.Join(outside(t), "pipe-survivor")
+	resume := filepath.Join(outside(t), "resume-pipe-survivor")
+	writeConfig(t, repo, configYAML(checkSpec{
+		name:    "pipe-spawner",
+		timeout: "10s",
+		argv:    helperArgv(t, "spawn-wait", survivor, resume),
+	}))
+
+	res, err := pin(t, repo, run).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := checkByName(t, res, "pipe-spawner").Status; got != "passed" {
+		t.Fatalf("status = %q, want passed after descendant cleanup", got)
+	}
+	if err := os.WriteFile(resume, []byte("resume\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if exists(survivor) {
+		t.Error("a pipe-holding descendant outlived a successful check")
 	}
 }
 

@@ -6,15 +6,23 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/evidence"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
+
+func currentPosthocPath(t *testing.T, dir, name string) string {
+	t.Helper()
+	current := strings.TrimSpace(string(mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyPosthocCurrent))))
+	return filepath.Join(dir, verifyPosthocDir, current, name)
+}
 
 // finishedRunIn records a run that ended two hours ago in repo, closed out.
 func finishedRunIn(t *testing.T, root, id, repo string) string {
@@ -50,7 +58,7 @@ func TestVerifyLaterFilesAResultBesideTheRunAndSaysWhenHeadMoved(t *testing.T) {
 		t.Fatalf("meta = %+v, want a time, a head, and no verdict on movement without a baseline", meta)
 	}
 	for _, name := range []string{verifyResults, verifyPosthocMeta} {
-		if _, err := os.Stat(filepath.Join(dir, verifyPosthocDir, name)); err != nil {
+		if _, err := os.Stat(currentPosthocPath(t, dir, name)); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
@@ -97,6 +105,222 @@ func TestVerifyLaterFilesAResultBesideTheRunAndSaysWhenHeadMoved(t *testing.T) {
 	}
 }
 
+func TestVerifyLaterPublishesImmutableGenerationsThroughCurrentPointer(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-generations", repo)
+
+	if _, _, err := verifyRunLater(context.Background(), root, "run-generations"); err != nil {
+		t.Fatal(err)
+	}
+	currentPath := filepath.Join(dir, verifyPosthocDir, verifyPosthocCurrent)
+	first := strings.TrimSpace(string(mustReadFile(t, currentPath)))
+	if first == "" {
+		t.Fatal("first verification published no current generation")
+	}
+	firstResult := filepath.Join(dir, verifyPosthocDir, first, verifyResults)
+	if _, err := os.Stat(firstResult); err != nil {
+		t.Fatalf("first generation: %v", err)
+	}
+
+	if _, _, err := verifyRunLater(context.Background(), root, "run-generations"); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.TrimSpace(string(mustReadFile(t, currentPath)))
+	if second == "" || second == first {
+		t.Fatalf("current generation = %q after %q", second, first)
+	}
+	if _, err := os.Stat(firstResult); err != nil {
+		t.Fatalf("first generation was removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, verifyPosthocDir, second, verifyPosthocMeta)); err != nil {
+		t.Fatalf("second generation metadata: %v", err)
+	}
+}
+
+func TestVerifyLaterReportsWhenCurrentWasPublishedButNotDurable(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-publish-sync", repo)
+	if _, _, err := verifyRunLater(context.Background(), root, "run-publish-sync"); err != nil {
+		t.Fatal(err)
+	}
+	before := strings.TrimSpace(string(mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyPosthocCurrent))))
+
+	originalSync := syncPosthocDirectory
+	containerSyncs := 0
+	syncPosthocDirectory = func(held *os.Root, name string) error {
+		if name == verifyPosthocDir {
+			containerSyncs++
+			if containerSyncs == 3 {
+				return errors.New("injected directory sync failure")
+			}
+		}
+		return originalSync(held, name)
+	}
+	t.Cleanup(func() { syncPosthocDirectory = originalSync })
+
+	if _, _, err := verifyRunLater(context.Background(), root, "run-publish-sync"); !errors.Is(err, errVerifyPublishedNotDurable) {
+		t.Fatalf("error = %v, want published-not-durable", err)
+	}
+	after := strings.TrimSpace(string(mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyPosthocCurrent))))
+	if after == before {
+		t.Fatal("the reported possibly-published generation was not installed")
+	}
+}
+
+func TestVerifyLaterSyncsCurrentTemporaryCleanupAfterRenameFailure(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-current-rename", repo)
+	if _, _, err := verifyRunLater(context.Background(), root, "run-current-rename"); err != nil {
+		t.Fatal(err)
+	}
+	currentPath := filepath.Join(dir, verifyPosthocDir, verifyPosthocCurrent)
+	if err := os.Remove(currentPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(currentPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	originalSync := syncPosthocDirectory
+	containerSyncs := 0
+	syncPosthocDirectory = func(held *os.Root, name string) error {
+		if name == verifyPosthocDir {
+			containerSyncs++
+		}
+		return originalSync(held, name)
+	}
+	t.Cleanup(func() { syncPosthocDirectory = originalSync })
+
+	if _, _, err := verifyRunLater(context.Background(), root, "run-current-rename"); err == nil {
+		t.Fatal("current rename failure was accepted")
+	}
+	if containerSyncs != 3 {
+		t.Fatalf("container syncs = %d, want generation, temporary write, and temporary cleanup", containerSyncs)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, verifyPosthocDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".current-") {
+			t.Fatalf("temporary current leaked: %s", entry.Name())
+		}
+	}
+}
+
+func TestVerifyLaterCleansCurrentTemporaryFileAfterSyncFailure(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-current-temp", repo)
+	if _, _, err := verifyRunLater(context.Background(), root, "run-current-temp"); err != nil {
+		t.Fatal(err)
+	}
+	before := strings.TrimSpace(string(mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyPosthocCurrent))))
+
+	originalSync := syncPosthocDirectory
+	containerSyncs := 0
+	syncPosthocDirectory = func(held *os.Root, name string) error {
+		if name == verifyPosthocDir {
+			containerSyncs++
+			if containerSyncs == 2 {
+				return errors.New("injected current temporary sync failure")
+			}
+		}
+		return originalSync(held, name)
+	}
+	t.Cleanup(func() { syncPosthocDirectory = originalSync })
+
+	if _, _, err := verifyRunLater(context.Background(), root, "run-current-temp"); err == nil {
+		t.Fatal("current temporary sync failure was accepted")
+	}
+	after := strings.TrimSpace(string(mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyPosthocCurrent))))
+	if after != before {
+		t.Fatalf("current changed from %q to %q before publication", before, after)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, verifyPosthocDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".current-") {
+			t.Fatalf("temporary current leaked: %s", entry.Name())
+		}
+	}
+}
+
+func TestVerifyLaterRetryResyncsAnExistingContainerBeforePublishing(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-container-sync", repo)
+
+	originalSync := syncPosthocDirectory
+	t.Cleanup(func() { syncPosthocDirectory = originalSync })
+	failFirstRunSync := func(held *os.Root, name string) error {
+		if name == "." {
+			return errors.New("injected run directory sync failure")
+		}
+		return originalSync(held, name)
+	}
+	syncPosthocDirectory = failFirstRunSync
+	if _, _, err := verifyRunLater(context.Background(), root, "run-container-sync"); err == nil {
+		t.Fatal("first parent sync failure was accepted")
+	}
+
+	syncPosthocDirectory = failFirstRunSync
+	if _, _, err := verifyRunLater(context.Background(), root, "run-container-sync"); err == nil {
+		t.Fatal("retry skipped the unresolved parent sync failure")
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, verifyPosthocDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "generation-") {
+			t.Fatalf("retry published %s before parent sync succeeded", entry.Name())
+		}
+	}
+}
+
+func TestPosthocCurrentMissingItsResultIsCorruption(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-missing-current", repo)
+	if _, _, err := verifyRunLater(context.Background(), root, "run-missing-current"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(currentPosthocPath(t, dir, verifyResults)); err != nil {
+		t.Fatal(err)
+	}
+	if result, _, err := readPosthocVerification(dir); err == nil {
+		t.Fatalf("missing current result was read as %#v", result)
+	}
+}
+
+func TestPosthocCurrentMissingItsMetadataIsCorruption(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-current-missing-meta", repo)
+	if _, _, err := verifyRunLater(context.Background(), root, "run-current-missing-meta"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(currentPosthocPath(t, dir, verifyPosthocMeta)); err != nil {
+		t.Fatal(err)
+	}
+	if result, _, err := readPosthocVerification(dir); err == nil {
+		t.Fatalf("missing current metadata was read as %#v", result)
+	}
+}
+
 func TestVerifyLaterReportsAFailedVerdictAndKeepsTheEarlierResult(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
@@ -105,7 +329,7 @@ func TestVerifyLaterReportsAFailedVerdictAndKeepsTheEarlierResult(t *testing.T) 
 	if _, _, err := verifyRunLater(context.Background(), root, "run-keep"); err != nil {
 		t.Fatal(err)
 	}
-	first := mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyResults))
+	first := mustReadFile(t, currentPosthocPath(t, dir, verifyResults))
 
 	// A re-run that cannot even be pinned leaves the measurement already
 	// filed exactly as it was: a failed attempt destroys no evidence.
@@ -114,7 +338,7 @@ func TestVerifyLaterReportsAFailedVerdictAndKeepsTheEarlierResult(t *testing.T) 
 	if _, _, err := verifyRunLater(context.Background(), root, "run-keep"); err == nil {
 		t.Fatal("an unreadable config was accepted")
 	}
-	if got := mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyResults)); !bytes.Equal(got, first) {
+	if got := mustReadFile(t, currentPosthocPath(t, dir, verifyResults)); !bytes.Equal(got, first) {
 		t.Fatalf("the earlier later verification changed:\n%s", got)
 	}
 	if _, err := os.Stat(filepath.Join(dir, verifyPosthocPending)); !errors.Is(err, os.ErrNotExist) {
@@ -131,8 +355,130 @@ func TestVerifyLaterReportsAFailedVerdictAndKeepsTheEarlierResult(t *testing.T) 
 	if !strings.Contains(stdout, ": FAIL") {
 		t.Fatalf("verify said:\n%s", stdout)
 	}
-	if got := mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyResults)); bytes.Equal(got, first) {
+	if got := mustReadFile(t, currentPosthocPath(t, dir, verifyResults)); bytes.Equal(got, first) {
 		t.Fatal("the failed verification did not replace the earlier one")
+	}
+}
+
+func TestVerifyLaterRefusesASymlinkedRunDirectory(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	externalRoot := t.TempDir()
+	external := finishedRunIn(t, externalRoot, "external-run", repo)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(root, "run-symlink")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := verifyRunLater(context.Background(), root, "run-symlink"); err == nil {
+		t.Fatal("symlinked run directory was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(external, verifyPosthocDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("post-hoc verification reached symlink target: %v", err)
+	}
+}
+
+func TestVerifyLaterReadsManifestFromTheHeldRunIdentity(t *testing.T) {
+	root := home(t)
+	repoA := cleanRepo(t)
+	commitVerifyConfig(t, repoA, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-held-selection", repoA)
+	relocated := dir + "-relocated"
+	repoB := cleanRepo(t)
+	replacement := finishedRunIn(t, root, "run-held-selection-replacement", repoB)
+
+	originalOpen := openPosthocRunRoot
+	opened := false
+	openPosthocRunRoot = func(runsRoot, runID string) (*os.Root, error) {
+		path := filepath.Join(runsRoot, runID)
+		if path == dir && !opened {
+			opened = true
+			if err := os.Rename(dir, relocated); err != nil {
+				return nil, err
+			}
+			if err := os.Rename(replacement, dir); err != nil {
+				return nil, err
+			}
+		}
+		return originalOpen(runsRoot, runID)
+	}
+	t.Cleanup(func() { openPosthocRunRoot = originalOpen })
+
+	if _, _, err := verifyRunLater(context.Background(), root, "run-held-selection"); !errors.Is(err, errVerifyNoConfig) {
+		t.Fatalf("verify error = %v, want %v from held replacement run", err, errVerifyNoConfig)
+	}
+	if !opened {
+		t.Fatal("run root was not opened")
+	}
+	for _, path := range []string{dir, relocated} {
+		if _, err := os.Stat(filepath.Join(path, verifyPosthocDir)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("post-hoc verification reached %s: %v", path, err)
+		}
+	}
+}
+
+func TestVerifyLaterKeepsPublicationOnTheHeldRunWhenItsPathIsReplaced(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	dir := finishedRunIn(t, root, "run-held-root", repo)
+	relocated := dir + "-relocated"
+
+	original := pinPosthocVerification
+	t.Cleanup(func() { pinPosthocVerification = original })
+	pinPosthocVerification = func(ctx context.Context, repoRoot string, runRoot *os.Root, configPath string, raw []byte, opts evidence.VerificationOptions) (*evidence.PinnedVerification, error) {
+		if err := os.Rename(dir, relocated); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "sentinel"), []byte("replacement\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return evidence.PinVerificationBytesRoot(ctx, repoRoot, runRoot, configPath, raw, opts)
+	}
+
+	if _, _, err := verifyRunLater(context.Background(), root, "run-held-root"); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustReadFile(t, filepath.Join(dir, "sentinel"))); got != "replacement\n" {
+		t.Fatalf("replacement sentinel = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, verifyPosthocDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement received post-hoc evidence: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(relocated, verifyPosthocDir, verifyPosthocCurrent)); err != nil {
+		t.Fatalf("held run was not published: %v", err)
+	}
+}
+
+func TestVerifyLaterPinsTheCommittedBytesItCompared(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	finishedRunIn(t, root, "run-pin-race", repo)
+	marker := filepath.Join(t.TempDir(), "ran")
+
+	original := pinPosthocVerification
+	t.Cleanup(func() { pinPosthocVerification = original })
+	pinPosthocVerification = func(ctx context.Context, repoRoot string, runRoot *os.Root, configPath string, raw []byte, opts evidence.VerificationOptions) (*evidence.PinnedVerification, error) {
+		writeVerifyConfig(t, repo, "version: 1\nverify:\n  - name: \"swapped\"\n    timeout: \"30s\"\n    command:\n      - \"sh\"\n      - \"-c\"\n      - "+strconv.Quote("touch "+marker)+"\n")
+		return evidence.PinVerificationBytesRoot(ctx, repoRoot, runRoot, configPath, raw, opts)
+	}
+
+	result, _, err := verifyRunLater(context.Background(), root, "run-pin-race")
+	if err != nil {
+		t.Fatalf("verify later: %v", err)
+	}
+	if result.Status != "tainted" {
+		t.Fatalf("status = %q, want tainted after the compared config changed", result.Status)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the uncommitted replacement ran: %v", err)
 	}
 }
 
@@ -173,7 +519,7 @@ func TestPosthocEvidenceStaysInItsOwnLayerAndIsRedacted(t *testing.T) {
 	}
 	// What a check printed goes through a redactor before it is filed: the
 	// later measurement is evidence like any other in the bundle.
-	filed := mustReadFile(t, filepath.Join(dir, verifyPosthocDir, verifyResults))
+	filed := mustReadFile(t, currentPosthocPath(t, dir, verifyResults))
 	if bytes.Contains(filed, []byte(secret)) {
 		t.Fatalf("the later verification filed a secret verbatim:\n%s", filed)
 	}
@@ -191,7 +537,7 @@ func TestPosthocEvidenceStaysInItsOwnLayerAndIsRedacted(t *testing.T) {
 	if bytes.Equal(swapped, filed) {
 		t.Fatal("the filed document does not carry the later attribution")
 	}
-	if err := os.WriteFile(filepath.Join(dir, verifyPosthocDir, verifyResults), swapped, 0o600); err != nil {
+	if err := os.WriteFile(currentPosthocPath(t, dir, verifyResults), swapped, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := readPosthocVerification(dir); err == nil {
@@ -240,6 +586,171 @@ func TestViewRefusesASecondVerificationWhileOneRuns(t *testing.T) {
 	}
 	if first != http.StatusOK {
 		t.Fatalf("the first verification ended %d", first)
+	}
+}
+
+func TestVerifyRefusesARunMovedToTrashBeforeItsLockIsAcquired(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	const runID = "run-moved-before-lock"
+	finishedRunIn(t, root, runID, repo)
+
+	originalAcquire := acquireVerifyPosthocLock
+	var trashErr error
+	acquireVerifyPosthocLock = func(runRoot *os.Root) (*posthocVerificationLock, error) {
+		trashErr = trashRun(root, runID)
+		return originalAcquire(runRoot)
+	}
+	t.Cleanup(func() { acquireVerifyPosthocLock = originalAcquire })
+
+	_, _, verifyErr := verifyRunLater(context.Background(), root, runID)
+	if trashErr != nil {
+		t.Fatalf("trash: %v", trashErr)
+	}
+	if verifyErr == nil || !strings.Contains(verifyErr.Error(), "moved before verification lock") {
+		t.Fatalf("verify error = %v, want moved-before-lock refusal", verifyErr)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(root), trashDirName, runID, verifyPosthocDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("post-hoc evidence was written into trash: %v", err)
+	}
+}
+
+func TestTrashRefusesARunWhilePosthocVerificationHoldsItsLock(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	const runID = "run-trash-busy"
+	dir := finishedRunIn(t, root, runID, repo)
+
+	originalPin := pinPosthocVerification
+	entered := make(chan struct{})
+	resume := make(chan struct{})
+	pinPosthocVerification = func(ctx context.Context, repoRoot string, runRoot *os.Root, configPath string, raw []byte, opts evidence.VerificationOptions) (*evidence.PinnedVerification, error) {
+		close(entered)
+		<-resume
+		return originalPin(ctx, repoRoot, runRoot, configPath, raw, opts)
+	}
+	t.Cleanup(func() { pinPosthocVerification = originalPin })
+
+	verifyDone := make(chan error, 1)
+	go func() {
+		_, _, err := verifyRunLater(context.Background(), root, runID)
+		verifyDone <- err
+	}()
+	<-entered
+	trashErr := trashRun(root, runID)
+	close(resume)
+	verifyErr := <-verifyDone
+
+	if !errors.Is(trashErr, errVerifyBusy) {
+		t.Fatalf("trash error = %v, want %v", trashErr, errVerifyBusy)
+	}
+	if verifyErr != nil {
+		t.Fatalf("verify: %v", verifyErr)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("original run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(root), trashDirName, runID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("trashed run exists: %v", err)
+	}
+}
+
+func TestVerifyLaterRefusesASecondProcessForTheSameRun(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	bin := stubProviders(t, agentrecName)
+	barrier := filepath.Join(t.TempDir(), "started")
+	resume := filepath.Join(t.TempDir(), "resume")
+	commitVerifyConfig(t, repo, "/bin/sh", "-c", ": > "+strconv.Quote(barrier)+"; while [ ! -e "+strconv.Quote(resume)+" ]; do /bin/sleep 0.02; done")
+	finishedRunIn(t, root, "run-process-lock", repo)
+
+	first := exec.Command(filepath.Join(bin, agentrecName), "verify", "run-process-lock")
+	var firstOut bytes.Buffer
+	first.Stdout, first.Stderr = &firstOut, &firstOut
+	if err := first.Start(); err != nil {
+		t.Fatalf("start first verification: %v", err)
+	}
+	finished := false
+	t.Cleanup(func() {
+		if !finished {
+			os.WriteFile(resume, []byte("go\n"), 0o600)
+			first.Process.Kill()
+			first.Wait()
+		}
+	})
+	if !waitForFile(barrier, 10*time.Second) {
+		t.Fatalf("first verification did not start: %s", firstOut.String())
+	}
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecond()
+	second := exec.CommandContext(secondCtx, filepath.Join(bin, agentrecName), "verify", "run-process-lock")
+	secondOut, err := second.CombinedOutput()
+	if err == nil || !strings.Contains(string(secondOut), errVerifyBusy.Error()) {
+		t.Fatalf("second verification = %v, %q; want busy refusal", err, secondOut)
+	}
+
+	if err := os.WriteFile(resume, []byte("go\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Wait(); err != nil {
+		t.Fatalf("first verification: %v\n%s", err, firstOut.String())
+	}
+	finished = true
+}
+
+func TestVerifyCommandSignalsCancelTheVerificationProcessGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		signal syscall.Signal
+	}{
+		{name: "SIGINT", signal: syscall.SIGINT},
+		{name: "SIGTERM", signal: syscall.SIGTERM},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := home(t)
+			repo := cleanRepo(t)
+			bin := stubProviders(t, agentrecName)
+			started := filepath.Join(t.TempDir(), "started")
+			pidFile := filepath.Join(t.TempDir(), "pid")
+			command := "echo $$ > " + strconv.Quote(pidFile) + "; : > " + strconv.Quote(started) + "; while :; do /bin/sleep 1; done"
+			commitVerifyConfig(t, repo, "/bin/sh", "-c", command)
+			finishedRunIn(t, root, "run-signal", repo)
+
+			cmd := exec.Command(filepath.Join(bin, agentrecName), "verify", "run-signal")
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if !waitForFile(started, 10*time.Second) {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				t.Fatal("verification child did not start")
+			}
+			rawPID := strings.TrimSpace(string(mustReadFile(t, pidFile)))
+			childPID, err := strconv.Atoi(rawPID)
+			if err != nil {
+				t.Fatalf("child pid %q: %v", rawPID, err)
+			}
+			if err := cmd.Process.Signal(tc.signal); err != nil {
+				t.Fatal(err)
+			}
+			waited := make(chan error, 1)
+			go func() { waited <- cmd.Wait() }()
+			select {
+			case <-waited:
+			case <-time.After(5 * time.Second):
+				_ = cmd.Process.Kill()
+				_ = syscall.Kill(-childPID, syscall.SIGKILL)
+				t.Fatalf("verify command did not stop after %s", tc.name)
+			}
+
+			if err := syscall.Kill(childPID, 0); !errors.Is(err, syscall.ESRCH) {
+				_ = syscall.Kill(-childPID, syscall.SIGKILL)
+				t.Fatalf("verification child survived %s: %v", tc.name, err)
+			}
+		})
 	}
 }
 
