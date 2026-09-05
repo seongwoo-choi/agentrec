@@ -67,6 +67,22 @@
 
         <div id="timeline-warning" class="timeline-warning hidden" role="alert"></div>
 
+        <section id="failure-triage" class="failure-triage hidden" aria-labelledby="failure-triage-title">
+          <div class="failure-triage-head">
+            <div>
+              <div id="failure-triage-title" class="section-label" data-i18n="Failure triage">Failure triage</div>
+              <div id="failure-triage-summary" class="failure-triage-summary"></div>
+            </div>
+            <div class="failure-triage-actions">
+              <button id="triage-changes" class="load-more" type="button" data-i18n="View changed files">View changed files</button>
+              <button id="triage-verification" class="load-more" type="button" data-i18n="View verification evidence">View verification evidence</button>
+            </div>
+          </div>
+          <ul id="failure-triage-facts" class="failure-triage-facts"></ul>
+          <p id="failure-triage-caveat" class="failure-triage-caveat"></p>
+        </section>
+        <div id="failure-triage-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
         <section class="request-card">
           <div class="section-label" data-i18n="Request">Request</div>
           <pre id="run-prompt">No recorded request.</pre>
