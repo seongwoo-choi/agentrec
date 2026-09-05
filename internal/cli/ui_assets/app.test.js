@@ -31,8 +31,11 @@ async function renderFixture({ list, details, actions = [], events = [], configu
     const url = new URL(String(input), window.location.href);
     if (url.pathname === '/api/shadow') return response({ allowRun: false });
     if (url.pathname === '/api/runs') return response(list);
-    const currentDetails = typeof details === 'function' ? details() : details;
-    if (url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
+    const detailMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
+    if (detailMatch) {
+      const currentDetails = typeof details === 'function' ? details(decodeURIComponent(detailMatch[1])) : details;
+      if (url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
+    }
     if (url.pathname.includes('/actions')) return response({ items: actions, nextCursor: null });
     if (url.pathname.includes('/events')) return response({ items: events, nextCursor: null });
     if (url.pathname.includes('/changes')) return response({ files: [], nextCursor: null, total: 0 });
@@ -248,6 +251,105 @@ test('run list filters by an exact persisted exit value', async (t) => {
   filter.dispatchEvent(new Event('change', { bubbles: true }));
 
   assert.deepEqual(Array.from(document.querySelectorAll('.run-item'), (item) => item.dataset.runId), ['run-future']);
+});
+
+test('run list restores shareable filters from the URL', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'warning-pass', exit: 'completed', verification: 'PASS' },
+    { ...data.list.runs[0], id: 'warning-fail', exit: 'completed', verification: 'FAIL' },
+    { ...data.list.runs[0], id: 'other-fail', exit: 'completed', verification: 'FAIL' },
+  ];
+  data.list.total = data.list.runs.length;
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState(null, '', '/?q=warning&exit=completed&verification=FAIL#compare=warning-fail,other-fail');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+
+  assert.equal(document.querySelector('#run-search').value, 'warning');
+  assert.equal(document.querySelector('#run-exit-filter').value, 'completed');
+  assert.equal(document.querySelector('#run-verification-filter').value, 'FAIL');
+  assert.deepEqual(Array.from(document.querySelectorAll('#run-list .run-item'), (item) => item.dataset.runId), ['warning-fail']);
+  assert.equal(document.querySelector('#run-title').textContent, 'warning-fail');
+  assert.equal(document.querySelector('#run-list .run-item').getAttribute('aria-current'), 'true');
+  assert.equal(document.querySelector('#diff-panel').classList.contains('hidden'), false);
+  assert.equal(dom.window.location.hash, '#compare=warning-fail,other-fail');
+});
+
+test('run filter changes replace URL state without discarding compare state', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'warning-fail', exit: 'completed', verification: 'FAIL' },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event, history, location } = dom.window;
+  history.replaceState(null, '', '/?kept=1#compare=a,b');
+  const initialLength = history.length;
+
+  const search = document.querySelector('#run-search');
+  search.value = 'warning / ? & # 한글';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  const exit = document.querySelector('#run-exit-filter');
+  exit.value = 'completed';
+  exit.dispatchEvent(new Event('change', { bubbles: true }));
+  const verification = document.querySelector('#run-verification-filter');
+  verification.value = 'FAIL';
+  verification.dispatchEvent(new Event('change', { bubbles: true }));
+
+  assert.equal(new URLSearchParams(location.search).get('kept'), '1');
+  assert.equal(new URLSearchParams(location.search).get('q'), 'warning / ? & # 한글');
+  assert.equal(new URLSearchParams(location.search).get('exit'), 'completed');
+  assert.equal(new URLSearchParams(location.search).get('verification'), 'FAIL');
+  assert.equal(location.hash, '#compare=a,b');
+  assert.equal(history.length, initialLength);
+
+  const lang = document.querySelector('#lang');
+  lang.value = 'ko';
+  lang.dispatchEvent(new Event('change', { bubbles: true }));
+  assert.equal(new URLSearchParams(location.search).get('q'), 'warning / ? & # 한글');
+  assert.equal(location.hash, '#compare=a,b');
+
+  search.value = '';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  exit.value = '';
+  exit.dispatchEvent(new Event('change', { bubbles: true }));
+  verification.value = '';
+  verification.dispatchEvent(new Event('change', { bubbles: true }));
+
+  const cleared = new URLSearchParams(location.search);
+  assert.equal(cleared.has('q'), false);
+  assert.equal(cleared.has('exit'), false);
+  assert.equal(cleared.has('verification'), false);
+  assert.equal(cleared.get('kept'), '1');
+  assert.equal(location.hash, '#compare=a,b');
+  assert.equal(history.length, initialLength);
+});
+
+test('popstate restores future exact filter values without changing compare state', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'run-pass', exit: 'completed', verification: 'PASS' },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, history, location, PopStateEvent } = dom.window;
+
+  history.pushState(null, '', '/?q=future&exit=provider_crash&verification=REVIEW#compare=a,b');
+  dom.window.dispatchEvent(new PopStateEvent('popstate'));
+
+  assert.equal(document.querySelector('#run-search').value, 'future');
+  assert.equal(document.querySelector('#run-exit-filter').value, 'provider_crash');
+  assert.equal(document.querySelector('#run-verification-filter').value, 'REVIEW');
+  assert.deepEqual(Array.from(document.querySelector('#run-exit-filter').options, (option) => option.value), ['', 'completed', 'provider_crash']);
+  assert.deepEqual(Array.from(document.querySelector('#run-verification-filter').options, (option) => option.value), ['', 'PASS', 'REVIEW']);
+  assert.equal(document.querySelectorAll('.run-item').length, 0);
+  assert.equal(location.hash, '#compare=a,b');
 });
 
 test('polling refreshes filters when exact status values change', async (t) => {
@@ -499,7 +601,8 @@ test('run pages append explicitly and unchanged polls retain DOM nodes', async (
   const first = data.details.run;
   const second = { ...first, id: '20260902T000000.000000000Z-00000002', project: 'second' };
   const third = { ...first, id: '20260901T000000.000000000Z-00000003', project: 'third' };
-  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost:42817/', pretendToBeVisual: true });
+  const filterURL = '?q=claude&exit=completed&verification=PASS#kept';
+  const dom = new JSDOM(html, { runScripts: 'outside-only', url: `http://localhost:42817/${filterURL}`, pretendToBeVisual: true });
   t.after(() => dom.window.close());
   const { window } = dom;
   let poll;
@@ -536,12 +639,14 @@ test('run pages append explicitly and unchanged polls retain DOM nodes', async (
   window.document.querySelector('#run-load-more').click();
   for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(window.document.querySelectorAll('.run-item').length, 3);
+  assert.equal(window.location.search + window.location.hash, filterURL);
   const loadedFirstNode = window.document.querySelector('.run-item');
   assert.notEqual(loadedFirstNode, firstNode);
   assert.ok(poll);
   await poll();
   assert.equal(window.document.querySelectorAll('.run-item').length, 3);
   assert.equal(window.document.querySelector('.run-item'), loadedFirstNode);
+  assert.equal(window.location.search + window.location.hash, filterURL);
   unreadable = true;
   await poll();
   assert.deepEqual([...window.document.querySelectorAll('.run-item')].map((node) => node.dataset.runId), [second.id, third.id]);
