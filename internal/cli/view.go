@@ -54,6 +54,7 @@ type viewRunSummary struct {
 	Verification string    `json:"verification"`
 	StatusClass  string    `json:"statusClass"`
 	StatusLabel  string    `json:"statusLabel"`
+	WarningCount int       `json:"warningCount"`
 }
 
 func viewStatusClass(value string) string {
@@ -329,7 +330,7 @@ func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error)
 	}
 	run := runSummary{
 		ID: runID, Provider: manifest.Provider, Project: projectName(manifest.CWD),
-		StartedAt: manifest.StartedAt, Exit: exitReason(manifest, nil),
+		StartedAt: manifest.StartedAt, Exit: exitReason(manifest, nil), WarningCount: manifest.WarningCount,
 	}
 	verification, err := readVerificationFromRoot(runRoot)
 	if err != nil {
@@ -729,7 +730,7 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 			out = append(out, viewRunSummary{
 				ID: run.ID, Provider: run.Provider, Project: run.Project,
 				StartedAt: run.StartedAt, Exit: run.Exit, Verification: run.Verification,
-				StatusClass: statusClass, StatusLabel: statusLabel,
+				StatusClass: statusClass, StatusLabel: statusLabel, WarningCount: run.WarningCount + run.VerificationWarnings,
 			})
 		}
 		initial := initialRunID
