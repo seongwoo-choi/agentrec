@@ -37,6 +37,12 @@
       unknown: '알 수 없음',
       'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.': '기록된 실행이 아직 없습니다. Claude Code 또는 Codex 세션을 시작하면 종료 시 여기에 표시됩니다.',
       'No runs match this search.': '검색 결과가 없습니다.',
+      'No loaded runs match these filters.': '로드된 실행 중 필터에 맞는 항목이 없습니다.',
+      'No loaded runs match this search and these filters.': '로드된 실행 중 검색어와 필터에 모두 맞는 항목이 없습니다.',
+      'All exits': '모든 종료 상태',
+      'All verification': '모든 검증 상태',
+      'Filter by exit reason': '종료 상태로 필터링',
+      'Filter by verification': '검증 상태로 필터링',
       'No runs recorded yet': '기록된 실행이 없습니다',
       'No run selected': '선택된 실행이 없습니다',
       'Start a Claude Code or Codex session; it appears here when it ends.': 'Claude Code 또는 Codex 세션을 시작하면 종료 시 여기에 표시됩니다.',
@@ -289,6 +295,12 @@
       unknown: '不明',
       'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.': 'まだ記録された実行はありません。Claude Code または Codex のセッションを開始すると、終了時にここに表示されます。',
       'No runs match this search.': '検索に一致する実行はありません。',
+      'No loaded runs match these filters.': '読み込み済みの実行にフィルターと一致する項目がありません。',
+      'No loaded runs match this search and these filters.': '読み込み済みの実行に検索語とフィルターの両方に一致する項目がありません。',
+      'All exits': 'すべての終了状態',
+      'All verification': 'すべての検証状態',
+      'Filter by exit reason': '終了状態で絞り込む',
+      'Filter by verification': '検証状態で絞り込む',
       'No runs recorded yet': '記録された実行はありません',
       'No run selected': '実行が選択されていません',
       'Start a Claude Code or Codex session; it appears here when it ends.': 'Claude Code または Codex のセッションを開始すると、終了時にここに表示されます。',
@@ -541,6 +553,12 @@
       unknown: '未知',
       'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.': '尚未记录任何运行。启动 Claude Code 或 Codex 会话，结束后会显示在这里。',
       'No runs match this search.': '没有匹配的运行。',
+      'No loaded runs match these filters.': '已加载的运行中没有符合筛选条件的项目。',
+      'No loaded runs match this search and these filters.': '已加载的运行中没有同时符合搜索词和筛选条件的项目。',
+      'All exits': '所有退出状态',
+      'All verification': '所有验证状态',
+      'Filter by exit reason': '按退出状态筛选',
+      'Filter by verification': '按验证状态筛选',
       'No runs recorded yet': '尚未记录任何运行',
       'No run selected': '未选择运行',
       'Start a Claude Code or Codex session; it appears here when it ends.': '启动 Claude Code 或 Codex 会话，结束后会显示在这里。',
@@ -1059,16 +1077,37 @@ function shortID(id) {
     return button;
   }
 
-  const runMatches = (run, query) => !query || `${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase().includes(query);
+  function syncRunFilter(id, values, allLabel) {
+    const select = $(id);
+    const selected = select.value;
+    const all = node('option', '', t(allLabel));
+    all.value = '';
+    select.replaceChildren(all);
+    for (const value of [...new Set(values.filter((value) => typeof value === 'string' && value))].sort()) {
+      const option = node('option', '', value);
+      option.value = value;
+      select.append(option);
+    }
+    if (Array.from(select.options).some((option) => option.value === selected)) select.value = selected;
+  }
+
+  const runMatches = (run, query, exit, verification) =>
+    (!query || `${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase().includes(query))
+    && (!exit || run.exit === exit)
+    && (!verification || run.verification === verification);
 
   function renderRunList() {
     const query = $('run-search').value.trim().toLowerCase();
+    syncRunFilter('run-exit-filter', state.runs.map((run) => run.exit), 'All exits');
+    syncRunFilter('run-verification-filter', state.runs.map((run) => run.verification), 'All verification');
+    const exit = $('run-exit-filter').value;
+    const verification = $('run-verification-filter').value;
     const list = $('run-list');
     const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.runId : undefined;
     list.replaceChildren();
     let shown = 0;
     for (const run of state.runs) {
-      if (!runMatches(run, query)) continue;
+      if (!runMatches(run, query, exit, verification)) continue;
       shown += 1;
       const button = runItem(run, Boolean(state.run && state.run.run.id === run.id));
       button.addEventListener('click', () => loadRun(run.id));
@@ -1088,10 +1127,17 @@ function shortID(id) {
     size.textContent = parts.join(' · ');
     size.classList.toggle('hidden', parts.length === 0);
     const empty = $('run-list-empty');
+    const status = $('run-list-status');
     if (shown === 0) {
-      empty.textContent = t(state.runs.length === 0 ? 'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.' : 'No runs match this search.');
+      let emptyMessage = 'No loaded runs match these filters.';
+      if (state.runs.length === 0) emptyMessage = 'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.';
+      else if (query && (exit || verification)) emptyMessage = 'No loaded runs match this search and these filters.';
+      else if (query) emptyMessage = 'No runs match this search.';
+      empty.textContent = t(emptyMessage);
+      status.textContent = t(emptyMessage);
       empty.classList.remove('hidden');
     } else {
+      status.textContent = '';
       empty.classList.add('hidden');
     }
   }
@@ -2807,7 +2853,7 @@ function shortID(id) {
       ? [...previousRuns, ...incoming.filter((run) => !previousRuns.some((current) => current.id === run.id))]
       : (!append && sameGeneration ? [...incoming, ...previousRuns.filter((run) => !pageIDs.has(run.id))] : incoming);
     // ponytail: rebuild the list only when its content changed; a rebuild mid-click would swallow the click.
-    const signature = JSON.stringify(runs.map((run) => [run.id, run.provider, run.project, run.statusClass, run.statusLabel, run.startedAt]));
+    const signature = JSON.stringify(runs.map((run) => [run.id, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.startedAt]));
     const changed = signature !== state.runsSignature;
     state.runsSignature = signature;
     state.runs = runs;
@@ -2933,6 +2979,8 @@ function shortID(id) {
     if (search.open) renderSearch();
   });
   $('run-search').addEventListener('input', renderRunList);
+  $('run-exit-filter').addEventListener('change', renderRunList);
+  $('run-verification-filter').addEventListener('change', renderRunList);
   $('run-load-more').addEventListener('click', loadMoreRuns);
   const searchAll = $('search-all');
   searchAll.addEventListener('input', scheduleSearch);

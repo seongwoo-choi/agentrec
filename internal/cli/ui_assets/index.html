@@ -34,7 +34,12 @@
       </div>
       <p id="store-size" class="store-size hidden"></p>
       <label class="search"><span aria-hidden="true">⌕</span><input id="run-search" type="search" placeholder="Find a run or project" autocomplete="off" aria-label="Find a run or project" data-i18n-placeholder="Find a run or project"></label>
+      <div class="run-filters">
+        <select id="run-exit-filter" aria-label="Filter by exit reason" data-i18n-label="Filter by exit reason"></select>
+        <select id="run-verification-filter" aria-label="Filter by verification" data-i18n-label="Filter by verification"></select>
+      </div>
       <p id="run-list-empty" class="list-empty hidden"></p>
+      <span id="run-list-status" class="sr-only" role="status" aria-live="polite"></span>
       <nav id="run-list" class="run-list" aria-label="Recorded runs"></nav>
       <button id="run-load-more" class="load-more hidden" type="button">Load more</button>
       <div id="unreadable-warning" class="warning hidden"></div>
