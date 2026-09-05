@@ -295,7 +295,7 @@ the interactive TUI follow the same documented contract.
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | Records one task twice, from one committed baseline, in isolated worktrees. |
 | ⚖️ `agentrec shadow show <group-id>` | Re-renders a recorded comparison, evidence only. |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | Lists runs newest first. |
-| 📄 `agentrec show <run-id>\|latest` | Renders one run from its bundle; writes nothing. |
+| 📄 `agentrec show <run-id>\|latest [--failures-only]` | Renders one run from its bundle; `--failures-only` keeps failed actions, explicit process failures, terminal verification evidence that does not consistently pass, and repository context. Pending and neutral outcomes are omitted. Writes nothing. |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | Summarises or dumps the recorded provider events. |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | Serves the read-only viewer on loopback. |
 | 🏷️ `agentrec version` | Prints the tag, commit and UTC build time. |

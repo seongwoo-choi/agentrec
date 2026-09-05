@@ -118,6 +118,28 @@ VERIFICATION-OBSERVED RESULT
   Attribution  verification_observed
 `
 
+func TestActionFailed(t *testing.T) {
+	tests := []struct {
+		name   string
+		action action.Action
+		want   bool
+	}{
+		{name: "provider error", action: action.Action{Type: action.TypeProviderError}, want: true},
+		{name: "nonzero shell", action: action.Action{Type: action.TypeShellExec, Status: "completed", Result: json.RawMessage(`{"exitCode":7}`)}, want: true},
+		{name: "zero shell", action: action.Action{Type: action.TypeShellExec, Status: "completed", Result: json.RawMessage(`{"exitCode":0}`)}},
+		{name: "failed shell with zero exit", action: action.Action{Type: action.TypeShellExec, Status: "failed", Result: json.RawMessage(`{"exitCode":0}`)}, want: true},
+		{name: "failed status", action: action.Action{Type: action.TypeFileRead, Status: "failed"}, want: true},
+		{name: "unknown status", action: action.Action{Type: action.TypeFileRead, Status: "future"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ActionFailed(test.action); got != test.want {
+				t.Errorf("ActionFailed() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestRenderTerminalGolden(t *testing.T) {
 	got := renderTerminal(t, goldenReport())
 

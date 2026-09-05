@@ -781,6 +781,158 @@ func TestShowRendersTheRecordedRun(t *testing.T) {
 	}
 }
 
+func TestShowFailuresOnlyKeepsFailureEvidenceAndRepositoryContext(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-b", storage.Manifest{
+		Provider: "claude", Argv: []string{"claude", "-p", "hello"}, CWD: "/tmp", StartedAt: late,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := b.WriteAction(readAction(late)); err != nil {
+		t.Fatalf("write successful action: %v", err)
+	}
+	failed := action.Action{
+		ID: "a2", Type: action.TypeShellExec, Provider: "claude", Assurance: action.AssuranceProviderReported,
+		StartedAt: late.Add(3 * time.Second), FinishedAt: late.Add(4 * time.Second), Status: "completed",
+		Input: json.RawMessage(`{"command":"./fail.sh"}`), Result: json.RawMessage(`{"exitCode":7}`),
+	}
+	if err := b.WriteAction(failed); err != nil {
+		t.Fatalf("write failed action: %v", err)
+	}
+	if err := b.WriteProcessResult(processResultJSON(t, late, "nonzero")); err != nil {
+		t.Fatalf("write process result: %v", err)
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: late.Add(1500 * time.Millisecond), ExitReason: "nonzero"}); err != nil {
+		t.Fatalf("finalize run: %v", err)
+	}
+	writeGit(t, root, "run-b", availableGit())
+	verification := passedVerification()
+	verification["status"] = "failed"
+	verification["checks"] = []map[string]any{
+		{"name": "passing", "command": []string{"./pass.sh"}, "timeout": "30s", "status": "passed", "exitCode": 0},
+		{"name": "failing", "command": []string{"./fail.sh"}, "timeout": "30s", "status": "failed", "exitCode": 7},
+	}
+	writeVerification(t, root, "run-b", verification)
+
+	code, stdout, stderr := run(t, "show", "run-b", "--failures-only")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	for _, want := range []string{"SHELL  ./fail.sh", "Exit Reason  nonzero", "Files        3", "Status       FAIL", "FAIL failing"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout =\n%s\nwant it to contain %q", stdout, want)
+		}
+	}
+	for _, unwanted := range []string{"READ  README.md", "PASS passing"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("stdout =\n%s\nwant it to omit %q", stdout, unwanted)
+		}
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestShowFailuresOnlyKeepsManifestFailureWithoutProcessResult(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-b", storage.Manifest{
+		Provider: "claude", Argv: []string{"claude", "-p", "hello"}, CWD: "/tmp", StartedAt: late,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: late.Add(time.Second), ExitReason: "storage_error"}); err != nil {
+		t.Fatalf("finalize run: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "show", "run-b", "--failures-only")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "Exit Reason  storage_error") {
+		t.Errorf("stdout =\n%s\nwant the manifest failure retained", stdout)
+	}
+}
+
+func TestShowFailuresOnlyKeepsExplicitSupervisorFailureEvidence(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     map[string]any
+		wantOutput string
+	}{
+		{name: "nonzero exit", result: map[string]any{"durationMillis": 1000, "exitReason": "completed", "exitCode": 7}, wantOutput: "Exit Code    7"},
+		{name: "signal", result: map[string]any{"durationMillis": 1000, "exitReason": "completed", "signal": "killed"}, wantOutput: "Signal       killed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := home(t)
+			b, err := storage.Create(root, "run-b", storage.Manifest{
+				Provider: "claude", Argv: []string{"claude", "-p", "hello"}, CWD: "/tmp", StartedAt: late,
+			})
+			if err != nil {
+				t.Fatalf("create run: %v", err)
+			}
+			raw, err := json.Marshal(test.result)
+			if err != nil {
+				t.Fatalf("encode process result: %v", err)
+			}
+			if err := b.WriteProcessResult(raw); err != nil {
+				t.Fatalf("write process result: %v", err)
+			}
+			if err := b.Finalize(storage.Finalization{EndedAt: late.Add(time.Second), ExitReason: "completed"}); err != nil {
+				t.Fatalf("finalize run: %v", err)
+			}
+
+			code, stdout, stderr := run(t, "show", "run-b", "--failures-only")
+
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+			}
+			if !strings.Contains(stdout, test.wantOutput) {
+				t.Errorf("stdout =\n%s\nwant explicit supervisor failure %q retained", stdout, test.wantOutput)
+			}
+		})
+	}
+}
+
+func TestFailureVerificationKeepsExplicitFailedCheck(t *testing.T) {
+	result := &evidence.VerificationResult{
+		Status: evidence.VerificationPassed,
+		Checks: []evidence.VerificationCheck{
+			{Name: "passing", Status: "passed"},
+			{Name: "failing", Status: "failed"},
+		},
+	}
+
+	filtered := failureVerification(result)
+
+	if filtered == nil || len(filtered.Checks) != 1 || filtered.Checks[0].Name != "failing" {
+		t.Fatalf("failureVerification() = %+v, want the explicit failed check", filtered)
+	}
+	if filtered.Status != "inconsistent" {
+		t.Fatalf("failureVerification().Status = %q, want inconsistent", filtered.Status)
+	}
+}
+
+func TestShowRejectsUnknownOption(t *testing.T) {
+	home(t)
+
+	code, stdout, stderr := run(t, "show", "latest", "--unknown")
+
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "usage: agentrec show <run-id>|latest [--failures-only]\n" {
+		t.Errorf("stderr = %q, want show usage", stderr)
+	}
+}
+
 func TestShowLatestSelectsTheNewestRun(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-a", "codex", early, "completed")
