@@ -30,7 +30,8 @@ async function renderFixture({ list, details, actions = [], events = [], configu
     const url = new URL(String(input), window.location.href);
     if (url.pathname === '/api/shadow') return response({ allowRun: false });
     if (url.pathname === '/api/runs') return response(list);
-    if (url.pathname === `/api/runs/${details.run.id}`) return response(details);
+    const currentDetails = typeof details === 'function' ? details() : details;
+    if (url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
     if (url.pathname.includes('/actions')) return response({ items: actions, nextCursor: null });
     if (url.pathname.includes('/events')) return response({ items: events, nextCursor: null });
     if (url.pathname.includes('/changes')) return response({ files: [], nextCursor: null, total: 0 });
@@ -74,6 +75,116 @@ test('session_lost is failure-class in list and detail', async (t) => {
   const { document } = dom.window;
   assert.match(document.querySelector('.run-item .mini-status').className, /\bfail\b/);
   assert.match(document.querySelector('#run-verdict').className, /\bfail\b/);
+});
+
+test('failure triage separates failures and navigates to existing evidence', async (t) => {
+  const data = fixture('nonzero', 'fail', 'nonzero');
+  data.details.changes = { status: 'available', total: 2, tracked: 1, untracked: 1, additions: 3, deletions: 1, binary: 0 };
+  data.details.evidence.supervisor = [{ name: 'Exit Code', value: '1' }];
+  data.details.evidence.repository = [{ name: 'Attribution', value: 'repository_observed' }];
+  data.details.evidence.verification = [
+    { name: 'Status', value: 'FAIL' },
+    { name: 'Check', value: 'PASS unit  go test ./...' },
+    { name: 'Check', value: 'FAIL integration  go test ./integration  exit 1' },
+    { name: 'Warning', value: 'verification mutated repository' },
+  ];
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const triage = document.querySelector('#failure-triage');
+  assert.equal(triage.classList.contains('hidden'), false);
+  assert.match(triage.textContent, /Run NONZERO/);
+  assert.match(triage.textContent, /Verify FAIL/);
+  assert.match(triage.textContent, /FAIL integration/);
+  assert.match(triage.textContent, /verification mutated repository/);
+  assert.doesNotMatch(triage.textContent, /PASS unit/);
+  assert.match(triage.textContent, /not proof.*caused/i);
+
+  document.querySelector('#triage-changes').click();
+  for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.querySelector('#timeline-tab-changes').getAttribute('aria-selected'), 'true');
+
+  document.querySelector('#triage-verification').click();
+  assert.equal(document.activeElement.id, 'evidence-verification');
+  const verificationLabel = document.activeElement.getAttribute('aria-labelledby');
+  assert.equal(document.getElementById(verificationLabel).textContent, 'Verification');
+
+  const cleanDom = await renderFixture(fixture('completed', 'pass', 'PASS'));
+  t.after(() => cleanDom.window.close());
+  assert.equal(cleanDom.window.document.querySelector('#failure-triage').classList.contains('hidden'), true);
+});
+
+test('pending verification does not reveal failure triage', async (t) => {
+  const data = fixture('running', '', 'PENDING');
+  data.details.evidence.verification = [
+    { name: 'Status', value: 'PENDING' },
+    { name: 'Check', value: 'PENDING integration  go test ./integration' },
+  ];
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('#failure-triage').classList.contains('hidden'), true);
+});
+
+test('failure triage localizes verification check verdicts', async (t) => {
+  const data = fixture('completed', 'fail', 'FAIL');
+  data.details.evidence.verification = [
+    { name: 'Status', value: 'FAIL' },
+    { name: 'Check', value: 'FAIL integration  go test ./integration  exit 1' },
+  ];
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const language = document.querySelector('#lang');
+  language.value = 'ko';
+  language.dispatchEvent(new Event('change', { bubbles: true }));
+
+  const check = document.querySelector('#failure-triage-facts code');
+  assert.match(check.textContent, /^실패 integration/);
+  assert.equal(check.title, 'FAIL integration  go test ./integration  exit 1');
+});
+
+test('live failure transition updates a persistent triage status region', async (t) => {
+  let liveTick;
+  const data = fixture('running', '', 'PENDING');
+  let details = data.details;
+  details.evidence.verification = [{ name: 'Status', value: 'PENDING' }];
+  data.details = () => details;
+  data.configure = (window) => {
+    window.setTimeout = (callback, delay) => {
+      if (delay === 3000) liveTick = callback;
+      return delay;
+    };
+    window.clearTimeout = () => {};
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const status = document.querySelector('#failure-triage-status');
+  assert.ok(status);
+  assert.equal(status.getAttribute('role'), 'status');
+  assert.equal(status.getAttribute('aria-live'), 'polite');
+  assert.equal(status.textContent, '');
+  assert.equal(typeof liveTick, 'function');
+
+  details = {
+    ...details,
+    run: { ...details.run, exitReason: 'nonzero', statusClass: 'fail', statusLabel: 'nonzero' },
+    evidence: {
+      ...details.evidence,
+      verification: [
+        { name: 'Status', value: 'FAIL' },
+        { name: 'Check', value: 'FAIL integration  go test ./integration  exit 1' },
+      ],
+    },
+  };
+  await liveTick();
+
+  assert.match(status.textContent, /Run NONZERO/);
+  assert.match(status.textContent, /Verify FAIL/);
 });
 
 test('run list filters by an exact persisted exit value', async (t) => {

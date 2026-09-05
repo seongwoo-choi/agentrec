@@ -257,6 +257,9 @@
       Started: '시작',
       'Actions by type': '유형별 액션',
       'Files changed': '변경된 파일',
+      'Failure triage': '실패 진단',
+      'View changed files': '변경된 파일 보기',
+      'View verification evidence': '검증 증거 보기',
       'Repository status': '저장소 상태',
       'Only in {id}': '{id}에만 있음',
       'Some changed files were not read; this split is incomplete.': '변경된 파일 일부를 읽지 않았습니다. 이 구분은 완전하지 않습니다.',
@@ -515,6 +518,9 @@
       Started: '開始',
       'Actions by type': '種類別アクション',
       'Files changed': '変更されたファイル',
+      'Failure triage': '失敗診断',
+      'View changed files': '変更ファイルを表示',
+      'View verification evidence': '検証証跡を表示',
       'Repository status': 'リポジトリの状態',
       'Only in {id}': '{id} のみ',
       'Some changed files were not read; this split is incomplete.': '変更されたファイルの一部は読み取っていません。この区分は完全ではありません。',
@@ -773,6 +779,9 @@
       Started: '开始时间',
       'Actions by type': '按类型统计的操作',
       'Files changed': '变更的文件',
+      'Failure triage': '失败诊断',
+      'View changed files': '查看变更文件',
+      'View verification evidence': '查看验证证据',
       'Repository status': '仓库状态',
       'Only in {id}': '仅在 {id} 中',
       'Some changed files were not read; this split is incomplete.': '部分改动文件未被读取，此划分并不完整。',
@@ -1719,8 +1728,17 @@ function shortID(id) {
     ];
     for (const [title, source, fields] of sections) {
       const block = node('section', 'evidence-block');
+      if (title === 'Verification') {
+        block.id = 'evidence-verification';
+        block.tabIndex = -1;
+      }
       const heading = node('div', 'evidence-title');
-      heading.append(node('span', '', t(title)), labelled('span', 'evidence-source', humanAttribution(source, provider), source));
+      const titleLabel = node('span', '', t(title));
+      if (title === 'Verification') {
+        titleLabel.id = 'evidence-verification-title';
+        block.setAttribute('aria-labelledby', titleLabel.id);
+      }
+      heading.append(titleLabel, labelled('span', 'evidence-source', humanAttribution(source, provider), source));
       block.append(heading);
       const grid = node('div', 'evidence-fields');
       if (fields.length === 0) {
@@ -1735,6 +1753,42 @@ function shortID(id) {
       if (title === 'Verification') renderPosthoc(block);
       holder.append(block);
     }
+  }
+
+  function renderFailureTriage(process, verification) {
+    const triage = $('failure-triage');
+    const fields = state.run.evidence.verification || [];
+    const facts = fields.filter((field) => field.name === 'Warning' || field.name === 'Reason' || (field.name === 'Check' && !String(field.value).startsWith('PASS ')));
+    const hasWarning = fields.some((field) => field.name === 'Warning');
+    const visible = process.tone === 'fail' || process.tone === 'warn' || verification.tone === 'fail' || verification.tone === 'warn' || hasWarning;
+    triage.classList.toggle('hidden', !visible);
+    if (!visible) {
+      $('failure-triage-status').textContent = '';
+      return;
+    }
+
+    const summary = t('Run {run} · Verify {verify}', { run: statusWord(process.value), verify: statusWord(verification.value) });
+    $('failure-triage-summary').textContent = summary;
+    $('failure-triage-status').textContent = `${t('Failure triage')}: ${summary}`;
+    const list = $('failure-triage-facts');
+    list.replaceChildren();
+    const fieldMap = fieldsMap(fields);
+    const provider = state.run.run.provider;
+    for (const field of facts) {
+      const item = node('li');
+      const described = describeField('Verification', field.name, String(field.value), fieldMap, provider);
+      const value = node('code', '', described.text);
+      if (described.title && described.title !== described.text) value.title = described.title;
+      item.append(node('span', 'failure-triage-kind', t(field.name)), value);
+      list.append(item);
+    }
+    $('failure-triage-caveat').textContent = t(NOT_CAUSAL);
+    $('triage-changes').onclick = () => $('timeline-tab-changes').click();
+    $('triage-verification').onclick = () => {
+      const target = $('evidence-verification');
+      target.scrollIntoView({ block: 'start' });
+      target.focus({ preventScroll: true });
+    };
   }
 
   // tone is one of '', 'pass', 'fail', 'warn'; NOT RUN and RUNNING stay neutral on purpose.
@@ -1795,6 +1849,7 @@ function shortID(id) {
       metric('Warnings', warnings, '', warnings > 0 ? 'warn' : '')
     );
     renderEvidence();
+    renderFailureTriage(process, verification);
     renderLivePill();
   }
 
