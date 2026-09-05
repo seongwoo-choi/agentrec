@@ -177,7 +177,13 @@ their exact exit and verification values. The sidebar search and filters are
 reflected in `?q=...&exit=...&verification=...`, so those settings survive
 reloads and can be bookmarked or shared alongside comparison links in
 `#compare=...`. A shared link applies them to the runs loaded on arrival;
-**Load more** extends that set. Each
+**Load more** extends that set. A selected run and evidence destination are
+stored as `run=...&focus=...`; `focus` can reopen Actions, Changes, Provider
+events, or focus Verification. The linked run is fetched directly even when it
+is outside the loaded list. If it is unavailable, the viewer shows the error
+without leaving another run's evidence on screen. If `run` and `#compare=a,b`
+disagree, comparison run `a` becomes selected and the `run` query is
+canonicalized to it. Each
 run keeps its run outcome and verification verdict separate, with recorded
 warnings counted beside them. When a run or verification fails, **Failure
 triage** puts non-passing checks and

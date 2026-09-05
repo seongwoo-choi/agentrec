@@ -4,7 +4,7 @@
   const POLL_MS = 5000;
   const LIVE_MS = 3000;
   const SEARCH_MS = 400;
-  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', run: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -53,6 +53,7 @@
       '{size} in the trash': '휴지통 {size}',
       'Could not load recorded runs': '기록된 실행을 불러오지 못했습니다',
       'Could not load the latest run': '최신 실행을 불러오지 못했습니다',
+      'Could not load selected run': '선택한 실행을 불러오지 못했습니다',
       '{error} — retrying; pick a run from the list to try another.': '{error} — 다시 시도 중입니다. 목록에서 다른 실행을 선택할 수도 있습니다.',
       '{n} unreadable run(s) were excluded.': '읽을 수 없는 실행 {n}개를 제외했습니다.',
       '{n}s ago': '{n}초 전',
@@ -320,6 +321,7 @@
       '{size} in the trash': 'ゴミ箱 {size}',
       'Could not load recorded runs': '記録された実行を読み込めませんでした',
       'Could not load the latest run': '最新の実行を読み込めませんでした',
+      'Could not load selected run': '選択した実行を読み込めませんでした',
       '{error} — retrying; pick a run from the list to try another.': '{error} — 再試行しています。一覧から別の実行を選ぶこともできます。',
       '{n} unreadable run(s) were excluded.': '読み取れない実行 {n} 件を除外しました。',
       '{n}s ago': '{n}秒前',
@@ -587,6 +589,7 @@
       '{size} in the trash': '回收站 {size}',
       'Could not load recorded runs': '无法加载记录的运行',
       'Could not load the latest run': '无法加载最新的运行',
+      'Could not load selected run': '无法加载所选运行',
       '{error} — retrying; pick a run from the list to try another.': '{error} — 正在重试；也可以从列表中选择其他运行。',
       '{n} unreadable run(s) were excluded.': '已排除 {n} 个无法读取的运行。',
       '{n}s ago': '{n}秒前',
@@ -1141,6 +1144,29 @@ function shortID(id) {
     setRunFilterValue('run-verification-filter', params.get('verification') || '');
   }
 
+  function focusRunEvidenceFromURL(defaultFocus = '') {
+    const focus = new URLSearchParams(location.search).get('focus') || defaultFocus;
+    if (focus === 'verification') {
+      const target = $('evidence-verification');
+      target.scrollIntoView({ block: 'start' });
+      target.focus({ preventScroll: true });
+    } else if (['actions', 'changes', 'events'].includes(focus)) {
+      const tab = $(`timeline-tab-${focus}`);
+      state.restoringNavigation = true;
+      try { tab.click(); } finally { state.restoringNavigation = false; }
+      tab.focus({ preventScroll: true });
+    }
+  }
+
+  function updateRunNavigationURL(name, value, mode = 'push') {
+    const url = new URL(location.href);
+    if (value) url.searchParams.set(name, value);
+    else url.searchParams.delete(name);
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    if (next === `${location.pathname}${location.search}${location.hash}`) return;
+    history[`${mode}State`](history.state, '', next);
+  }
+
   function updateRunFilterURL() {
     const url = new URL(location.href);
     const values = [
@@ -1193,7 +1219,7 @@ function shortID(id) {
       if (!runMatches(run, query, exit, verification)) continue;
       shown += 1;
       const button = runItem(run, Boolean(state.run && state.run.run.id === run.id));
-      button.addEventListener('click', () => loadRun(run.id));
+      button.addEventListener('click', () => navigateRun(run.id));
       list.append(button);
       if (focused === run.id) button.focus({ preventScroll: true });
     }
@@ -1235,6 +1261,12 @@ function shortID(id) {
     }
     view.classList.add('hidden');
     empty.classList.remove('hidden');
+    if (state.runError) {
+      $('workspace-empty-title').textContent = t('Could not load selected run');
+      $('workspace-empty-body').textContent = state.runError.message;
+      $('top-meta').textContent = t('{n} recorded run(s)', { n: state.runs.length });
+      return;
+    }
     const noRuns = state.runs.length === 0;
     $('workspace-empty-title').textContent = t(noRuns ? 'No runs recorded yet' : 'No run selected');
     $('workspace-empty-body').textContent = t(noRuns ? 'Start a Claude Code or Codex session; it appears here when it ends.' : 'Pick a run from the list to inspect its recorded evidence.');
@@ -1859,6 +1891,7 @@ function shortID(id) {
     $('failure-triage-caveat').textContent = t(NOT_CAUSAL);
     $('triage-changes').onclick = () => $('timeline-tab-changes').click();
     $('triage-verification').onclick = () => {
+      updateRunNavigationURL('focus', 'verification');
       const target = $('evidence-verification');
       target.scrollIntoView({ block: 'start' });
       target.focus({ preventScroll: true });
@@ -2103,7 +2136,12 @@ function shortID(id) {
     }
     renderRunList();
     renderWorkspaceState();
-    if (next) loadRun(next.id);
+    if (next) navigateRun(next.id, 0, 'replace');
+    else {
+      state.initialRunId = '';
+      updateRunNavigationURL('run', '', 'replace');
+      updateRunNavigationURL('focus', '', 'replace');
+    }
     showToast(t('Run deleted'), t('Undo'), () => restoreRun(id, summary, index)).focus();
   }
 
@@ -2116,7 +2154,7 @@ function shortID(id) {
     }
     if (summary && !state.runs.some((run) => run.id === id)) state.runs.splice(Math.min(Math.max(index, 0), state.runs.length), 0, summary);
     renderRunList();
-    loadRun(id);
+    navigateRun(id);
   }
 
   // ── Compare runners ───────────────────────────────────────────────────────
@@ -2195,7 +2233,7 @@ function shortID(id) {
       link.title = id;
       link.addEventListener('click', () => {
         closeCompare();
-        loadRun(id);
+        navigateRun(id);
       });
       links.append(link);
     }
@@ -2916,7 +2954,7 @@ function shortID(id) {
     if (!hit) return;
     closeSearch();
     if (hit.kind === 'action') $('timeline-tab-actions').click();
-    await loadRun(hit.runId, false, hit.kind === 'action' ? hit.offset || 0 : 0);
+    await navigateRun(hit.runId, hit.kind === 'action' ? hit.offset || 0 : 0);
     if (hit.kind !== 'action' || !state.run || state.run.run.id !== hit.runId || state.mode !== 'actions') return;
     const items = state.streams.actions.items;
     const at = Math.max(0, items.findIndex((action) => action.id === hit.actionId));
@@ -2929,7 +2967,7 @@ function shortID(id) {
 
   // quiet loads (auto-selection) report failure in the empty state rather than a toast, so the poll can retry without nagging.
   // cursor starts the first actions page at a byte offset, for a search hit: the page there begins with the hit's action.
-  async function loadRun(id, quiet = false, cursor = 0) {
+  async function loadRun(id, quiet = false, cursor = 0, linked = false) {
     stopLive();
     if (state.runAbortController) state.runAbortController.abort();
     const controller = new AbortController();
@@ -2939,6 +2977,7 @@ function shortID(id) {
       const run = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`, controller.signal);
       if (generation !== state.loadGeneration) return;
       state.run = run;
+      state.runError = null;
       state.confirmDelete = false;
       // The comparison sheet may already be open on the run that was showing:
       // its repository path follows the run in view until someone edits it.
@@ -2961,7 +3000,15 @@ function shortID(id) {
       startLive();
     } catch (error) {
       if (error.name === 'AbortError' || generation !== state.loadGeneration) return;
-      if (quiet && !state.run) {
+      if (linked) {
+        state.run = null;
+        state.streams = null;
+        state.selected = null;
+        state.runError = { id, message: error instanceof Error ? error.message : String(error) };
+        renderRunList();
+        renderWorkspaceState();
+        $('workspace-empty').focus({ preventScroll: true });
+      } else if (quiet && !state.run) {
         $('workspace-empty-title').textContent = t('Could not load the latest run');
         $('workspace-empty-body').textContent = t('{error} — retrying; pick a run from the list to try another.', { error: error instanceof Error ? error.message : String(error) });
       } else {
@@ -2970,6 +3017,13 @@ function shortID(id) {
     } finally {
       if (state.runAbortController === controller) state.runAbortController = null;
     }
+  }
+
+  async function navigateRun(id, cursor = 0, mode = 'push') {
+    updateRunNavigationURL('run', id, mode);
+    await loadRun(id, false, cursor, true);
+    if (!state.run || state.run.run.id !== id) return;
+    focusRunEvidenceFromURL();
   }
 
   function applyRunList(list, append = false) {
@@ -2987,6 +3041,7 @@ function shortID(id) {
     state.runsSignature = signature;
     state.runs = runs;
     state.runTotal = list.total || runs.length;
+    state.initialRunId = list.initialRunId || state.initialRunId;
     state.runNextCursor = runs.length >= state.runTotal ? '' : (append || !sameGeneration || previousRuns.length <= incoming.length ? (list.nextCursor || '') : previousCursor);
     state.runGeneration = list.generation || '';
     const warning = $('unreadable-warning');
@@ -3027,18 +3082,22 @@ function shortID(id) {
   }
 
   // Selects the initial or newest run when nothing is shown; a failed attempt is retried quietly on the next poll.
-  function autoSelect(list) {
-    if (state.run || state.runAbortController) return;
+  async function autoSelect(list) {
+    if (state.run || state.runError || state.runAbortController) return;
     const query = $('run-search').value.trim().toLowerCase();
     const exit = $('run-exit-filter').value;
     const verification = $('run-verification-filter').value;
     if (query || exit || verification) {
       const match = state.runs.find((run) => runMatches(run, query, exit, verification));
-      return match ? loadRun(match.id, true) : undefined;
+      if (!match) return;
+      await loadRun(match.id, true);
+      if (state.run && state.run.run.id === match.id) updateRunNavigationURL('run', match.id, 'replace');
+      return;
     }
-    if (list.initialRunId) return loadRun(list.initialRunId, true);
-    if (state.runs.length === 0) return;
-    return loadRun(state.runs[0].id, true);
+    const id = list.initialRunId || state.runs[0] && state.runs[0].id;
+    if (!id) return;
+    await loadRun(id, true);
+    if (state.run && state.run.run.id === id) updateRunNavigationURL('run', id, 'replace');
   }
 
   // Live refresh: re-fetch /api/runs and redraw the list in place. Selection, focus and the loaded run are untouched.
@@ -3080,11 +3139,14 @@ function shortID(id) {
       state.storeBytes = list.storeBytes || 0;
       state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
-      await autoSelect(list);
+      const linkedRun = new URLSearchParams(location.search).get('run');
+      if (linkedRun) await loadRun(linkedRun, true, 0, true);
+      else await autoSelect(list);
+      if (linkedRun && state.run && state.run.run.id === linkedRun) focusRunEvidenceFromURL();
       const reopen = /^#compare=([^,]+),(.+)$/.exec(location.hash);
-      if (reopen) {
+      if (reopen && (!linkedRun || state.run)) {
         const [a, b] = [decodeURIComponent(reopen[1]), decodeURIComponent(reopen[2])];
-        if (!state.run || state.run.run.id !== a) await loadRun(a);
+        if (!state.run || state.run.run.id !== a) await navigateRun(a, 0, 'replace');
         if (state.run && state.run.run.id === a) openDiff(b);
       }
     } catch (error) {
@@ -3115,9 +3177,24 @@ function shortID(id) {
     renderDiffSheet();
     if (search.open) renderSearch();
   });
-  window.addEventListener('popstate', () => {
+  window.addEventListener('popstate', async () => {
     restoreRunFiltersFromURL();
     renderRunList();
+    if (state.runAbortController) {
+      state.runAbortController.abort();
+      state.runAbortController = null;
+      state.loadGeneration += 1;
+    }
+    const linkedRun = new URLSearchParams(location.search).get('run');
+    if (linkedRun && (!state.run || state.run.run.id !== linkedRun)) await loadRun(linkedRun, true, 0, true);
+    if (linkedRun && state.run && state.run.run.id === linkedRun) focusRunEvidenceFromURL('actions');
+    if (!linkedRun) {
+      state.run = null;
+      state.runError = null;
+      renderRunList();
+      renderWorkspaceState();
+      await autoSelect({ initialRunId: state.initialRunId });
+    }
   });
   $('run-search').addEventListener('input', changeRunFilters);
   $('run-exit-filter').addEventListener('change', changeRunFilters);
@@ -3168,6 +3245,7 @@ function shortID(id) {
       });
       $('timeline').setAttribute('aria-labelledby', tab.id);
       state.mode = tab.dataset.mode;
+      if (!state.restoringNavigation) updateRunNavigationURL('focus', state.mode);
       state.activeTypes.clear();
       renderTimeline();
       if (isLive() && state.mode === 'changes') {

@@ -27,14 +27,24 @@ async function renderFixture({ list, details, actions = [], events = [], configu
   };
   window.HTMLElement.prototype.scrollIntoView = () => {};
   configure(window);
-  window.fetch = (input) => {
+  window.fetch = (input, init = {}) => {
     const url = new URL(String(input), window.location.href);
     if (url.pathname === '/api/shadow') return response({ allowRun: false });
+    if (url.pathname === '/api/token') return response({ token: 'test-token' });
+    if (init.method === 'DELETE' && /^\/api\/runs\/[^/]+$/.test(url.pathname)) {
+      return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+    }
     if (url.pathname === '/api/runs') return response(list);
     const detailMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
     if (detailMatch) {
       const currentDetails = typeof details === 'function' ? details(decodeURIComponent(detailMatch[1])) : details;
-      if (url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
+      if (currentDetails && typeof currentDetails.then === 'function') {
+        return currentDetails.then((resolved) => {
+          if (resolved && url.pathname === `/api/runs/${resolved.run.id}`) return response(resolved);
+          throw new Error(`unexpected fetch ${url}`);
+        });
+      }
+      if (currentDetails && url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
     }
     if (url.pathname.includes('/actions')) return response({ items: actions, nextCursor: null });
     if (url.pathname.includes('/events')) return response({ items: events, nextCursor: null });
@@ -277,6 +287,288 @@ test('run list restores shareable filters from the URL', async (t) => {
   assert.equal(document.querySelector('#run-list .run-item').getAttribute('aria-current'), 'true');
   assert.equal(document.querySelector('#diff-panel').classList.contains('hidden'), false);
   assert.equal(dom.window.location.hash, '#compare=warning-fail,other-fail');
+});
+
+test('run deep link restores the selected run and verification focus', async (t) => {
+  const data = fixture('completed', 'fail', 'FAIL');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'first-failure', verification: 'FAIL' },
+    { ...data.list.runs[0], id: 'shared-failure', verification: 'FAIL' },
+  ];
+  data.list.total = data.list.runs.length;
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState(null, '', '/?exit=completed&verification=FAIL&run=shared-failure&focus=verification#kept');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+
+  assert.equal(document.querySelector('#run-title').textContent, 'shared-failure');
+  assert.equal(document.querySelector('#run-list .run-item[aria-current]').dataset.runId, 'shared-failure');
+  assert.equal(document.activeElement.id, 'evidence-verification');
+  assert.equal(new URLSearchParams(location.search).get('run'), 'shared-failure');
+  assert.equal(new URLSearchParams(location.search).get('focus'), 'verification');
+  assert.equal(location.hash, '#kept');
+});
+
+test('automatic selection canonicalizes the selected run in the current URL', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.configure = (window) => window.history.replaceState(null, '', '/?kept=1#kept');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.equal(new URLSearchParams(dom.window.location.search).get('run'), data.details.run.id);
+  assert.equal(new URLSearchParams(dom.window.location.search).get('kept'), '1');
+  assert.equal(dom.window.location.hash, '#kept');
+});
+
+test('run and evidence navigation update URL state without discarding filters or hash', async (t) => {
+  const data = fixture('completed', 'fail', 'FAIL');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'first-failure', verification: 'FAIL' },
+    { ...data.list.runs[0], id: 'shared-failure', verification: 'FAIL' },
+  ];
+  data.list.total = data.list.runs.length;
+  const details = {
+    ...data.details,
+    evidence: { ...data.details.evidence, verification: [{ name: 'Status', value: 'FAIL' }] },
+  };
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState(null, '', '/?kept=1&verification=FAIL#kept');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+
+  document.querySelector('[data-run-id="shared-failure"]').click();
+  for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(new URLSearchParams(location.search).get('run'), 'shared-failure');
+  assert.equal(new URLSearchParams(location.search).get('verification'), 'FAIL');
+  assert.equal(location.hash, '#kept');
+
+  document.querySelector('#timeline-tab-changes').click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(new URLSearchParams(location.search).get('focus'), 'changes');
+  assert.equal(document.querySelector('#timeline-tab-changes').getAttribute('aria-selected'), 'true');
+
+  const verificationButton = document.querySelector('#triage-verification');
+  assert.equal(typeof verificationButton.onclick, 'function');
+  verificationButton.click();
+  assert.equal(new URLSearchParams(location.search).get('focus'), 'verification');
+  assert.equal(document.activeElement.id, 'evidence-verification');
+});
+
+test('popstate restores run selection and evidence focus', async (t) => {
+  const data = fixture('completed', 'fail', 'FAIL');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'first-failure', verification: 'FAIL' },
+    { ...data.list.runs[0], id: 'shared-failure', verification: 'FAIL' },
+  ];
+  data.list.total = data.list.runs.length;
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState(null, '', '/?run=first-failure&focus=verification#kept');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, history, PopStateEvent, location } = dom.window;
+
+  history.pushState(null, '', '/?run=shared-failure&focus=changes#kept');
+  dom.window.dispatchEvent(new PopStateEvent('popstate'));
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(document.querySelector('#run-title').textContent, 'shared-failure');
+  assert.equal(document.querySelector('#run-list .run-item[aria-current]').dataset.runId, 'shared-failure');
+  assert.equal(document.querySelector('#timeline-tab-changes').getAttribute('aria-selected'), 'true');
+  assert.equal(document.activeElement.id, 'timeline-tab-changes');
+  assert.equal(new URLSearchParams(location.search).get('focus'), 'changes');
+  assert.equal(location.hash, '#kept');
+});
+
+test('popstate invalidates an in-flight run load even when the displayed run matches the URL', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const first = data.details;
+  const secondID = 'slow-second';
+  let resolveSecond;
+  data.list.runs = [data.list.runs[0], { ...data.list.runs[0], id: secondID }];
+  data.list.total = data.list.runs.length;
+  data.details = (id) => id === secondID
+    ? new Promise((resolve) => { resolveSecond = resolve; })
+    : ({ ...first, run: { ...first.run, id } });
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const firstID = first.run.id;
+  dom.window.document.querySelector(`[data-run-id="${secondID}"]`).click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  dom.window.history.replaceState(null, '', `/?run=${firstID}`);
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  resolveSecond({ ...first, run: { ...first.run, id: secondID } });
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(new URLSearchParams(dom.window.location.search).get('run'), firstID);
+  assert.equal(dom.window.document.querySelector('#run-title').textContent, firstID);
+  assert.equal(dom.window.document.querySelector('[aria-current="true"]').dataset.runId, firstID);
+});
+
+test('popstate without focus restores the default Actions tab', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.configure = (window) => window.history.replaceState(null, '', `/?run=${data.details.run.id}`);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  dom.window.document.querySelector('#timeline-tab-changes').click();
+  dom.window.history.replaceState(null, '', `/?run=${data.details.run.id}`);
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(new URLSearchParams(dom.window.location.search).has('focus'), false);
+  assert.equal(dom.window.document.querySelector('#timeline-tab-actions').getAttribute('aria-selected'), 'true');
+  assert.equal(dom.window.document.activeElement.id, 'timeline-tab-actions');
+});
+
+test('popstate to a missing run clears stale evidence', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const details = data.details;
+  data.details = (id) => id === 'missing-run' ? null : ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState(null, '', '/?run=first-run');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, history, PopStateEvent } = dom.window;
+  assert.equal(document.querySelector('#run-title').textContent, 'first-run');
+
+  history.pushState(null, '', '/?run=missing-run&focus=verification');
+  dom.window.dispatchEvent(new PopStateEvent('popstate'));
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(document.querySelector('#run-view').classList.contains('hidden'), true);
+  assert.equal(document.querySelector('#workspace-empty-title').textContent, 'Could not load selected run');
+  assert.equal(document.querySelector('#run-list .run-item[aria-current]'), null);
+});
+
+test('failed sidebar navigation clears stale evidence and records the requested run', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const details = data.details;
+  const missing = 'missing-after-list';
+  let unavailable = false;
+  data.list.runs = [data.list.runs[0], { ...data.list.runs[0], id: missing }];
+  data.list.total = data.list.runs.length;
+  data.details = (id) => unavailable && id === missing ? null : ({ ...details, run: { ...details.run, id } });
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  unavailable = true;
+  dom.window.document.querySelector(`[data-run-id="${missing}"]`).click();
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(new URLSearchParams(dom.window.location.search).get('run'), missing);
+  assert.equal(dom.window.document.querySelector('#run-view').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.querySelector('#workspace-empty-title').textContent, 'Could not load selected run');
+  assert.equal(dom.window.document.activeElement.id, 'workspace-empty');
+});
+
+test('missing run deep link stays unselected and reports the selected run failure', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details = () => null;
+  data.configure = (window) => window.history.replaceState(null, '', '/?run=missing-run&focus=changes#kept');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+
+  assert.equal(document.querySelector('#run-view').classList.contains('hidden'), true);
+  assert.equal(document.querySelector('#workspace-empty-title').textContent, 'Could not load selected run');
+  assert.equal(document.querySelector('#run-list .run-item[aria-current]'), null);
+  assert.equal(document.activeElement.id, 'workspace-empty');
+  assert.equal(new URLSearchParams(location.search).get('run'), 'missing-run');
+  assert.equal(location.hash, '#kept');
+});
+
+test('missing run error survives polling and language changes', async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details = () => null;
+  data.configure = (window) => {
+    window.history.replaceState(null, '', '/?run=missing-run');
+    window.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return delay;
+    };
+    window.clearInterval = () => {};
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  assert.ok(poll);
+  await poll();
+  const language = dom.window.document.querySelector('#lang');
+  language.value = 'ko';
+  language.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+
+  assert.equal(dom.window.document.querySelector('#run-view').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.querySelector('#workspace-empty-title').textContent, '선택한 실행을 불러오지 못했습니다');
+  assert.equal(new URLSearchParams(dom.window.location.search).get('run'), 'missing-run');
+});
+
+test('comparison startup canonicalizes its primary run', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const details = data.details;
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'selected' },
+    { ...data.list.runs[0], id: 'compare-a' },
+    { ...data.list.runs[0], id: 'compare-b' },
+  ];
+  data.list.total = data.list.runs.length;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState(null, '', '/?run=selected#compare=compare-a,compare-b');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.equal(dom.window.document.querySelector('#run-title').textContent, 'compare-a');
+  assert.equal(new URLSearchParams(dom.window.location.search).get('run'), 'compare-a');
+  assert.equal(dom.window.location.hash, '#compare=compare-a,compare-b');
+  assert.equal(dom.window.document.querySelector('#diff-panel').classList.contains('hidden'), false);
+});
+
+test('comparison startup does not override a missing linked run', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const details = data.details;
+  data.details = (id) => id === 'missing' ? null : ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState(null, '', '/?run=missing#compare=compare-a,compare-b');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.equal(dom.window.document.querySelector('#run-view').classList.contains('hidden'), true);
+  assert.equal(dom.window.document.querySelector('#workspace-empty-title').textContent, 'Could not load selected run');
+  assert.equal(new URLSearchParams(dom.window.location.search).get('run'), 'missing');
+});
+
+test('deleting the final run clears its deep-link state', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.initialRunId = data.details.run.id;
+  data.configure = (window) => window.history.replaceState(null, '', `/?kept=1&run=${data.details.run.id}&focus=changes#kept`);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  dom.window.document.querySelector('#delete-run').click();
+  dom.window.document.querySelector('#run-actions .danger-button').click();
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const params = new URLSearchParams(dom.window.location.search);
+  assert.equal(params.has('run'), false);
+  assert.equal(params.has('focus'), false);
+  assert.equal(params.get('kept'), '1');
+  assert.equal(dom.window.location.hash, '#kept');
+
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(dom.window.document.querySelector('#run-view').classList.contains('hidden'), true);
 });
 
 test('run filter changes replace URL state without discarding compare state', async (t) => {
@@ -602,6 +894,7 @@ test('run pages append explicitly and unchanged polls retain DOM nodes', async (
   const second = { ...first, id: '20260902T000000.000000000Z-00000002', project: 'second' };
   const third = { ...first, id: '20260901T000000.000000000Z-00000003', project: 'third' };
   const filterURL = '?q=claude&exit=completed&verification=PASS#kept';
+  const selectedURL = `?q=claude&exit=completed&verification=PASS&run=${encodeURIComponent(first.id)}#kept`;
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: `http://localhost:42817/${filterURL}`, pretendToBeVisual: true });
   t.after(() => dom.window.close());
   const { window } = dom;
@@ -639,14 +932,14 @@ test('run pages append explicitly and unchanged polls retain DOM nodes', async (
   window.document.querySelector('#run-load-more').click();
   for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(window.document.querySelectorAll('.run-item').length, 3);
-  assert.equal(window.location.search + window.location.hash, filterURL);
+  assert.equal(window.location.search + window.location.hash, selectedURL);
   const loadedFirstNode = window.document.querySelector('.run-item');
   assert.notEqual(loadedFirstNode, firstNode);
   assert.ok(poll);
   await poll();
   assert.equal(window.document.querySelectorAll('.run-item').length, 3);
   assert.equal(window.document.querySelector('.run-item'), loadedFirstNode);
-  assert.equal(window.location.search + window.location.hash, filterURL);
+  assert.equal(window.location.search + window.location.hash, selectedURL);
   unreadable = true;
   await poll();
   assert.deepEqual([...window.document.querySelectorAll('.run-item')].map((node) => node.dataset.runId), [second.id, third.id]);
