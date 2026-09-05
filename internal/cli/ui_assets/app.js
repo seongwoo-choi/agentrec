@@ -193,6 +193,12 @@
       'Repository evidence': '저장소 증거',
       'Normalized actions': '정규화된 액션',
       'Run {run} · Verify {verify}': '실행 {run} · 검증 {verify}',
+      'Run': '실행',
+      'Verify': '검증',
+      '{n} warning': '경고 {n}개',
+      '{n} warnings': '경고 {n}개',
+      'Verification is pending.': '검증이 대기 중입니다.',
+      'Verification reported {label}.': '검증 상태: {label}.',
       'unknown cwd': '알 수 없는 작업 디렉터리',
       '{provider} {version} is unsupported; this timeline may be incomplete.': '{provider} {version}은(는) 지원하지 않는 버전입니다. 이 타임라인은 불완전할 수 있습니다.',
       'unknown version': '알 수 없는 버전',
@@ -454,6 +460,12 @@
       'Repository evidence': 'リポジトリ証跡',
       'Normalized actions': '正規化されたアクション',
       'Run {run} · Verify {verify}': '実行 {run} · 検証 {verify}',
+      'Run': '実行',
+      'Verify': '検証',
+      '{n} warning': '警告 {n} 件',
+      '{n} warnings': '警告 {n} 件',
+      'Verification is pending.': '検証は待機中です。',
+      'Verification reported {label}.': '検証状態: {label}。',
       'unknown cwd': '不明な作業ディレクトリ',
       '{provider} {version} is unsupported; this timeline may be incomplete.': '{provider} {version} は未対応のバージョンです。このタイムラインは不完全な可能性があります。',
       'unknown version': '不明なバージョン',
@@ -715,6 +727,12 @@
       'Repository evidence': '仓库证据',
       'Normalized actions': '规范化操作',
       'Run {run} · Verify {verify}': '运行 {run} · 验证 {verify}',
+      'Run': '运行',
+      'Verify': '验证',
+      '{n} warning': '{n} 条警告',
+      '{n} warnings': '{n} 条警告',
+      'Verification is pending.': '验证正在等待。',
+      'Verification reported {label}.': '验证状态：{label}。',
       'unknown cwd': '未知工作目录',
       '{provider} {version} is unsupported; this timeline may be incomplete.': '不支持 {provider} {version}；此时间线可能不完整。',
       'unknown version': '未知版本',
@@ -806,9 +824,9 @@
 
   // The documented status tokens, shown as words in the other UI languages. statusNode keeps the English token in the title.
   const STATUS_WORDS = {
-    ko: { PASS: '통과', FAIL: '실패', RUNNING: '실행 중', ENDED: '종료', LOST: '유실', UNKNOWN: '알 수 없음', 'NOT RUN': '미실행', 'NOT OBSERVED': '미관측', 'NOT RECORDED': '미기록', PENDING: '측정 대기', AVAILABLE: '측정됨', TIMEOUT: '시간 초과', ERROR: '오류', TAINTED: '오염됨' },
-    ja: { PASS: '合格', FAIL: '不合格', RUNNING: '実行中', ENDED: '終了', LOST: '消失', UNKNOWN: '不明', 'NOT RUN': '未検証', 'NOT OBSERVED': '未観測', 'NOT RECORDED': '未記録', PENDING: '計測待ち', AVAILABLE: '計測済み', TIMEOUT: 'タイムアウト', ERROR: 'エラー', TAINTED: '汚染あり' },
-    'zh-CN': { PASS: '通过', FAIL: '失败', RUNNING: '运行中', ENDED: '已结束', LOST: '已丢失', UNKNOWN: '未知', 'NOT RUN': '未运行', 'NOT OBSERVED': '未观测', 'NOT RECORDED': '未记录', PENDING: '待测量', AVAILABLE: '已测量', TIMEOUT: '超时', ERROR: '错误', TAINTED: '已污染' }
+    ko: { PASS: '통과', FAIL: '실패', RUNNING: '실행 중', ENDED: '종료', LOST: '유실', UNKNOWN: '알 수 없음', COMPLETED: '정상 종료', NONZERO: '비정상 종료', INTERRUPTED: '중단', PARSE_ERROR: '파싱 오류', STORAGE_ERROR: '저장 오류', START_ERROR: '시작 오류', 'NOT RUN': '미실행', 'NOT OBSERVED': '미관측', 'NOT RECORDED': '미기록', PENDING: '측정 대기', AVAILABLE: '측정됨', TIMEOUT: '시간 초과', ERROR: '오류', TAINTED: '오염됨' },
+    ja: { PASS: '合格', FAIL: '不合格', RUNNING: '実行中', ENDED: '終了', LOST: '消失', UNKNOWN: '不明', COMPLETED: '正常終了', NONZERO: '異常終了', INTERRUPTED: '中断', PARSE_ERROR: '解析エラー', STORAGE_ERROR: '保存エラー', START_ERROR: '起動エラー', 'NOT RUN': '未検証', 'NOT OBSERVED': '未観測', 'NOT RECORDED': '未記録', PENDING: '計測待ち', AVAILABLE: '計測済み', TIMEOUT: 'タイムアウト', ERROR: 'エラー', TAINTED: '汚染あり' },
+    'zh-CN': { PASS: '通过', FAIL: '失败', RUNNING: '运行中', ENDED: '已结束', LOST: '已丢失', UNKNOWN: '未知', COMPLETED: '正常结束', NONZERO: '异常退出', INTERRUPTED: '已中断', PARSE_ERROR: '解析错误', STORAGE_ERROR: '存储错误', START_ERROR: '启动错误', 'NOT RUN': '未运行', 'NOT OBSERVED': '未观测', 'NOT RECORDED': '未记录', PENDING: '待测量', AVAILABLE: '已测量', TIMEOUT: '超时', ERROR: '错误', TAINTED: '已污染' }
   };
   const STATUS_TOKENS = new Set(Object.keys(STATUS_WORDS.ko));
 
@@ -1071,6 +1089,13 @@ function shortID(id) {
     return known && known.value ? t(known.detail) : t('The run ended with {label}.', { label });
   }
 
+  function explainVerification(value) {
+    const verdict = verdictWord(String(value || 'NOT RUN').toUpperCase());
+    if (verdict === 'PENDING') return t('Verification is pending.');
+    if (VERDICTS[verdict]) return t(VERDICTS[verdict]);
+    return t('Verification reported {label}.', { label: verdict });
+  }
+
   // runItem is one card of a run list; the sidebar and the compare-runs picker draw the same card.
   function runItem(run, active) {
     const button = node('button', `run-item${active ? ' active' : ''}`);
@@ -1080,8 +1105,21 @@ function shortID(id) {
     const head = node('div', 'run-item-head');
     head.append(node('span', 'run-project', run.project || t('unknown project')), node('span', 'run-time', relativeTime(run.startedAt)));
     const foot = node('div', 'run-item-foot');
-    const status = statusNode('span', `mini-status ${run.statusClass}`, statusToken(run.statusLabel), explainStatus(run.statusLabel));
-    foot.append(node('span', 'run-provider', run.provider || t('unknown')), status);
+    const verdicts = node('span', 'run-verdicts');
+    const process = outcome(run.exit, new Map());
+    const verification = verdictWord(String(run.verification || 'NOT RUN').toUpperCase());
+    const badge = (kind, value, tone, detail) => {
+      const el = node('span', `mini-status run-verdict run-verdict-${kind.toLowerCase()}${tone ? ` ${tone}` : ''}`);
+      el.append(node('span', 'run-verdict-kind', `${t(kind)} `), statusNode('span', 'run-verdict-value', value, detail));
+      return el;
+    };
+    verdicts.append(
+      badge('Run', process.value, process.tone, process.detail),
+      badge('Verify', verification, statusClass(verification), explainVerification(verification)),
+    );
+    const warningCount = Number(run.warningCount || 0);
+    if (warningCount > 0) verdicts.append(node('span', 'run-warning-count', t(warningCount === 1 ? '{n} warning' : '{n} warnings', { n: warningCount })));
+    foot.append(node('span', 'run-provider', run.provider || t('unknown')), verdicts);
     button.append(head, node('div', 'run-id', shortID(run.id)), foot);
     return button;
   }
@@ -2908,7 +2946,7 @@ function shortID(id) {
       ? [...previousRuns, ...incoming.filter((run) => !previousRuns.some((current) => current.id === run.id))]
       : (!append && sameGeneration ? [...incoming, ...previousRuns.filter((run) => !pageIDs.has(run.id))] : incoming);
     // ponytail: rebuild the list only when its content changed; a rebuild mid-click would swallow the click.
-    const signature = JSON.stringify(runs.map((run) => [run.id, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.startedAt]));
+    const signature = JSON.stringify(runs.map((run) => [run.id, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.startedAt]));
     const changed = signature !== state.runsSignature;
     state.runsSignature = signature;
     state.runs = runs;

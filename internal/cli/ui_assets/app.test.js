@@ -6,6 +6,7 @@ import { JSDOM } from 'jsdom';
 const here = new URL('.', import.meta.url);
 const html = await readFile(new URL('index.html', here), 'utf8');
 const app = await readFile(new URL('app.js', here), 'utf8');
+const css = await readFile(new URL('app.css', here), 'utf8');
 
 const response = (body) => Promise.resolve({
   ok: true,
@@ -51,6 +52,7 @@ function fixture(exitReason, statusClass, statusLabel) {
     cwd: '/repo',
     prompt: 'test',
     startedAt,
+    exit: exitReason,
     exitReason,
     statusClass,
     statusLabel,
@@ -73,8 +75,50 @@ test('session_lost is failure-class in list and detail', async (t) => {
   const dom = await renderFixture(fixture('session_lost', 'fail', 'session_lost'));
   t.after(() => dom.window.close());
   const { document } = dom.window;
-  assert.match(document.querySelector('.run-item .mini-status').className, /\bfail\b/);
+  assert.match(document.querySelector('.run-item .run-verdict-run').className, /\bfail\b/);
   assert.match(document.querySelector('#run-verdict').className, /\bfail\b/);
+});
+
+test('run list separates process and verification verdicts before opening a run', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'run-process-failed', exit: 'nonzero', verification: 'PASS', warningCount: 0 },
+    { ...data.list.runs[0], id: 'run-verification-failed', exit: 'completed', verification: 'FAIL', warningCount: 2 },
+    { ...data.list.runs[0], id: 'run-verification-tainted', exit: 'completed', verification: 'TAINTED', warningCount: 1 },
+    { ...data.list.runs[0], id: 'run-pending', exit: 'unknown', verification: 'PENDING', warningCount: 0 },
+    { ...data.list.runs[0], id: 'run-parse-error', exit: 'parse_error', verification: 'NOT RUN', warningCount: 1 },
+  ];
+  data.list.total = data.list.runs.length;
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const cards = new Map(Array.from(document.querySelectorAll('.run-item'), (card) => [card.dataset.runId, card]));
+  const verdicts = (id) => Array.from(cards.get(id).querySelectorAll('.run-verdict'), (badge) => badge.textContent.trim());
+
+  assert.deepEqual(verdicts('run-process-failed'), ['Run NONZERO', 'Verify PASS']);
+  assert.deepEqual(verdicts('run-verification-failed'), ['Run COMPLETED', 'Verify FAIL']);
+  assert.deepEqual(verdicts('run-verification-tainted'), ['Run COMPLETED', 'Verify TAINTED']);
+  assert.deepEqual(verdicts('run-pending'), ['Run UNKNOWN', 'Verify PENDING']);
+  assert.equal(cards.get('run-process-failed').querySelector('.run-verdict-run').classList.contains('fail'), true);
+  assert.equal(cards.get('run-process-failed').querySelector('.run-verdict-verify').classList.contains('pass'), true);
+  assert.equal(cards.get('run-verification-failed').querySelector('.run-verdict-run').classList.contains('pass'), true);
+  assert.equal(cards.get('run-verification-failed').querySelector('.run-verdict-verify').classList.contains('fail'), true);
+  assert.equal(cards.get('run-verification-tainted').querySelector('.run-verdict-verify').classList.contains('warn'), true);
+  assert.equal(cards.get('run-pending').querySelector('.run-verdict-verify').classList.contains('fail'), false);
+  assert.equal(cards.get('run-pending').querySelector('.run-verdict-verify .run-verdict-value').title, 'Verification is pending.');
+  assert.equal(cards.get('run-verification-failed').querySelector('.run-warning-count').textContent.trim(), '2 warnings');
+  assert.match(css, /\.run-verdict-kind \{[^}]*font-size: 11px;[^}]*opacity: 1;/);
+
+  const language = document.querySelector('#lang');
+  language.value = 'ko';
+  language.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  const localizedCards = new Map(Array.from(document.querySelectorAll('.run-item'), (card) => [card.dataset.runId, card]));
+  const localizedVerdicts = (id) => Array.from(localizedCards.get(id).querySelectorAll('.run-verdict'), (badge) => badge.textContent.trim());
+  assert.deepEqual(localizedVerdicts('run-process-failed'), ['실행 비정상 종료', '검증 통과']);
+  assert.deepEqual(localizedVerdicts('run-verification-failed'), ['실행 정상 종료', '검증 실패']);
+  assert.deepEqual(localizedVerdicts('run-parse-error'), ['실행 파싱 오류', '검증 미실행']);
+  assert.equal(localizedCards.get('run-verification-failed').querySelector('.run-warning-count').textContent.trim(), '경고 2개');
 });
 
 test('failure triage separates failures and navigates to existing evidence', async (t) => {
@@ -230,6 +274,28 @@ test('polling refreshes filters when exact status values change', async (t) => {
   assert.deepEqual(Array.from(document.querySelector('#run-exit-filter').options, (option) => option.value), ['', 'new-exit']);
 });
 
+test('polling refreshes a changed run warning count', async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.generation = 'generation';
+  data.configure = (window) => {
+    window.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return delay;
+    };
+    window.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(document.querySelector('.run-warning-count'), null);
+
+  data.list.runs[0] = { ...data.list.runs[0], warningCount: 3 };
+  await poll();
+
+  assert.equal(document.querySelector('.run-warning-count').textContent.trim(), '3 warnings');
+});
+
 test('run list combines exact exit and verification filters', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.list.runs = [
@@ -309,7 +375,7 @@ test('tainted verification is warning-class in list and detail', async (t) => {
   const dom = await renderFixture(data);
   t.after(() => dom.window.close());
   const { document } = dom.window;
-  assert.match(document.querySelector('.run-item .mini-status').className, /\bwarn\b/);
+  assert.match(document.querySelector('.run-item .run-verdict-verify').className, /\bwarn\b/);
   assert.match(document.querySelector('#run-verdict').className, /\bwarn\b/);
   const verification = metricByLabel(document, 'Verification verdict');
   assert.match(verification.className, /\bwarn\b/);

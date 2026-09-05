@@ -1875,7 +1875,7 @@ func TestViewRunListUsesBoundedCursorPages(t *testing.T) {
 
 func TestViewRunListIncludesVerificationIntegrityWarnings(t *testing.T) {
 	root := home(t)
-	writeRun(t, root, "run", "claude", early, "completed")
+	writeRunWithWarnings(t, root, "run", "claude", early, "completed", 2)
 	writeVerification(t, root, "run", map[string]any{
 		"status":      "passed",
 		"attribution": evidence.VerificationAttribution,
@@ -1896,14 +1896,15 @@ func TestViewRunListIncludesVerificationIntegrityWarnings(t *testing.T) {
 	}
 	var body struct {
 		Runs []struct {
-			StatusClass string `json:"statusClass"`
+			StatusClass  string `json:"statusClass"`
+			WarningCount int    `json:"warningCount"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Runs) != 1 || body.Runs[0].StatusClass != "warn" {
-		t.Fatalf("runs = %+v, want one warning-classified run", body.Runs)
+	if len(body.Runs) != 1 || body.Runs[0].StatusClass != "warn" || body.Runs[0].WarningCount != 3 {
+		t.Fatalf("runs = %+v, want one warning-classified run with two process warnings and one verification warning", body.Runs)
 	}
 }
 

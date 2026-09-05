@@ -96,6 +96,10 @@ button { cursor: pointer; }
 .run-id { margin-top: 3px; color: var(--quiet); font: 12px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run-item-foot { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
 .run-provider { color: var(--muted); font-size: 12px; }
+.run-verdicts { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.run-verdict { padding-right: 6px; }
+.run-verdict-kind { color: currentColor; font-size: 11px; font-weight: 700; text-transform: uppercase; opacity: 1; }
+.run-warning-count { color: var(--warn); font-size: 11px; white-space: nowrap; }
 .mini-status { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 500; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px 1px 6px; }
 .mini-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--quiet); }
 .mini-status.pass { color: var(--pass); background: var(--pass-bg); border-color: transparent; }

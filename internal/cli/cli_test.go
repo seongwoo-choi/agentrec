@@ -73,6 +73,27 @@ func writeRun(t *testing.T, root, id, provider string, startedAt time.Time, exit
 	}
 }
 
+func writeRunWithWarnings(t *testing.T, root, id, provider string, startedAt time.Time, exitReason string, warningCount int) {
+	t.Helper()
+	b, err := storage.Create(root, id, storage.Manifest{
+		Provider: provider, Argv: []string{provider, "-p", "hello"}, CWD: "/tmp", StartedAt: startedAt,
+	})
+	if err != nil {
+		t.Fatalf("create run %s: %v", id, err)
+	}
+	if err := b.WriteAction(readAction(startedAt)); err != nil {
+		t.Fatalf("write action for %s: %v", id, err)
+	}
+	if err := b.WriteProcessResult(processResultJSON(t, startedAt, exitReason)); err != nil {
+		t.Fatalf("write result for %s: %v", id, err)
+	}
+	if err := b.Finalize(storage.Finalization{
+		EndedAt: startedAt.Add(1500 * time.Millisecond), ExitReason: exitReason, WarningCount: warningCount,
+	}); err != nil {
+		t.Fatalf("finalize %s: %v", id, err)
+	}
+}
+
 // readAction is one recorded file read whose payloads carry values that must
 // never reach the rendered report.
 func readAction(startedAt time.Time) action.Action {

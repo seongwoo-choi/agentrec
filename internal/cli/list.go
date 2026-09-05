@@ -29,6 +29,7 @@ type runSummary struct {
 	StartedAt            time.Time
 	Exit                 string
 	Verification         string
+	WarningCount         int
 	VerificationWarnings int
 }
 
@@ -202,11 +203,12 @@ func scanRunsFromRoot(root *os.Root, cwd string, enrich runEnricher) ([]runSumma
 			continue
 		}
 		run := runSummary{
-			ID:        entry.Name(),
-			Provider:  manifest.Provider,
-			Project:   projectName(manifest.CWD),
-			StartedAt: manifest.StartedAt,
-			Exit:      exitReason(manifest, nil),
+			ID:           entry.Name(),
+			Provider:     manifest.Provider,
+			Project:      projectName(manifest.CWD),
+			StartedAt:    manifest.StartedAt,
+			Exit:         exitReason(manifest, nil),
+			WarningCount: manifest.WarningCount,
 		}
 		include := true
 		if enrich != nil {
