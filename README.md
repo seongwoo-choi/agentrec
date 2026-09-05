@@ -173,7 +173,11 @@ copy. While a run is still going, its page keeps up on its own and shows the
 working tree as it is now; the search field in the top bar looks for a word in
 every run — where it happened, its prompt, its actions — and opens the run at
 the matching action. The sidebar filters the runs loaded into the browser by
-their exact exit and verification values; **Load more** extends that set. Each
+their exact exit and verification values. The sidebar search and filters are
+reflected in `?q=...&exit=...&verification=...`, so those settings survive
+reloads and can be bookmarked or shared alongside comparison links in
+`#compare=...`. A shared link applies them to the runs loaded on arrival;
+**Load more** extends that set. Each
 run keeps its run outcome and verification verdict separate, with recorded
 warnings counted beside them. When a run or verification fails, **Failure
 triage** puts non-passing checks and

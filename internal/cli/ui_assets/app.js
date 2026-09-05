@@ -1124,6 +1124,42 @@ function shortID(id) {
     return button;
   }
 
+  function setRunFilterValue(id, value) {
+    const select = $(id);
+    if (value && !Array.from(select.options).some((option) => option.value === value)) {
+      const option = node('option', '', value);
+      option.value = value;
+      select.append(option);
+    }
+    select.value = value;
+  }
+
+  function restoreRunFiltersFromURL() {
+    const params = new URLSearchParams(location.search);
+    $('run-search').value = params.get('q') || '';
+    setRunFilterValue('run-exit-filter', params.get('exit') || '');
+    setRunFilterValue('run-verification-filter', params.get('verification') || '');
+  }
+
+  function updateRunFilterURL() {
+    const url = new URL(location.href);
+    const values = [
+      ['q', $('run-search').value],
+      ['exit', $('run-exit-filter').value],
+      ['verification', $('run-verification-filter').value],
+    ];
+    for (const [name, value] of values) {
+      if (value.trim()) url.searchParams.set(name, value);
+      else url.searchParams.delete(name);
+    }
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function changeRunFilters() {
+    updateRunFilterURL();
+    renderRunList();
+  }
+
   function syncRunFilter(id, values, allLabel) {
     const select = $(id);
     const selected = select.value;
@@ -1135,7 +1171,7 @@ function shortID(id) {
       option.value = value;
       select.append(option);
     }
-    if (Array.from(select.options).some((option) => option.value === selected)) select.value = selected;
+    setRunFilterValue(id, selected);
   }
 
   const runMatches = (run, query, exit, verification) =>
@@ -2993,6 +3029,13 @@ function shortID(id) {
   // Selects the initial or newest run when nothing is shown; a failed attempt is retried quietly on the next poll.
   function autoSelect(list) {
     if (state.run || state.runAbortController) return;
+    const query = $('run-search').value.trim().toLowerCase();
+    const exit = $('run-exit-filter').value;
+    const verification = $('run-verification-filter').value;
+    if (query || exit || verification) {
+      const match = state.runs.find((run) => runMatches(run, query, exit, verification));
+      return match ? loadRun(match.id, true) : undefined;
+    }
     if (list.initialRunId) return loadRun(list.initialRunId, true);
     if (state.runs.length === 0) return;
     return loadRun(state.runs[0].id, true);
@@ -3027,6 +3070,7 @@ function shortID(id) {
 
   async function init() {
     setLang(detectLang());
+    restoreRunFiltersFromURL();
     $('top-meta').textContent = t('Loading recorded evidence…');
     $('workspace-empty-title').textContent = t('Loading recorded evidence…');
     // ponytail: the overview says whether --allow-run is on; a failure leaves the Verify now button hidden.
@@ -3071,9 +3115,13 @@ function shortID(id) {
     renderDiffSheet();
     if (search.open) renderSearch();
   });
-  $('run-search').addEventListener('input', renderRunList);
-  $('run-exit-filter').addEventListener('change', renderRunList);
-  $('run-verification-filter').addEventListener('change', renderRunList);
+  window.addEventListener('popstate', () => {
+    restoreRunFiltersFromURL();
+    renderRunList();
+  });
+  $('run-search').addEventListener('input', changeRunFilters);
+  $('run-exit-filter').addEventListener('change', changeRunFilters);
+  $('run-verification-filter').addEventListener('change', changeRunFilters);
   $('run-load-more').addEventListener('click', loadMoreRuns);
   const searchAll = $('search-all');
   searchAll.addEventListener('input', scheduleSearch);
