@@ -284,6 +284,26 @@ func outcome(a action.Action) (string, string) {
 	return "Result", statusText(a.Status)
 }
 
+// ActionFailed reports only outcomes the normalized action or its rendered
+// shell exit code identifies as failures. Unknown statuses stay visible only in
+// the full report; they are not silently promoted to failures.
+func ActionFailed(a action.Action) bool {
+	if a.Type == action.TypeProviderError {
+		return true
+	}
+	if a.Type == action.TypeShellExec {
+		if code, ok := exitCode(a.Result); ok && code != "0" {
+			return true
+		}
+	}
+	switch strings.ToLower(a.Status) {
+	case "fail", "failed", "error", "timeout", "nonzero", "interrupted", "parse_error", "storage_error", "start_error":
+		return true
+	default:
+		return false
+	}
+}
+
 var statuses = map[string]string{
 	"completed":   "success",
 	"failed":      "failed",

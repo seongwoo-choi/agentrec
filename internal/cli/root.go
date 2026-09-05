@@ -13,7 +13,7 @@ Usage:
   agentrec shadow run <task-file> --runner claude --runner codex
   agentrec shadow show <group-id>
   agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]
-  agentrec show <run-id>|latest
+  agentrec show <run-id>|latest [--failures-only]
   agentrec events <run-id>|latest [--json]
   agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open] [--allow-run]
   agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]

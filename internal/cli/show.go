@@ -82,8 +82,8 @@ type processResult struct {
 // failures by their exit code: 2 means the command was called wrongly, 1 means
 // the run could not be read.
 func runShow(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprint(stderr, "usage: agentrec show <run-id>|latest\n")
+	if len(args) < 1 || len(args) > 2 || len(args) == 2 && args[1] != "--failures-only" {
+		fmt.Fprint(stderr, "usage: agentrec show <run-id>|latest [--failures-only]\n")
 		return 2
 	}
 	if args[0] != latestRun {
@@ -106,7 +106,7 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	rep, err := readRun(root, runID)
+	rep, err := readRunWithOptions(root, runID, showOptions{failuresOnly: len(args) == 2})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -116,6 +116,10 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+type showOptions struct {
+	failuresOnly bool
 }
 
 // newestRunID names the run to show when the operator asked for the latest one.
@@ -142,6 +146,10 @@ var errNoRuns = errors.New("cli: no runs recorded")
 
 // readRun builds the report for one run out of one held run-directory identity.
 func readRun(root, runID string) (report.Report, error) {
+	return readRunWithOptions(root, runID, showOptions{})
+}
+
+func readRunWithOptions(root, runID string, opts showOptions) (report.Report, error) {
 	if _, err := runDir(root, runID); err != nil {
 		return report.Report{}, err
 	}
@@ -150,10 +158,14 @@ func readRun(root, runID string) (report.Report, error) {
 		return report.Report{}, err
 	}
 	defer runRoot.Close()
-	return readRunFromRoot(runRoot)
+	return readRunFromRootWithOptions(runRoot, opts)
 }
 
 func readRunFromRoot(root *os.Root) (report.Report, error) {
+	return readRunFromRootWithOptions(root, showOptions{})
+}
+
+func readRunFromRootWithOptions(root *os.Root, opts showOptions) (report.Report, error) {
 	manifest, err := readManifestFromRoot(root)
 	if err != nil {
 		return report.Report{}, err
@@ -181,6 +193,14 @@ func readRunFromRoot(root *os.Root) (report.Report, error) {
 	if err != nil {
 		return report.Report{}, err
 	}
+	ownVerificationRan := verification != nil
+	supervisorFailure := false
+	if opts.failuresOnly {
+		actions = slices.DeleteFunc(actions, func(a action.Action) bool { return !report.ActionFailed(a) })
+		supervisorFailure = supervisorFailed(manifest, result)
+		verification = failureVerification(verification)
+		reportedUsage = nil
+	}
 	rep := report.Report{
 		Actions:       actions,
 		ProviderUsage: providerUsageFields(reportedUsage),
@@ -188,13 +208,56 @@ func readRunFromRoot(root *os.Root) (report.Report, error) {
 		Repository:    repositoryFields(git),
 		Verification:  verificationFields(verification),
 	}
+	if opts.failuresOnly && !supervisorFailure {
+		rep.Supervisor = nil
+	}
 	rep.Repository, rep.Verification = appendSessionEvidence(manifest, rep.Repository, rep.Verification)
 	posthoc, meta, err := readPosthocVerificationFromRoot(root)
 	if err != nil {
 		return report.Report{}, err
 	}
-	rep.Verification = append(rep.Verification, posthocFields(posthoc, meta, len(rep.Verification) > 0)...)
+	if opts.failuresOnly {
+		posthoc = failureVerification(posthoc)
+	}
+	rep.Verification = append(rep.Verification, posthocFields(posthoc, meta, ownVerificationRan)...)
 	return rep, nil
+}
+
+func supervisorFailed(manifest storage.Manifest, result *processResult) bool {
+	if viewStatusClass(exitReason(manifest, result)) == "fail" {
+		return true
+	}
+	if result == nil {
+		return false
+	}
+	return result.ExitCode != nil && *result.ExitCode != 0 || result.Signal != ""
+}
+
+func failureVerification(result *evidence.VerificationResult) *evidence.VerificationResult {
+	if result == nil {
+		return nil
+	}
+	failedChecks := slices.DeleteFunc(slices.Clone(result.Checks), func(check evidence.VerificationCheck) bool {
+		return !isFailureVerificationStatus(check.Status)
+	})
+	if !isFailureVerificationStatus(result.Status) && len(failedChecks) == 0 {
+		return nil
+	}
+	filtered := *result
+	filtered.Checks = failedChecks
+	if !isFailureVerificationStatus(result.Status) && len(failedChecks) > 0 {
+		filtered.Status = "inconsistent"
+	}
+	return &filtered
+}
+
+func isFailureVerificationStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "", evidence.VerificationPassed, "pending":
+		return false
+	default:
+		return true
+	}
 }
 
 // What a session-mode bundle says where a traced run reports its process and

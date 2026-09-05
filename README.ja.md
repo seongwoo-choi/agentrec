@@ -293,7 +293,7 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 1 つのタスクを、1 つのコミット済み baseline から、隔離されたワークツリーで 2 回記録します。 |
 | ⚖️ `agentrec shadow show <group-id>` | 記録済みの比較を、証拠だけで再描画します。 |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | 実行を新しい順に一覧します。 |
-| 📄 `agentrec show <run-id>\|latest` | 実行 1 件をバンドルから描画します。何も書き込みません。 |
+| 📄 `agentrec show <run-id>\|latest [--failures-only]` | 実行 1 件をバンドルから描画します。`--failures-only` は失敗したアクション、明示的なプロセス失敗、一貫して成功していない終了済みの検証証拠、リポジトリのコンテキストだけを残します。保留中および中立の結果は除外します。何も書き込みません。 |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 記録されたプロバイダーイベントを要約またはダンプします。 |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 読み取り専用ビューアーをループバックで提供します。 |
 | 🏷️ `agentrec version` | タグ、コミット、UTC のビルド時刻を出力します。 |

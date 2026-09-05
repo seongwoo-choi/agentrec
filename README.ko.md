@@ -282,7 +282,7 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 하나의 작업을 같은 커밋에서 격리된 worktree 두 곳에 두 번 기록합니다. |
 | ⚖️ `agentrec shadow show <group-id>` | 기록된 비교를 증거만으로 다시 렌더합니다. |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]` | run을 최신순으로 나열합니다. |
-| 📄 `agentrec show <run-id>\|latest` | 번들에서 run 하나를 렌더합니다. 아무것도 쓰지 않습니다. |
+| 📄 `agentrec show <run-id>\|latest [--failures-only]` | 번들에서 run 하나를 렌더합니다. `--failures-only`는 실패한 action, 명시적인 process 실패, 일관되게 통과하지 않은 최종 verification 증거와 repository context만 유지합니다. pending과 중립 상태는 제외합니다. 아무것도 쓰지 않습니다. |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 기록된 provider 이벤트를 요약하거나 덤프합니다. |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 읽기 전용 viewer를 loopback에 띄웁니다. |
 | 🏷️ `agentrec version` | 태그, 커밋, UTC 빌드 시각을 출력합니다. |
