@@ -13,7 +13,7 @@ const response = (body) => Promise.resolve({
   json: async () => body,
 });
 
-async function renderFixture({ list, details, actions = [], events = [] }) {
+async function renderFixture({ list, details, actions = [], events = [], configure = () => {} }) {
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
     url: 'http://localhost:42817/',
@@ -25,6 +25,7 @@ async function renderFixture({ list, details, actions = [], events = [] }) {
     disconnect() {}
   };
   window.HTMLElement.prototype.scrollIntoView = () => {};
+  configure(window);
   window.fetch = (input) => {
     const url = new URL(String(input), window.location.href);
     if (url.pathname === '/api/shadow') return response({ allowRun: false });
@@ -73,6 +74,118 @@ test('session_lost is failure-class in list and detail', async (t) => {
   const { document } = dom.window;
   assert.match(document.querySelector('.run-item .mini-status').className, /\bfail\b/);
   assert.match(document.querySelector('#run-verdict').className, /\bfail\b/);
+});
+
+test('run list filters by an exact persisted exit value', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'run-completed', exit: 'completed' },
+    { ...data.list.runs[0], id: 'run-future', exit: 'provider_crash', statusClass: 'fail', statusLabel: 'provider_crash' },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const filter = document.querySelector('#run-exit-filter');
+  assert.deepEqual(Array.from(filter.options, (option) => option.value), ['', 'completed', 'provider_crash']);
+
+  filter.value = 'provider_crash';
+  filter.dispatchEvent(new Event('change', { bubbles: true }));
+
+  assert.deepEqual(Array.from(document.querySelectorAll('.run-item'), (item) => item.dataset.runId), ['run-future']);
+});
+
+test('polling refreshes filters when exact status values change', async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.generation = 'generation';
+  data.list.runs[0].exit = 'old-exit';
+  data.configure = (window) => {
+    window.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return delay;
+    };
+    window.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(typeof poll, 'function');
+  assert.deepEqual(Array.from(document.querySelector('#run-exit-filter').options, (option) => option.value), ['', 'old-exit']);
+
+  data.list.runs[0] = { ...data.list.runs[0], exit: 'new-exit' };
+  await poll();
+
+  assert.deepEqual(Array.from(document.querySelector('#run-exit-filter').options, (option) => option.value), ['', 'new-exit']);
+});
+
+test('run list combines exact exit and verification filters', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'run-pass', exit: 'completed', verification: 'PASS' },
+    { ...data.list.runs[0], id: 'run-fail', exit: 'completed', verification: 'FAIL', statusClass: 'fail', statusLabel: 'FAIL' },
+    { ...data.list.runs[0], id: 'run-nonzero', exit: 'nonzero', verification: 'FAIL', statusClass: 'fail', statusLabel: 'nonzero' },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const exit = document.querySelector('#run-exit-filter');
+  const verification = document.querySelector('#run-verification-filter');
+
+  exit.value = 'completed';
+  exit.dispatchEvent(new Event('change', { bubbles: true }));
+  verification.value = 'FAIL';
+  verification.dispatchEvent(new Event('change', { bubbles: true }));
+
+  assert.deepEqual(Array.from(document.querySelectorAll('.run-item'), (item) => item.dataset.runId), ['run-fail']);
+});
+
+test('run list reports an empty filter result without calling it a search miss', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'run-pass', exit: 'completed', verification: 'PASS' },
+    { ...data.list.runs[0], id: 'run-fail', exit: 'nonzero', verification: 'FAIL', statusClass: 'fail', statusLabel: 'nonzero' },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const exit = document.querySelector('#run-exit-filter');
+  const verification = document.querySelector('#run-verification-filter');
+
+  exit.value = 'completed';
+  exit.dispatchEvent(new Event('change', { bubbles: true }));
+  verification.value = 'FAIL';
+  verification.dispatchEvent(new Event('change', { bubbles: true }));
+
+  const empty = document.querySelector('#run-list-empty');
+  assert.equal(empty.textContent, 'No loaded runs match these filters.');
+  const status = document.querySelector('#run-list-status');
+  assert.equal(status.textContent, 'No loaded runs match these filters.');
+  assert.equal(status.getAttribute('role'), 'status');
+  assert.equal(status.getAttribute('aria-live'), 'polite');
+});
+
+test('run list describes an empty combined search and filter result', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'run-search-match', project: 'needle', exit: 'completed', verification: 'PASS' },
+    { ...data.list.runs[0], id: 'run-filter-match', project: 'other', exit: 'nonzero', verification: 'FAIL', statusClass: 'fail', statusLabel: 'nonzero' },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const search = document.querySelector('#run-search');
+  const exit = document.querySelector('#run-exit-filter');
+
+  search.value = 'needle';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  exit.value = 'nonzero';
+  exit.dispatchEvent(new Event('change', { bubbles: true }));
+
+  assert.equal(document.querySelector('#run-list-empty').textContent, 'No loaded runs match this search and these filters.');
 });
 
 const metricByLabel = (document, label) => Array.from(document.querySelectorAll('.metric'))

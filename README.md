@@ -172,7 +172,8 @@ runs it recorded. Without the flag the panel only writes the command for you to
 copy. While a run is still going, its page keeps up on its own and shows the
 working tree as it is now; the search field in the top bar looks for a word in
 every run — where it happened, its prompt, its actions — and opens the run at
-the matching action.
+the matching action. The sidebar filters the runs loaded into the browser by
+their exact exit and verification values; **Load more** extends that set.
 
 | Provider | Executable | Supported range | What agentrec injects |
 | --- | --- | --- | --- |

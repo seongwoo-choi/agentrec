@@ -84,6 +84,8 @@ button { cursor: pointer; }
 .search:focus-within, .timeline-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .search input, .timeline-search input { width: 100%; background: none; border: 0; outline: 0; color: var(--text); font-size: 13px; }
 .search input::placeholder, .timeline-search input::placeholder { color: var(--quiet); }
+.run-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; flex-shrink: 0; }
+.run-filters select { min-width: 0; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
 .run-list { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 4px; align-content: start; }
 .run-item { width: 100%; text-align: left; border: 1px solid transparent; border-left: 3px solid transparent; border-radius: 8px; padding: 10px 10px 10px 11px; background: transparent; transition: background-color .12s ease, border-color .12s ease; }
 .run-item:hover { background: var(--surface); }
