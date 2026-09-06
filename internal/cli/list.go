@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,7 +19,7 @@ const runsDirName = "runs"
 // listHeader names the columns; listUsage is the one accepted command shape.
 const (
 	listHeader = "RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION"
-	listUsage  = "usage: agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only]\n"
+	listUsage  = "usage: agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]\n"
 )
 
 // runSummary is one row of the run table.
@@ -34,6 +35,21 @@ type runSummary struct {
 	Failure              bool
 }
 
+type listJSONOutput struct {
+	SchemaVersion  int           `json:"schemaVersion"`
+	Runs           []listJSONRun `json:"runs"`
+	UnreadableRuns int           `json:"unreadableRuns"`
+}
+
+type listJSONRun struct {
+	ID           string `json:"id"`
+	Provider     string `json:"provider"`
+	Project      string `json:"project"`
+	StartedAt    string `json:"startedAt"`
+	Exit         string `json:"exit"`
+	Verification string `json:"verification"`
+}
+
 // runList prints the recorded runs, newest first.
 func runList(args []string, stdout, stderr io.Writer) int {
 	cwd := ""
@@ -43,6 +59,7 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	verificationFilter := ""
 	verificationSet := false
 	failuresOnly := false
+	jsonMode := false
 	for len(args) > 0 {
 		if args[0] == "--failures-only" {
 			if failuresOnly {
@@ -50,6 +67,15 @@ func runList(args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			failuresOnly = true
+			args = args[1:]
+			continue
+		}
+		if args[0] == "--json" {
+			if jsonMode {
+				fmt.Fprint(stderr, listUsage)
+				return 2
+			}
+			jsonMode = true
 			args = args[1:]
 			continue
 		}
@@ -114,6 +140,25 @@ func runList(args []string, stdout, stderr io.Writer) int {
 		runs = slices.DeleteFunc(runs, func(run runSummary) bool {
 			return !listProcessFailed(run.Exit) && !listVerificationFailed(run.Verification)
 		})
+	}
+	if jsonMode {
+		jsonRuns := make([]listJSONRun, 0, len(runs))
+		for _, run := range runs {
+			jsonRuns = append(jsonRuns, listJSONRun{
+				ID:           run.ID,
+				Provider:     run.Provider,
+				Project:      run.Project,
+				StartedAt:    run.StartedAt.UTC().Format(time.RFC3339),
+				Exit:         run.Exit,
+				Verification: run.Verification,
+			})
+		}
+		output := listJSONOutput{SchemaVersion: 1, Runs: jsonRuns, UnreadableRuns: unreadable}
+		if err := json.NewEncoder(stdout).Encode(output); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	}
 
 	if len(runs) == 0 {
