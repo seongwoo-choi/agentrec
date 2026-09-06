@@ -95,6 +95,11 @@ go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.1
 報告するため、スタンプのないバイナリをリリース済みのものと取り違えることはありません。
 ソースからビルドするには Go 1.26 以降が必要で、`shadow run` には Git 2.36 以降も必要です。
 
+複数のインストールが存在する可能性がある場合は、まず `type -a agentrec` でシェルの
+候補を確認し、新しくインストールしたバイナリを明示的なパスで指定して
+`version --verbose` を実行してください。実際に起動した実行ファイルと、`PATH` 順に
+見つかる実行可能な `agentrec` 候補をすべて表示し、現在のファイルを示します。
+
 **⭐ 検証設定をコミットする（推奨）:**
 
 ```yaml
@@ -296,7 +301,7 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 | 📄 `agentrec show <run-id>\|latest [--failures-only]` | 実行 1 件をバンドルから描画します。`--failures-only` は失敗したアクション、明示的なプロセス失敗、一貫して成功していない終了済みの検証証拠、リポジトリのコンテキストだけを残します。保留中および中立の結果は除外します。何も書き込みません。 |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 記録されたプロバイダーイベントを要約またはダンプします。 |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 読み取り専用ビューアーをループバックで提供します。 |
-| 🏷️ `agentrec version` | タグ、コミット、UTC のビルド時刻を出力します。 |
+| 🏷️ `agentrec version [--verbose]` | タグ、コミット、UTC のビルド時刻を出力します。`--verbose` は `PATH` 順の実行可能な `agentrec` 候補を列挙し、現在のファイルを示します。 |
 
 `agentrec hook <provider>` と `agentrec session serve` も存在します。前者はプロバイダーが
 実行し、後者は最初の hook が起動します。どちらも手で入力するためのものではありません。

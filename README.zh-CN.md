@@ -90,6 +90,10 @@ UTC 构建时间；以其他方式构建的二进制会显示 `dev`，因此未�
 误认为发布版。从源码构建需要 Go 1.26 或更高版本；`shadow run` 还需要 Git 2.36 或
 更高版本。
 
+如果可能存在多个安装，请先用 `type -a agentrec` 查找 shell 候选项，再通过明确路径
+调用新安装的二进制并执行 `version --verbose`。它会显示实际启动的可执行文件，并按
+`PATH` 顺序列出所有可执行的 `agentrec` 候选项并标记当前文件。
+
 **⭐ 提交验证配置（推荐）：**
 
 ```yaml
@@ -268,7 +272,7 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 | 📄 `agentrec show <run-id>\|latest [--failures-only]` | 从证据包渲染一次运行；`--failures-only` 仅保留失败操作、明确的进程失败、未能一致通过的终态验证证据，以及仓库上下文。待定与中性结果会被省略。不写入任何内容。 |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 汇总或导出已记录的提供方事件。 |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 在回环地址上提供只读查看器。 |
-| 🏷️ `agentrec version` | 输出标签、提交和 UTC 构建时间。 |
+| 🏷️ `agentrec version [--verbose]` | 输出标签、提交和 UTC 构建时间。`--verbose` 还会按 `PATH` 顺序列出可执行的 `agentrec` 候选项并标记当前文件。 |
 
 `agentrec hook <provider>` 和 `agentrec session serve` 也存在；前者由提供方运行，
 后者由第一个 hook 启动。两者都不是给人手动输入的。

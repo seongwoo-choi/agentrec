@@ -23,7 +23,7 @@ Usage:
   agentrec trash [restore <run-id> | empty | sweep <age>]
   agentrec verify <run-id>|latest
   agentrec hooks print --claude|--codex [--verify]
-  agentrec version
+  agentrec version [--verbose]
 
 Recording an interactive session: 'agentrec setup' installs the hooks into your
 Claude Code settings and your Codex hooks file ('hooks print' shows the fragment
