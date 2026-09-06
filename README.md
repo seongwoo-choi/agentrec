@@ -97,6 +97,12 @@ tag, the commit and the UTC build time; a build made any other way reports `dev`
 so an unstamped binary is never mistaken for a released one. Building from source
 needs Go 1.26 or newer; `shadow run` also needs Git 2.36 or newer.
 
+If more than one installation may be present, first use `type -a agentrec` to
+locate the shell candidates, then invoke the newly installed binary by its
+explicit path with `version --verbose`. It reports the executable actually
+invoked and every executable `agentrec` candidate in `PATH` order, marking
+candidates that identify the running file.
+
 **⭐ Commit the verification config (recommended):**
 
 ```yaml
@@ -298,7 +304,7 @@ the interactive TUI follow the same documented contract.
 | 📄 `agentrec show <run-id>\|latest [--failures-only]` | Renders one run from its bundle; `--failures-only` keeps failed actions, explicit process failures, terminal verification evidence that does not consistently pass, and repository context. Pending and neutral outcomes are omitted. Writes nothing. |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | Summarises or dumps the recorded provider events. |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | Serves the read-only viewer on loopback. |
-| 🏷️ `agentrec version` | Prints the tag, commit and UTC build time. |
+| 🏷️ `agentrec version [--verbose]` | Prints the tag, commit and UTC build time. `--verbose` also lists executable `agentrec` candidates in `PATH` order and marks the running file. |
 
 `agentrec hook <provider>` and `agentrec session serve` exist too; the provider
 runs the first and the first hook starts the second. Neither is meant to be typed.

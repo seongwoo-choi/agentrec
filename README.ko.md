@@ -94,6 +94,10 @@ go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.1
 보고하므로 릴리스 바이너리와 혼동되지 않습니다. 소스 빌드에는 Go 1.26 이상이,
 `shadow run`에는 Git 2.36 이상이 필요합니다.
 
+설치본이 여러 개일 수 있으면 먼저 `type -a agentrec`로 shell 후보를 찾고, 새로 설치한
+binary의 명시적 경로에 `version --verbose`를 실행하세요. 실제 실행 파일과 `PATH`
+순서의 모든 실행 가능한 `agentrec` 후보를 출력하고 현재 파일을 표시합니다.
+
 **⭐ 검증 설정을 커밋하세요 (권장):**
 
 ```yaml
@@ -285,7 +289,7 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 | 📄 `agentrec show <run-id>\|latest [--failures-only]` | 번들에서 run 하나를 렌더합니다. `--failures-only`는 실패한 action, 명시적인 process 실패, 일관되게 통과하지 않은 최종 verification 증거와 repository context만 유지합니다. pending과 중립 상태는 제외합니다. 아무것도 쓰지 않습니다. |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 기록된 provider 이벤트를 요약하거나 덤프합니다. |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 읽기 전용 viewer를 loopback에 띄웁니다. |
-| 🏷️ `agentrec version` | 태그, 커밋, UTC 빌드 시각을 출력합니다. |
+| 🏷️ `agentrec version [--verbose]` | 태그, 커밋, UTC 빌드 시각을 출력합니다. `--verbose`는 `PATH` 순서의 실행 가능한 `agentrec` 후보를 나열하고 현재 파일을 표시합니다. |
 
 `agentrec hook <provider>`와 `agentrec session serve`도 있습니다. 앞의 것은
 provider가 실행하고, 뒤의 것은 첫 hook이 띄웁니다. 둘 다 직접 입력하는 명령이
