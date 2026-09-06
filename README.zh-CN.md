@@ -269,7 +269,7 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 从同一个已提交基线出发，在相互隔离的工作树中把同一任务记录两次。 |
 | ⚖️ `agentrec shadow show <group-id>` | 重新渲染一次已记录的比较，只呈现证据。 |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]` | 按时间倒序列出运行记录。`--failures-only` 仅保留明确的进程失败与未能一致通过的终态验证证据，并省略待定和中性结果。它可与 `--cwd` 组合，但不能与精确状态筛选器同时使用。`--json` 输出带模式版本、并包含不可读运行记录数量的机器可读结果。 |
-| 📄 `agentrec show <run-id>\|latest [--failures-only]` | 从证据包渲染一次运行；`--failures-only` 仅保留失败操作、明确的进程失败、未能一致通过的终态验证证据，以及仓库上下文。待定与中性结果会被省略。不写入任何内容。 |
+| 📄 `agentrec show <run-id>\|latest [--failures-only] [--json]` | 从证据包渲染一次运行；`--failures-only` 仅保留失败操作、明确的进程失败、未能一致通过的终态验证证据，以及仓库上下文。待定与中性结果会被省略。`--json` 不包含 raw provider payload，并将同一份 bounded、sanitized report 输出为带模式版本的 document。不写入任何内容。 |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 汇总或导出已记录的提供方事件。 |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 在回环地址上提供只读查看器。 |
 | 🏷️ `agentrec version [--verbose]` | 输出标签、提交和 UTC 构建时间。`--verbose` 还会按 `PATH` 顺序列出可执行的 `agentrec` 候选项并标记当前文件。 |

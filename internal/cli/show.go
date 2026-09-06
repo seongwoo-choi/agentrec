@@ -63,7 +63,10 @@ const (
 )
 
 // latestRun names the newest run instead of one particular run.
-const latestRun = "latest"
+const (
+	latestRun = "latest"
+	showUsage = "usage: agentrec show <run-id>|latest [--failures-only] [--json]\n"
+)
 
 // unknownValue stands in for a field a run has not recorded, so an unfinished
 // or interrupted run reports what is missing rather than an empty column.
@@ -82,8 +85,13 @@ type processResult struct {
 // failures by their exit code: 2 means the command was called wrongly, 1 means
 // the run could not be read.
 func runShow(args []string, stdout, stderr io.Writer) int {
-	if len(args) < 1 || len(args) > 2 || len(args) == 2 && args[1] != "--failures-only" {
-		fmt.Fprint(stderr, "usage: agentrec show <run-id>|latest [--failures-only]\n")
+	if len(args) < 1 {
+		fmt.Fprint(stderr, showUsage)
+		return 2
+	}
+	opts, ok := parseShowOptions(args[1:])
+	if !ok {
+		fmt.Fprint(stderr, showUsage)
 		return 2
 	}
 	if args[0] != latestRun {
@@ -106,12 +114,17 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	rep, err := readRunWithOptions(root, runID, showOptions{failuresOnly: len(args) == 2})
+	rep, err := readRunWithOptions(root, runID, opts)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if err := report.RenderTerminal(stdout, rep); err != nil {
+	if opts.json {
+		err = report.RenderJSON(stdout, runID, rep)
+	} else {
+		err = report.RenderTerminal(stdout, rep)
+	}
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -120,6 +133,28 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 
 type showOptions struct {
 	failuresOnly bool
+	json         bool
+}
+
+func parseShowOptions(args []string) (showOptions, bool) {
+	var opts showOptions
+	for _, arg := range args {
+		switch arg {
+		case "--failures-only":
+			if opts.failuresOnly {
+				return showOptions{}, false
+			}
+			opts.failuresOnly = true
+		case "--json":
+			if opts.json {
+				return showOptions{}, false
+			}
+			opts.json = true
+		default:
+			return showOptions{}, false
+		}
+	}
+	return opts, true
 }
 
 // newestRunID names the run to show when the operator asked for the latest one.

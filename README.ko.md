@@ -287,7 +287,7 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 하나의 작업을 같은 커밋에서 격리된 worktree 두 곳에 두 번 기록합니다. |
 | ⚖️ `agentrec shadow show <group-id>` | 기록된 비교를 증거만으로 다시 렌더합니다. |
 | 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]` | 실행 기록을 최신순으로 나열합니다. `--failures-only`는 명시적인 프로세스 실패와 일관되게 통과하지 않은 최종 검증 증거만 유지하며 대기 중이거나 중립인 상태는 제외합니다. `--cwd`와 조합할 수 있지만 정확한 상태 필터와는 함께 쓸 수 없습니다. `--json`은 읽을 수 없는 run 수를 포함한 schema-versioned machine-readable 결과를 출력합니다. |
-| 📄 `agentrec show <run-id>\|latest [--failures-only]` | 번들에서 run 하나를 렌더합니다. `--failures-only`는 실패한 action, 명시적인 process 실패, 일관되게 통과하지 않은 최종 verification 증거와 repository context만 유지합니다. pending과 중립 상태는 제외합니다. 아무것도 쓰지 않습니다. |
+| 📄 `agentrec show <run-id>\|latest [--failures-only] [--json]` | 번들에서 run 하나를 렌더합니다. `--failures-only`는 실패한 action, 명시적인 process 실패, 일관되게 통과하지 않은 최종 verification 증거와 repository context만 유지합니다. pending과 중립 상태는 제외합니다. `--json`은 raw provider payload 없이 같은 bounded·sanitized report를 schema-versioned document로 출력합니다. 아무것도 쓰지 않습니다. |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | 기록된 provider 이벤트를 요약하거나 덤프합니다. |
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 읽기 전용 viewer를 loopback에 띄웁니다. |
 | 🏷️ `agentrec version [--verbose]` | 태그, 커밋, UTC 빌드 시각을 출력합니다. `--verbose`는 `PATH` 순서의 실행 가능한 `agentrec` 후보를 나열하고 현재 파일을 표시합니다. |
