@@ -160,6 +160,104 @@ func TestListReportsRunsNewestFirstWithStableTieBreak(t *testing.T) {
 	}
 }
 
+func TestListJSONEmitsVersionedFilteredRuns(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-pass", "claude", early, "completed")
+	writeVerification(t, root, "run-pass", passedVerification())
+	writeRun(t, root, "run-fail", "codex", late, "failed")
+	writeVerification(t, root, "run-fail", passedVerification())
+
+	code, stdout, stderr := run(t, "list", "--failures-only", "--json")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := "{\"schemaVersion\":1,\"runs\":[{\"id\":\"run-fail\",\"provider\":\"codex\",\"project\":\"tmp\",\"startedAt\":\"2026-07-27T10:00:00Z\",\"exit\":\"failed\",\"verification\":\"PASS\"}],\"unreadableRuns\":0}\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListJSONEmitsAnEmptyRunArray(t *testing.T) {
+	home(t)
+
+	code, stdout, stderr := run(t, "list", "--json")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := "{\"schemaVersion\":1,\"runs\":[],\"unreadableRuns\":0}\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListJSONReportsUnreadableRunsWithoutHumanDiagnostics(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-broken", "claude", late, "completed")
+	if err := os.WriteFile(filepath.Join(root, "run-broken", manifestFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run(t, "list", "--json")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := "{\"schemaVersion\":1,\"runs\":[],\"unreadableRuns\":1}\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListJSONComposesWithFailuresOnlyInEveryOrder(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-fail", "codex", late, "failed")
+	writeVerification(t, root, "run-fail", passedVerification())
+
+	for _, args := range [][]string{
+		{"list", "--json", "--failures-only"},
+		{"list", "--failures-only", "--json"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 0 || stderr != "" {
+			t.Fatalf("run(%q) exit = %d, stderr = %q", args, code, stderr)
+		}
+		var output listJSONOutput
+		if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+			t.Fatalf("run(%q) invalid JSON: %v", args, err)
+		}
+		if len(output.Runs) != 1 || output.Runs[0].ID != "run-fail" {
+			t.Errorf("run(%q) output = %#v, want run-fail", args, output)
+		}
+	}
+}
+
+func TestListJSONRejectsDuplicateFlag(t *testing.T) {
+	home(t)
+
+	code, stdout, stderr := run(t, "list", "--json", "--json")
+
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if stderr != listUsage {
+		t.Errorf("stderr = %q, want %q", stderr, listUsage)
+	}
+}
+
 func TestListFiltersByExitReason(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-a", "claude", early, "completed")
