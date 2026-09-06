@@ -40,7 +40,7 @@
 이를 섞지 않습니다. 그래서 코드 리뷰, 장애 조사, 인수인계, 새 에이전트 버전을
 믿을지에 대한 판단이 요약이 아니라 관측된 사실에서 출발합니다.
 
-[릴리스 노트](docs/releases/v0.7.1.md) ·
+[릴리스 노트](docs/releases/v0.8.0.md) ·
 [설계 노트](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 증거](docs/dogfood/2026-07-28-evidence.md) ·
@@ -54,12 +54,11 @@
 
 ## 빠른 시작
 
-> **상태:** v0.7.1이 최신 릴리스입니다. run을 사후에 검증할 수 있습니다. 저장소에
-> 커밋된 검사를 오늘 다시 실행하고, 그 결과를 별도의 사후 측정으로 기록하며 HEAD가
-> 그동안 움직였는지 함께 남깁니다. 임의의 두 run을 화면에서 나란히 비교할 수도
-> 있습니다. 저장소가 얼마나 드는지도 이제 말해 줍니다. `agentrec status`가 디스크
-> 사용량을 알려주고, `agentrec trash sweep 30d`가 오래된 run을 휴지통으로 옮기며,
-> 실행 중인 run을 따라갈 때 스트림 전체를 몇 초마다 다시 복사하지 않습니다.
+> **상태:** v0.8.0이 최신 릴리스입니다. 실패 조사는 이제 CLI와 viewer의 단일 canonical
+> failure union에서 시작합니다. 실패 run을 나열하고, run 하나를 실패 증거만 남겨 보거나,
+> 같은 필터를 공유 가능한 viewer URL에 유지할 수 있습니다. `agentrec list --json`은 bounded
+> run 목록을 로컬 도구에 제공하고, `agentrec version --verbose`는 PATH가 실제 선택한
+> binary를 식별합니다.
 >
 > v0.6.0에서는 실행 중인 세션의 실시간 화면과 모든 run 검색이 추가됐고,
 > v0.5.0에서는 휴지통으로의 삭제, 무한 스크롤, transcript 기반 사용량·모델, `UNAVAILABLE`
@@ -77,14 +76,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.7.1_darwin_arm64.tar.gz
+archive=agentrec_0.8.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.7.1_darwin_arm64/agentrec version
+./agentrec_0.8.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.1
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.8.0
 ```
 
 태그된 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`
@@ -470,7 +469,7 @@ run은 `agentrec trash empty` 전까지 `trash/`에서 기다리고, 실행 중�
 
 ## 문서
 
-- [v0.7.1 릴리스 노트](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.8.0 릴리스 노트](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [플라이트 레코더 설계](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 증거 — recorder](docs/dogfood/2026-07-28-evidence.md): 고정된 20회
@@ -490,7 +489,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.7.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.8.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 릴리스 아카이브를 로컬에서 빌드할 뿐 아무것도

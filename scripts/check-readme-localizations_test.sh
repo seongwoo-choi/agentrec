@@ -38,10 +38,10 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-needle = "agentrec version"
+needle = "\nagentrec version\n"
 if needle not in text:
     raise SystemExit("test fixture does not contain command")
-path.write_text(text.replace(needle, "agentrec not-version", 1), encoding="utf-8")
+path.write_text(text.replace(needle, "\nagentrec not-version\n", 1), encoding="utf-8")
 PY
 expect_rejected "executable code blocks"
 

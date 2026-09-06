@@ -41,7 +41,7 @@
 コードレビュー、障害調査、引き継ぎ、新しいエージェントバージョンを信頼するかの判断を、
 要約ではなく観測された事実から始められます。
 
-[リリースノート](docs/releases/v0.7.1.md) ·
+[リリースノート](docs/releases/v0.8.0.md) ·
 [設計ノート](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood の証拠](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,12 +55,11 @@
 
 ## クイックスタート
 
-> **ステータス:** v0.7.1 が最新リリースです。run は後から再検証できます。リポジトリに
-> コミット済みの検査を今日もう一度実行し、その結果を独立した後日の測定として記録し、
-> HEAD がその間に動いたかどうかも残します。任意の 2 つの run をページ上で並べて比較する
-> こともできます。ストアが何を消費しているかも分かるようになりました。`agentrec status`
-> がディスク使用量を示し、`agentrec trash sweep 30d` が古い run をゴミ箱へ移し、実行中の
-> run を追いかけるときにストリーム全体を数秒ごとにコピーし直すことがなくなりました。
+> **ステータス:** v0.8.0 が最新リリースです。失敗調査は CLI と viewer で共有する 1 つの
+> canonical failure union から始められます。失敗した run の一覧、1 run の失敗証拠だけの表示、
+> 同じフィルターを保持した共有可能な viewer URL を利用できます。`agentrec list --json` は
+> bounded な run 一覧をローカルツールへ提供し、`agentrec version --verbose` は PATH が実際に
+> 選んだバイナリを特定します。
 >
 > v0.6.0 では実行中セッションのライブ表示とすべての run を対象とする検索を追加し、
 > v0.5.0 ではゴミ箱への run の削除、無限スクロール、トランスクリプトから読み取る使用量と
@@ -78,14 +77,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.7.1_darwin_arm64.tar.gz
+archive=agentrec_0.8.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.7.1_darwin_arm64/agentrec version
+./agentrec_0.8.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.7.1
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.8.0
 ```
 
 各タグ付きリリースには `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64`
@@ -484,7 +483,7 @@ run は `agentrec trash empty` まで `trash/` で待ち、動作中のビュー
 
 ## ドキュメント
 
-- [v0.7.1 のリリースノート](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.8.0 のリリースノート](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [フライトレコーダーの設計](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood の証拠 — recorder](docs/dogfood/2026-07-28-evidence.md): 固定 20 回の
@@ -504,7 +503,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.7.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.8.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` はリリースアーカイブをローカルでビルドするだけで、何も公開
