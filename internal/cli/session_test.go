@@ -128,10 +128,15 @@ func sendRaw(t *testing.T, socket string, raw []byte) bool {
 
 func waitExit(t *testing.T, done <-chan int) int {
 	t.Helper()
+	return waitExitWithin(t, done, 60*time.Second)
+}
+
+func waitExitWithin(t *testing.T, done <-chan int, within time.Duration) int {
+	t.Helper()
 	select {
 	case code := <-done:
 		return code
-	case <-time.After(60 * time.Second):
+	case <-time.After(within):
 		t.Fatal("recorder did not exit")
 		return -1
 	}
@@ -1188,7 +1193,10 @@ func TestSessionKeepsRecordingWhenRedactionGrowsALinePastTheLimit(t *testing.T) 
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "true"}, "tool_use_id": "toolu_1", "tool_response": ""}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookStop, map[string]any{"last_assistant_message": "ok", "prompt_id": "p-1"}))
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
-	if code := waitExit(t, done); code != 0 {
+	// Processing the near-limit redaction fixture under -race takes close to the
+	// default hang deadline on an otherwise idle machine. Keep enough scheduler
+	// margin for the same invariant to run inside the full suite.
+	if code := waitExitWithin(t, done, 2*time.Minute); code != 0 {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
 	}
 	dir := onlyRunDir(t, root)
