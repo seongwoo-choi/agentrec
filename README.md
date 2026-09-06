@@ -41,7 +41,7 @@ comes from a different observer, and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.8.0.md) ·
+[Release notes](docs/releases/v0.9.0.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,11 +55,10 @@ version starts from what was observed rather than from a summary.
 
 ## Quick start
 
-> **Status:** v0.8.0 is the latest release. Failure triage now starts from one
-> canonical failure union in the CLI and viewer: list failures, reduce one run
-> to its failed evidence, or keep the same filter in a shareable viewer URL.
-> `agentrec list --json` exposes the bounded run inventory to local tools, and
-> `agentrec version --verbose` identifies the binary actually selected by PATH.
+> **Status:** v0.9.0 is the latest release. Local automation can now complete the
+> machine-readable failure workflow: discover runs with `agentrec list --json`,
+> then inspect the bounded, sanitized evidence with `agentrec show <run-id> --json`
+> or combine it with `--failures-only`. Raw provider payloads remain excluded.
 >
 > v0.6.0 added the live view of a running session and search across every run;
 > v0.5.0 added deleting runs into a trash, infinite scroll, usage and model
@@ -78,14 +77,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.8.0_darwin_arm64.tar.gz
+archive=agentrec_0.9.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.8.0_darwin_arm64/agentrec version
+./agentrec_0.9.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.8.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.9.0
 ```
 
 Each tagged release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -487,7 +486,7 @@ directory.
 
 ## Documentation
 
-- [Release notes for v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [Release notes for v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed
@@ -508,7 +507,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.8.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.9.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the release archives locally and publishes
