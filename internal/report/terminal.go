@@ -35,6 +35,38 @@ type Report struct {
 	Verification  []Field
 }
 
+type jsonField struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type jsonAction struct {
+	ID         string           `json:"id"`
+	ParentID   string           `json:"parentId,omitempty"`
+	Type       string           `json:"type"`
+	Provider   string           `json:"provider,omitempty"`
+	Assurance  action.Assurance `json:"assurance"`
+	StartedAt  time.Time        `json:"startedAt,omitempty,omitzero"`
+	FinishedAt time.Time        `json:"finishedAt,omitempty,omitzero"`
+	Status     string           `json:"status,omitempty"`
+	Detail     string           `json:"detail,omitempty"`
+	Fields     []jsonField      `json:"fields"`
+}
+
+type jsonEvidence struct {
+	ProviderUsage []jsonField `json:"providerUsage"`
+	Supervisor    []jsonField `json:"supervisor"`
+	Repository    []jsonField `json:"repository"`
+	Verification  []jsonField `json:"verification"`
+}
+
+type jsonReport struct {
+	SchemaVersion int          `json:"schemaVersion"`
+	RunID         string       `json:"runId"`
+	Actions       []jsonAction `json:"actions"`
+	Evidence      jsonEvidence `json:"evidence"`
+}
+
 // Section titles, kept identical between renderers so a terminal timeline and a
 // Markdown one describe the same evidence sources.
 const (
@@ -98,6 +130,39 @@ func RenderTerminal(w io.Writer, report Report) error {
 		}
 	}
 	return out.err
+}
+
+// RenderJSON writes the same bounded, sanitized report as a versioned JSON
+// document. Raw provider input and result payloads are intentionally excluded.
+func RenderJSON(w io.Writer, runID string, report Report) error {
+	actions := make([]jsonAction, 0, len(report.Actions))
+	for _, a := range report.Actions {
+		view := viewOf(a)
+		actions = append(actions, jsonAction{
+			ID: safe(a.ID), ParentID: safe(a.ParentID), Type: safe(a.Type), Provider: safe(a.Provider),
+			Assurance: action.Assurance(safe(string(a.Assurance))), StartedAt: a.StartedAt, FinishedAt: a.FinishedAt,
+			Status: safe(a.Status), Detail: safe(view.Detail), Fields: jsonFields(view.Fields),
+		})
+	}
+	return json.NewEncoder(w).Encode(jsonReport{
+		SchemaVersion: 1,
+		RunID:         runID,
+		Actions:       actions,
+		Evidence: jsonEvidence{
+			ProviderUsage: jsonFields(report.ProviderUsage),
+			Supervisor:    jsonFields(report.Supervisor),
+			Repository:    jsonFields(report.Repository),
+			Verification:  jsonFields(report.Verification),
+		},
+	})
+}
+
+func jsonFields(fields []Field) []jsonField {
+	out := make([]jsonField, 0, len(fields))
+	for _, field := range fields {
+		out = append(out, jsonField{Name: safe(field.Name), Value: safe(field.Value)})
+	}
+	return out
 }
 
 // lineWriter writes a report a line at a time, so a rendering is never held in

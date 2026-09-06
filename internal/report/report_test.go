@@ -612,6 +612,43 @@ func TestWriterErrorsPropagate(t *testing.T) {
 	if err := RenderMarkdown(failingWriter{wantErr}, goldenReport()); !errors.Is(err, wantErr) {
 		t.Errorf("RenderMarkdown() error = %v, want %v", err, wantErr)
 	}
+	if err := RenderJSON(failingWriter{wantErr}, "run-a", goldenReport()); !errors.Is(err, wantErr) {
+		t.Errorf("RenderJSON() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestRenderJSONCapsAndEscapesUntrustedStrings(t *testing.T) {
+	hostile := "\x1b[31m" + strings.Repeat("x", maxValueRunes+100)
+	rep := Report{
+		Actions: []action.Action{{
+			ID: hostile, ParentID: hostile, Type: hostile, Provider: hostile,
+			Assurance: action.Assurance(hostile), Status: hostile,
+			Input: mustInput(t, "path", hostile),
+		}},
+		Supervisor: []Field{{Name: hostile, Value: hostile}},
+	}
+	var out strings.Builder
+	if err := RenderJSON(&out, "run-a", rep); err != nil {
+		t.Fatalf("RenderJSON(): %v", err)
+	}
+	var got jsonReport
+	if err := json.Unmarshal([]byte(out.String()), &got); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	want := safe(hostile)
+	a := got.Actions[0]
+	for name, value := range map[string]string{
+		"id": a.ID, "parentId": a.ParentID, "type": a.Type, "provider": a.Provider,
+		"assurance": string(a.Assurance), "status": a.Status,
+		"field name": got.Evidence.Supervisor[0].Name, "field value": got.Evidence.Supervisor[0].Value,
+	} {
+		if value != want {
+			t.Errorf("%s = %q, want bounded escaped value %q", name, value, want)
+		}
+	}
+	if wantDetail := safe(singleLine(hostile)); a.Detail != wantDetail {
+		t.Errorf("detail = %q, want bounded escaped value %q", a.Detail, wantDetail)
+	}
 }
 
 type failingWriter struct{ err error }

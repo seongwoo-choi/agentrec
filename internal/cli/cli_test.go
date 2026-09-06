@@ -1047,6 +1047,48 @@ func TestShowRendersTheRecordedRun(t *testing.T) {
 	}
 }
 
+func TestShowJSONEmitsVersionedSanitizedReport(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-b", "claude", late, "completed")
+
+	code, stdout, stderr := run(t, "show", "run-b", "--json")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	const want = `{"schemaVersion":1,"runId":"run-b","actions":[{"id":"a1","type":"file.read","provider":"claude","assurance":"provider_reported","startedAt":"2026-07-27T10:00:01Z","finishedAt":"2026-07-27T10:00:02Z","status":"completed","detail":"README.md","fields":[{"name":"Source","value":"claude"},{"name":"Assurance","value":"provider_reported"},{"name":"Result","value":"success"},{"name":"Duration","value":"1s"}]}],"evidence":{"providerUsage":[],"supervisor":[{"name":"Provider","value":"claude"},{"name":"Exit Reason","value":"completed"},{"name":"Exit Code","value":"0"},{"name":"Duration","value":"1.5s"},{"name":"Warnings","value":"0"}],"repository":[],"verification":[]}}` + "\n"
+	if stdout != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", stdout, want)
+	}
+	for _, marker := range []string{"input-payload-marker", "result-payload-marker", "result-json-marker"} {
+		if strings.Contains(stdout, marker) {
+			t.Errorf("stdout contains unrendered payload marker %q", marker)
+		}
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestShowJSONComposesWithFailuresOnlyInEveryOrder(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-b", "claude", late, "completed")
+
+	for _, args := range [][]string{
+		{"show", "run-b", "--failures-only", "--json"},
+		{"show", "run-b", "--json", "--failures-only"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 0 {
+			t.Fatalf("run(%q) exit code = %d, want 0 (stderr %q)", args, code, stderr)
+		}
+		const want = `{"schemaVersion":1,"runId":"run-b","actions":[],"evidence":{"providerUsage":[],"supervisor":[],"repository":[],"verification":[]}}` + "\n"
+		if stdout != want {
+			t.Errorf("run(%q) stdout = %q, want %q", args, stdout, want)
+		}
+	}
+}
+
 func TestShowFailuresOnlyKeepsFailureEvidenceAndRepositoryContext(t *testing.T) {
 	root := home(t)
 	b, err := storage.Create(root, "run-b", storage.Manifest{
@@ -1098,6 +1140,21 @@ func TestShowFailuresOnlyKeepsFailureEvidenceAndRepositoryContext(t *testing.T) 
 	}
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
+	}
+
+	code, stdout, stderr = run(t, "show", "run-b", "--failures-only", "--json")
+	if code != 0 {
+		t.Fatalf("JSON exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	for _, want := range []string{`"id":"a2"`, `"name":"Exit","value":"7"`, `"name":"Files","value":"3 (2 tracked, 1 untracked)"`, `"name":"Status","value":"FAIL"`, `"name":"Check","value":"FAIL failing  \"./fail.sh\"  exit 7"`} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("JSON stdout =\n%s\nwant it to contain %q", stdout, want)
+		}
+	}
+	for _, unwanted := range []string{`"id":"a1"`, `PASS passing`, `input-payload-marker`, `result-payload-marker`} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("JSON stdout =\n%s\nwant it to omit %q", stdout, unwanted)
+		}
 	}
 }
 
@@ -1194,7 +1251,23 @@ func TestShowRejectsUnknownOption(t *testing.T) {
 	if stdout != "" {
 		t.Errorf("stdout = %q, want empty", stdout)
 	}
-	if stderr != "usage: agentrec show <run-id>|latest [--failures-only]\n" {
+	if stderr != showUsage {
+		t.Errorf("stderr = %q, want show usage", stderr)
+	}
+}
+
+func TestShowRejectsDuplicateJSONOption(t *testing.T) {
+	home(t)
+
+	code, stdout, stderr := run(t, "show", "latest", "--json", "--json")
+
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if stderr != showUsage {
 		t.Errorf("stderr = %q, want show usage", stderr)
 	}
 }
@@ -1211,6 +1284,27 @@ func TestShowLatestSelectsTheNewestRun(t *testing.T) {
 	}
 	if stdout != wantShow {
 		t.Errorf("stdout =\n%s\nwant\n%s", stdout, wantShow)
+	}
+}
+
+func TestShowLatestJSONReportsTheResolvedRunID(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-a", "codex", early, "completed")
+	writeRun(t, root, "run-b", "claude", late, "completed")
+
+	code, stdout, stderr := run(t, "show", "latest", "--json")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	var output struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		t.Fatalf("decode stdout: %v", err)
+	}
+	if output.RunID != "run-b" {
+		t.Errorf("runId = %q, want run-b", output.RunID)
 	}
 }
 
