@@ -18,7 +18,7 @@ const runsDirName = "runs"
 // listHeader names the columns; listUsage is the one accepted command shape.
 const (
 	listHeader = "RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION"
-	listUsage  = "usage: agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]\n"
+	listUsage  = "usage: agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only]\n"
 )
 
 // runSummary is one row of the run table.
@@ -41,7 +41,17 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	exitReasonSet := false
 	verificationFilter := ""
 	verificationSet := false
+	failuresOnly := false
 	for len(args) > 0 {
+		if args[0] == "--failures-only" {
+			if failuresOnly {
+				fmt.Fprint(stderr, listUsage)
+				return 2
+			}
+			failuresOnly = true
+			args = args[1:]
+			continue
+		}
 		if len(args) < 2 {
 			fmt.Fprint(stderr, listUsage)
 			return 2
@@ -79,12 +89,17 @@ func runList(args []string, stdout, stderr io.Writer) int {
 		}
 		args = args[2:]
 	}
+	if failuresOnly && (exitReasonSet || verificationSet) {
+		fmt.Fprintln(stderr, "cli: --failures-only cannot be combined with --exit-reason or --verification-status")
+		fmt.Fprint(stderr, listUsage)
+		return 2
+	}
 	root, err := runsRoot()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	runs, unreadable, err := listRunsForTable(root, cwd, exitReasonSet, exitReasonFilter)
+	runs, unreadable, err := listRunsForTable(root, cwd, exitReasonSet, exitReasonFilter, failuresOnly)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -94,9 +109,18 @@ func runList(args []string, stdout, stderr io.Writer) int {
 			return oneLine(run.Verification) != verificationFilter
 		})
 	}
+	if failuresOnly {
+		runs = slices.DeleteFunc(runs, func(run runSummary) bool {
+			return !listProcessFailed(run.Exit) && !listVerificationFailed(run.Verification)
+		})
+	}
 
 	if len(runs) == 0 {
-		fmt.Fprint(stdout, "No runs.\n")
+		if failuresOnly {
+			fmt.Fprint(stdout, "No matching runs.\n")
+		} else {
+			fmt.Fprint(stdout, "No runs.\n")
+		}
 	} else {
 		fmt.Fprintln(stdout, listHeader)
 		for _, r := range runs {
@@ -120,13 +144,35 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func listVerificationFailed(status string) bool {
+	switch status {
+	case "PASS", "PENDING", verificationNotRun:
+		return false
+	default:
+		return true
+	}
+}
+
+func listProcessFailed(exit string) bool {
+	return viewStatusClass(exit) == "fail" || exit == "INCONSISTENT"
+}
+
 // listRunsForTable reads the manifest and verification for a row through one
 // held run root. Exit filtering happens before verification is opened, so a
 // narrowed list does not inspect evidence for rows it will discard.
-func listRunsForTable(root, cwd string, exitReasonSet bool, exitReasonFilter string) ([]runSummary, int, error) {
+func listRunsForTable(root, cwd string, exitReasonSet bool, exitReasonFilter string, failuresOnly bool) ([]runSummary, int, error) {
 	return scanRuns(root, cwd, func(runRoot *os.Root, run *runSummary) (bool, error) {
 		if exitReasonSet && oneLine(run.Exit) != exitReasonFilter {
 			return false, nil
+		}
+		if failuresOnly {
+			result, err := readProcessResultFromRoot(runRoot)
+			if err != nil {
+				return false, err
+			}
+			if explicitProcessFailed(result) && viewStatusClass(run.Exit) != "fail" {
+				run.Exit = "INCONSISTENT"
+			}
 		}
 		verification, err := readVerificationFromRoot(runRoot)
 		if err != nil {
@@ -136,6 +182,11 @@ func listRunsForTable(root, cwd string, exitReasonSet bool, exitReasonFilter str
 		if verification != nil {
 			run.Verification = verdict(verification.Status)
 			run.VerificationWarnings = len(verification.Warnings)
+			if failuresOnly {
+				if projected := failureVerification(verification); projected != nil {
+					run.Verification = verdict(projected.Status)
+				}
+			}
 		}
 		return true, nil
 	})
