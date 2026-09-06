@@ -227,6 +227,10 @@ func supervisorFailed(manifest storage.Manifest, result *processResult) bool {
 	if viewStatusClass(exitReason(manifest, result)) == "fail" {
 		return true
 	}
+	return explicitProcessFailed(result)
+}
+
+func explicitProcessFailed(result *processResult) bool {
 	if result == nil {
 		return false
 	}

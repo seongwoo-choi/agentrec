@@ -249,6 +249,174 @@ func TestListShowsAndFiltersByVerificationStatus(t *testing.T) {
 	}
 }
 
+func TestListFailuresOnlyFindsProcessOrVerificationFailures(t *testing.T) {
+	root := home(t)
+	verification := func(status string) map[string]any {
+		return map[string]any{
+			"status":      status,
+			"attribution": evidence.VerificationAttribution,
+			"checks":      []any{},
+		}
+	}
+	writeRun(t, root, "run-pass", "claude", early, "completed")
+	writeVerification(t, root, "run-pass", passedVerification())
+	writeRun(t, root, "run-pending", "codex", early, "completed")
+	writeVerification(t, root, "run-pending", verification("pending"))
+	writeRun(t, root, "run-exit", "claude", late, "failed")
+	writeVerification(t, root, "run-exit", passedVerification())
+	writeRun(t, root, "run-tainted", "codex", late, "completed")
+	writeVerification(t, root, "run-tainted", verification("tainted"))
+	writeRun(t, root, "run-verification", "claude", late, "completed")
+	writeVerification(t, root, "run-verification", verification("failed"))
+
+	code, stdout, stderr := run(t, "list", "--failures-only")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	want := strings.Join([]string{
+		"RUN ID  PROVIDER  PROJECT  STARTED  EXIT  VERIFICATION",
+		"run-verification  claude  tmp  2026-07-27T10:00:00Z  completed  FAIL",
+		"run-tainted  codex  tmp  2026-07-27T10:00:00Z  completed  TAINTED",
+		"run-exit  claude  tmp  2026-07-27T10:00:00Z  failed  PASS",
+		"",
+	}, "\n")
+	if stdout != want {
+		t.Errorf("stdout =\n%q\nwant\n%q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListFailuresOnlySaysWhenNoRunsMatch(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-pass", "claude", late, "completed")
+	writeVerification(t, root, "run-pass", passedVerification())
+
+	code, stdout, stderr := run(t, "list", "--failures-only")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if stdout != "No matching runs.\n" {
+		t.Errorf("stdout = %q, want a filtered empty state", stdout)
+	}
+}
+
+func TestListFailuresOnlyKeepsExplicitFailedVerificationCheck(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-inconsistent", "claude", late, "completed")
+	writeVerification(t, root, "run-inconsistent", map[string]any{
+		"status":      evidence.VerificationPassed,
+		"attribution": evidence.VerificationAttribution,
+		"checks": []any{
+			map[string]any{"name": "passing", "status": "passed", "command": []string{"true"}},
+			map[string]any{"name": "failing", "status": "failed", "command": []string{"false"}},
+		},
+	})
+
+	code, stdout, stderr := run(t, "list", "--failures-only")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "run-inconsistent") || !strings.Contains(stdout, "INCONSISTENT") {
+		t.Errorf("stdout = %q, want inconsistent verification retained", stdout)
+	}
+}
+
+func TestListFailuresOnlyCombinesWithCWDInEveryOrder(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-failed", "claude", late, "failed")
+
+	for _, args := range [][]string{
+		{"list", "--cwd", "/tmp", "--failures-only"},
+		{"list", "--failures-only", "--cwd", "/tmp"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 0 {
+			t.Fatalf("run(%q) exit code = %d, want 0 (stderr %q)", args, code, stderr)
+		}
+		if !strings.Contains(stdout, "run-failed") {
+			t.Errorf("run(%q) stdout = %q, want matching failure", args, stdout)
+		}
+	}
+}
+
+func TestListFailuresOnlyKeepsExplicitProcessFailureEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		result map[string]any
+	}{
+		{name: "nonzero exit", result: map[string]any{"durationMillis": 1000, "exitReason": "completed", "exitCode": 7}},
+		{name: "signal", result: map[string]any{"durationMillis": 1000, "exitReason": "completed", "signal": "killed"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := home(t)
+			writeRun(t, root, "run-failed", "claude", late, "completed")
+			raw, err := json.Marshal(test.result)
+			if err != nil {
+				t.Fatalf("encode process result: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "run-failed", processDir, resultFile), raw, 0o600); err != nil {
+				t.Fatalf("rewrite process result: %v", err)
+			}
+
+			code, stdout, stderr := run(t, "list", "--failures-only")
+
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+			}
+			if !strings.Contains(stdout, "run-failed") || !strings.Contains(stdout, "INCONSISTENT") {
+				t.Errorf("stdout = %q, want inconsistent process failure retained", stdout)
+			}
+		})
+	}
+}
+
+func TestListRejectsConflictingFailuresOnlyFilters(t *testing.T) {
+	tests := [][]string{
+		{"list", "--failures-only", "--exit-reason", "failed"},
+		{"list", "--verification-status", "FAIL", "--failures-only"},
+	}
+	for _, args := range tests {
+		t.Run(strings.Join(args[1:], "_"), func(t *testing.T) {
+			home(t)
+
+			code, stdout, stderr := run(t, args...)
+
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2", code)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+			want := "cli: --failures-only cannot be combined with --exit-reason or --verification-status\n" + listUsage
+			if stderr != want {
+				t.Errorf("stderr = %q, want %q", stderr, want)
+			}
+		})
+	}
+}
+
+func TestListRejectsDuplicateFailuresOnlyFilter(t *testing.T) {
+	home(t)
+
+	code, stdout, stderr := run(t, "list", "--failures-only", "--failures-only")
+
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if stderr != listUsage {
+		t.Errorf("stderr = %q, want %q", stderr, listUsage)
+	}
+}
+
 func TestListFiltersByEscapedFutureVerificationStatus(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-a", "claude", early, "completed")
@@ -1554,6 +1722,9 @@ func TestReadingARunDoesNotMutateItsBundle(t *testing.T) {
 	}
 	if code, _, stderr := run(t, "list"); code != 0 {
 		t.Fatalf("list exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if code, _, stderr := run(t, "list", "--failures-only"); code != 0 {
+		t.Fatalf("list --failures-only exit code = %d, want 0 (stderr %q)", code, stderr)
 	}
 
 	after := snapshot(t, filepath.Join(root, "run-a"))

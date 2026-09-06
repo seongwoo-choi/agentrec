@@ -21,7 +21,7 @@ func TestRunHelpListsCoreCommands(t *testing.T) {
 				t.Errorf("Run(%q) help output does not contain %q", args, command)
 			}
 		}
-		if !strings.Contains(stdout.String(), "agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>]") {
+		if !strings.Contains(stdout.String(), "agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only]") {
 			t.Errorf("Run(%q) help output does not document the list filters", args)
 		}
 		if stderr.Len() != 0 {
