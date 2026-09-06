@@ -690,6 +690,51 @@ test('polling refreshes a changed run warning count', async (t) => {
   assert.equal(document.querySelector('.run-warning-count').textContent.trim(), '3 warnings');
 });
 
+test('polling refreshes selected terminal run details when verification completes', async (t) => {
+  let poll;
+  let detailReads = 0;
+  const data = fixture('session_ended', '', 'session_ended');
+  data.list.generation = 'generation';
+  data.list.runs[0].verification = 'PENDING';
+  let details = {
+    ...data.details,
+    evidence: { ...data.details.evidence, verification: [{ name: 'Status', value: 'PENDING' }] },
+  };
+  data.details = () => {
+    detailReads += 1;
+    return details;
+  };
+  data.configure = (window) => {
+    window.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return delay;
+    };
+    window.clearInterval = () => {};
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(typeof poll, 'function');
+  assert.match(document.querySelector('#evidence-verification').textContent, /PENDING/);
+  assert.equal(detailReads, 1);
+  document.querySelector('#evidence-verification').focus();
+  assert.equal(document.activeElement.id, 'evidence-verification');
+  await poll();
+  assert.equal(detailReads, 1);
+
+  details = {
+    ...details,
+    evidence: { ...details.evidence, verification: [{ name: 'Status', value: 'PASS' }] },
+  };
+  data.list.runs[0] = { ...data.list.runs[0], verification: 'PASS' };
+  await poll();
+
+  assert.match(document.querySelector('#evidence-verification').textContent, /PASS/);
+  assert.equal(detailReads, 2);
+  assert.equal(document.activeElement.id, 'evidence-verification');
+});
+
 test('run list combines exact exit and verification filters', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.list.runs = [
@@ -872,10 +917,13 @@ test('a delayed A response cannot overwrite the selected B run', async (t) => {
   assert.equal(window.document.querySelector('#run-title').textContent, b.run.id);
 });
 
-test('initial run outside the first page is selected directly', async (t) => {
-  const selected = fixture('completed', 'pass', 'PASS');
+test('initial pending run outside the first page is selected and refreshed', async (t) => {
+  let poll;
+  let detailReads = 0;
+  const selected = fixture('session_ended', '', 'session_ended');
   selected.details.run.id = 'run-older-selected';
   selected.details.run.startedAt = '2024-01-01T00:00:00Z';
+  selected.details.evidence.verification = [{ name: 'Status', value: 'PENDING' }];
   selected.list.initialRunId = selected.details.run.id;
   selected.list.runs = [];
   selected.list.pageIds = ['run-newest-unreadable'];
@@ -883,9 +931,32 @@ test('initial run outside the first page is selected directly', async (t) => {
   selected.list.total = 55;
   selected.list.nextCursor = 'opaque';
   selected.list.generation = 'g1';
+  let details = selected.details;
+  selected.details = () => {
+    detailReads += 1;
+    return details;
+  };
+  selected.configure = (window) => {
+    window.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return delay;
+    };
+    window.clearInterval = () => {};
+  };
+
   const dom = await renderFixture(selected);
   t.after(() => dom.window.close());
-  assert.equal(dom.window.document.querySelector('#run-title').textContent, selected.details.run.id);
+  const { document } = dom.window;
+  assert.equal(document.querySelector('#run-title').textContent, details.run.id);
+  assert.match(document.querySelector('#evidence-verification').textContent, /PENDING/);
+
+  details = { ...details, evidence: { ...details.evidence, verification: [{ name: 'Status', value: 'PASS' }] } };
+  await poll();
+
+  assert.match(document.querySelector('#evidence-verification').textContent, /PASS/);
+  assert.equal(detailReads, 2);
+  await poll();
+  assert.equal(detailReads, 2);
 });
 
 test('run pages append explicitly and unchanged polls retain DOM nodes', async (t) => {

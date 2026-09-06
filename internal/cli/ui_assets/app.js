@@ -3100,7 +3100,30 @@ function shortID(id) {
     if (state.run && state.run.run.id === id) updateRunNavigationURL('run', id, 'replace');
   }
 
-  // Live refresh: re-fetch /api/runs and redraw the list in place. Selection, focus and the loaded run are untouched.
+  async function refreshSelectedRun() {
+    if (!state.run || isLive() || state.runAbortController) return;
+    const id = state.run.run.id;
+    const summary = state.runs.find((run) => run.id === id);
+    const verification = verificationSummary(state.run.evidence.verification).value;
+    if (!summary && verification !== 'PENDING') return;
+    const differs = !summary
+      || summary.exit !== state.run.run.exitReason
+      || summary.verification !== verification
+      || summary.statusClass !== state.run.run.statusClass
+      || summary.statusLabel !== state.run.run.statusLabel
+      || Number(summary.warningCount || 0) !== Number(state.run.run.warningCount || 0);
+    if (!differs) return;
+    const generation = state.loadGeneration;
+    const verificationFocused = document.activeElement && document.activeElement.id === 'evidence-verification';
+    const fresh = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`, state.pollController.signal);
+    if (generation !== state.loadGeneration || !state.run || state.run.run.id !== id) return;
+    state.run = fresh;
+    live.signature = runSignature(fresh);
+    renderRunHeader();
+    if (verificationFocused) $('evidence-verification').focus({ preventScroll: true });
+  }
+
+  // Live refresh: re-fetch /api/runs and redraw the list in place. A terminal selected run is re-read only when its summary facts changed.
   async function refreshRuns() {
     if (state.pollController || document.visibilityState === 'hidden') return;
     state.pollController = new AbortController();
@@ -3109,6 +3132,7 @@ function shortID(id) {
       state.storeBytes = list.storeBytes || 0;
       state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
+      await refreshSelectedRun();
       await autoSelect(list);
     } catch (error) {
       // ponytail: poll failures stay quiet; the next tick retries and user-initiated loads still surface errors.
