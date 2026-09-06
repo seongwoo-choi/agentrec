@@ -43,6 +43,8 @@
       'All verification': '모든 검증 상태',
       'Filter by exit reason': '종료 상태로 필터링',
       'Filter by verification': '검증 상태로 필터링',
+      'Failures only': '실패만',
+      '{shown} of {loaded} loaded': '로드된 {loaded}개 중 {shown}개',
       'No runs recorded yet': '기록된 실행이 없습니다',
       'No run selected': '선택된 실행이 없습니다',
       'Start a Claude Code or Codex session; it appears here when it ends.': 'Claude Code 또는 Codex 세션을 시작하면 종료 시 여기에 표시됩니다.',
@@ -311,6 +313,8 @@
       'All verification': 'すべての検証状態',
       'Filter by exit reason': '終了状態で絞り込む',
       'Filter by verification': '検証状態で絞り込む',
+      'Failures only': '失敗のみ',
+      '{shown} of {loaded} loaded': '読込済み {loaded} 件中 {shown} 件',
       'No runs recorded yet': '記録された実行はありません',
       'No run selected': '実行が選択されていません',
       'Start a Claude Code or Codex session; it appears here when it ends.': 'Claude Code または Codex のセッションを開始すると、終了時にここに表示されます。',
@@ -579,6 +583,8 @@
       'All verification': '所有验证状态',
       'Filter by exit reason': '按退出状态筛选',
       'Filter by verification': '按验证状态筛选',
+      'Failures only': '仅显示失败',
+      '{shown} of {loaded} loaded': '已加载 {loaded} 条中的 {shown} 条',
       'No runs recorded yet': '尚未记录任何运行',
       'No run selected': '未选择运行',
       'Start a Claude Code or Codex session; it appears here when it ends.': '启动 Claude Code 或 Codex 会话，结束后会显示在这里。',
@@ -1142,6 +1148,7 @@ function shortID(id) {
     $('run-search').value = params.get('q') || '';
     setRunFilterValue('run-exit-filter', params.get('exit') || '');
     setRunFilterValue('run-verification-filter', params.get('verification') || '');
+    $('run-failures-only').checked = params.get('failures') === '1';
   }
 
   function focusRunEvidenceFromURL(defaultFocus = '') {
@@ -1178,6 +1185,8 @@ function shortID(id) {
       if (value.trim()) url.searchParams.set(name, value);
       else url.searchParams.delete(name);
     }
+    if ($('run-failures-only').checked) url.searchParams.set('failures', '1');
+    else url.searchParams.delete('failures');
     history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
   }
 
@@ -1200,10 +1209,11 @@ function shortID(id) {
     setRunFilterValue(id, selected);
   }
 
-  const runMatches = (run, query, exit, verification) =>
+  const runMatches = (run, query, exit, verification, failuresOnly) =>
     (!query || `${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase().includes(query))
     && (!exit || run.exit === exit)
-    && (!verification || run.verification === verification);
+    && (!verification || run.verification === verification)
+    && (!failuresOnly || run.failure === true);
 
   function renderRunList() {
     const query = $('run-search').value.trim().toLowerCase();
@@ -1211,19 +1221,21 @@ function shortID(id) {
     syncRunFilter('run-verification-filter', state.runs.map((run) => run.verification), 'All verification');
     const exit = $('run-exit-filter').value;
     const verification = $('run-verification-filter').value;
+    const failuresOnly = $('run-failures-only').checked;
     const list = $('run-list');
     const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.runId : undefined;
     list.replaceChildren();
     let shown = 0;
     for (const run of state.runs) {
-      if (!runMatches(run, query, exit, verification)) continue;
+      if (!runMatches(run, query, exit, verification, failuresOnly)) continue;
       shown += 1;
       const button = runItem(run, Boolean(state.run && state.run.run.id === run.id));
       button.addEventListener('click', () => navigateRun(run.id));
       list.append(button);
       if (focused === run.id) button.focus({ preventScroll: true });
     }
-    $('run-count').textContent = String(state.runs.length);
+    const filtered = Boolean(query || exit || verification || failuresOnly);
+    $('run-count').textContent = filtered ? t('{shown} of {loaded} loaded', { shown, loaded: state.runs.length }) : String(state.runs.length);
     const more = $('run-load-more');
     more.textContent = t('Load more');
     more.classList.toggle('hidden', !state.runNextCursor);
@@ -1240,7 +1252,7 @@ function shortID(id) {
     if (shown === 0) {
       let emptyMessage = 'No loaded runs match these filters.';
       if (state.runs.length === 0) emptyMessage = 'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.';
-      else if (query && (exit || verification)) emptyMessage = 'No loaded runs match this search and these filters.';
+      else if (query && (exit || verification || failuresOnly)) emptyMessage = 'No loaded runs match this search and these filters.';
       else if (query) emptyMessage = 'No runs match this search.';
       empty.textContent = t(emptyMessage);
       status.textContent = t(emptyMessage);
@@ -3036,7 +3048,7 @@ function shortID(id) {
       ? [...previousRuns, ...incoming.filter((run) => !previousRuns.some((current) => current.id === run.id))]
       : (!append && sameGeneration ? [...incoming, ...previousRuns.filter((run) => !pageIDs.has(run.id))] : incoming);
     // ponytail: rebuild the list only when its content changed; a rebuild mid-click would swallow the click.
-    const signature = JSON.stringify(runs.map((run) => [run.id, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.startedAt]));
+    const signature = JSON.stringify(runs.map((run) => [run.id, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.failure, run.startedAt]));
     const changed = signature !== state.runsSignature;
     state.runsSignature = signature;
     state.runs = runs;
@@ -3087,8 +3099,9 @@ function shortID(id) {
     const query = $('run-search').value.trim().toLowerCase();
     const exit = $('run-exit-filter').value;
     const verification = $('run-verification-filter').value;
-    if (query || exit || verification) {
-      const match = state.runs.find((run) => runMatches(run, query, exit, verification));
+    const failuresOnly = $('run-failures-only').checked;
+    if (query || exit || verification || failuresOnly) {
+      const match = state.runs.find((run) => runMatches(run, query, exit, verification, failuresOnly));
       if (!match) return;
       await loadRun(match.id, true);
       if (state.run && state.run.run.id === match.id) updateRunNavigationURL('run', match.id, 'replace');
@@ -3223,6 +3236,7 @@ function shortID(id) {
   $('run-search').addEventListener('input', changeRunFilters);
   $('run-exit-filter').addEventListener('change', changeRunFilters);
   $('run-verification-filter').addEventListener('change', changeRunFilters);
+  $('run-failures-only').addEventListener('change', changeRunFilters);
   $('run-load-more').addEventListener('click', loadMoreRuns);
   const searchAll = $('search-all');
   searchAll.addEventListener('input', scheduleSearch);

@@ -31,6 +31,7 @@ type runSummary struct {
 	Verification         string
 	WarningCount         int
 	VerificationWarnings int
+	Failure              bool
 }
 
 // runList prints the recorded runs, newest first.

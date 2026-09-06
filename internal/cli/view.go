@@ -55,6 +55,7 @@ type viewRunSummary struct {
 	StatusClass  string    `json:"statusClass"`
 	StatusLabel  string    `json:"statusLabel"`
 	WarningCount int       `json:"warningCount"`
+	Failure      bool      `json:"failure"`
 }
 
 func viewStatusClass(value string) string {
@@ -328,9 +329,14 @@ func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error)
 	if err != nil {
 		return runSummary{}, err
 	}
+	result, err := readProcessResultFromRoot(runRoot)
+	if err != nil {
+		return runSummary{}, err
+	}
 	run := runSummary{
 		ID: runID, Provider: manifest.Provider, Project: projectName(manifest.CWD),
 		StartedAt: manifest.StartedAt, Exit: exitReason(manifest, nil), WarningCount: manifest.WarningCount,
+		Failure: supervisorFailed(manifest, result),
 	}
 	verification, err := readVerificationFromRoot(runRoot)
 	if err != nil {
@@ -340,6 +346,7 @@ func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error)
 	if verification != nil {
 		run.Verification = verdict(verification.Status)
 		run.VerificationWarnings = len(verification.Warnings)
+		run.Failure = run.Failure || failureVerification(verification) != nil
 	}
 	return run, nil
 }
@@ -731,6 +738,7 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 				ID: run.ID, Provider: run.Provider, Project: run.Project,
 				StartedAt: run.StartedAt, Exit: run.Exit, Verification: run.Verification,
 				StatusClass: statusClass, StatusLabel: statusLabel, WarningCount: run.WarningCount + run.VerificationWarnings,
+				Failure: run.Failure,
 			})
 		}
 		initial := initialRunID
