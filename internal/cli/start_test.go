@@ -19,6 +19,7 @@ import (
 // start leaves a viewer running after it returns, records where it is, and
 // stop ends that viewer and forgets it; status tells the two states apart.
 func TestStartStopAndStatusManageABackgroundViewer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := home(t)
 	bin := stubProviders(t, agentrecName)
 	restore := sessionExecutable
