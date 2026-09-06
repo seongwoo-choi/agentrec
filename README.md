@@ -179,8 +179,10 @@ copy. While a run is still going, its page keeps up on its own and shows the
 working tree as it is now; the search field in the top bar looks for a word in
 every run — where it happened, its prompt, its actions — and opens the run at
 the matching action. The sidebar filters the runs loaded into the browser by
-their exact exit and verification values. The sidebar search and filters are
-reflected in `?q=...&exit=...&verification=...`, so those settings survive
+their exact exit and verification values. **Failures only** uses the same
+failure union as `agentrec list --failures-only`, and combines with those exact
+filters to narrow it further. The sidebar search and filters are reflected in
+`?q=...&exit=...&verification=...&failures=1`, so those settings survive
 reloads and can be bookmarked or shared alongside comparison links in
 `#compare=...`. A shared link applies them to the runs loaded on arrival;
 **Load more** extends that set. A selected run and evidence destination are

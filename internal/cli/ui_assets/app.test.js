@@ -668,6 +668,31 @@ test('polling refreshes filters when exact status values change', async (t) => {
   assert.deepEqual(Array.from(document.querySelector('#run-exit-filter').options, (option) => option.value), ['', 'new-exit']);
 });
 
+test('polling redraws an active failure filter when only failure changes', async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.generation = 'generation';
+  data.list.runs[0].failure = false;
+  data.configure = (window) => {
+    window.history.replaceState({}, '', `/?run=${data.details.run.id}&failures=1`);
+    window.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return delay;
+    };
+    window.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(typeof poll, 'function');
+  assert.equal(document.querySelectorAll('.run-item').length, 0);
+
+  data.list.runs[0] = { ...data.list.runs[0], failure: true };
+  await poll();
+
+  assert.deepEqual(Array.from(document.querySelectorAll('.run-item'), (item) => item.dataset.runId), [data.details.run.id]);
+});
+
 test('polling refreshes a changed run warning count', async (t) => {
   let poll;
   const data = fixture('completed', 'pass', 'PASS');
@@ -757,6 +782,127 @@ test('run list combines exact exit and verification filters', async (t) => {
   assert.deepEqual(Array.from(document.querySelectorAll('.run-item'), (item) => item.dataset.runId), ['run-fail']);
 });
 
+test('run list filters the canonical failure union and stores it in the URL', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: data.details.run.id, failure: false },
+    { ...data.list.runs[0], id: 'run-process-failed', exit: 'nonzero', verification: 'PASS', failure: true },
+    { ...data.list.runs[0], id: 'run-verification-failed', exit: 'completed', verification: 'FAIL', failure: true },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const failures = document.querySelector('#run-failures-only');
+
+  failures.checked = true;
+  failures.dispatchEvent(new Event('change', { bubbles: true }));
+
+  assert.deepEqual(Array.from(document.querySelectorAll('.run-item'), (item) => item.dataset.runId), [
+    'run-process-failed',
+    'run-verification-failed',
+  ]);
+  const count = document.querySelector('#run-count');
+  assert.equal(count.textContent, '2 of 3 loaded');
+  assert.equal(count.getAttribute('role'), 'status');
+  assert.equal(count.getAttribute('aria-live'), 'polite');
+  assert.equal(new URL(dom.window.location.href).searchParams.get('failures'), '1');
+});
+
+test('run list restores failure filtering and composes it with exact filters', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: data.details.run.id, failure: false },
+    { ...data.list.runs[0], id: 'run-process-failed', exit: 'nonzero', verification: 'PASS', failure: true },
+    { ...data.list.runs[0], id: 'run-verification-failed', exit: 'completed', verification: 'FAIL', failure: true },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture({
+    ...data,
+    configure(window) {
+      window.history.replaceState({}, '', `/?run=${data.details.run.id}&failures=1&exit=completed`);
+    },
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+
+  assert.equal(document.querySelector('#run-failures-only').checked, true);
+  assert.equal(document.querySelector('#run-exit-filter').value, 'completed');
+  assert.deepEqual(Array.from(document.querySelectorAll('.run-item'), (item) => item.dataset.runId), [
+    'run-verification-failed',
+  ]);
+  const params = new URL(dom.window.location.href).searchParams;
+  assert.equal(params.get('run'), data.details.run.id);
+  assert.equal(params.get('failures'), '1');
+  assert.equal(params.get('exit'), 'completed');
+});
+
+test('failure-only startup selects the first matching run', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const pass = { ...data.list.runs[0], id: 'run-pass', failure: false };
+  const failure = { ...pass, id: 'run-failure', exit: 'nonzero', failure: true };
+  data.list.runs = [pass, failure];
+  data.list.total = data.list.runs.length;
+  data.list.initialRunId = pass.id;
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState({}, '', '/?failures=1');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.equal(dom.window.document.querySelector('#run-title').textContent, failure.id);
+  assert.equal(new URL(dom.window.location.href).searchParams.get('run'), failure.id);
+});
+
+test('failure-only popstate selects the first matching run', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const pass = { ...data.list.runs[0], id: 'run-pass', failure: false };
+  const failure = { ...pass, id: 'run-failure', exit: 'nonzero', failure: true };
+  data.list.runs = [pass, failure];
+  data.list.total = data.list.runs.length;
+  data.list.initialRunId = pass.id;
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.configure = (window) => window.history.replaceState({}, '', `/?run=${pass.id}`);
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.window.history.pushState({}, '', '/?failures=1');
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(dom.window.document.querySelector('#run-failures-only').checked, true);
+  assert.equal(dom.window.document.querySelector('#run-title').textContent, failure.id);
+  assert.equal(new URL(dom.window.location.href).searchParams.get('run'), failure.id);
+});
+
+test('failure-only control occupies a full-width filter row', () => {
+  const dom = new JSDOM(html);
+  const label = dom.window.document.querySelector('#run-failures-only').closest('label');
+  assert.equal(label.classList.contains('run-failure-filter'), true);
+  assert.match(css, /\.run-failure-filter \{[^}]*grid-column: 1 \/ -1;[^}]*display: flex;/);
+});
+
+test('failure-only filter localizes without losing its checked state', async (t) => {
+  const data = fixture('completed', 'fail', 'FAIL');
+  data.list.runs[0].failure = true;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const failures = document.querySelector('#run-failures-only');
+  failures.checked = true;
+  failures.dispatchEvent(new Event('change', { bubbles: true }));
+
+  const language = document.querySelector('#lang');
+  language.value = 'ko';
+  language.dispatchEvent(new Event('change', { bubbles: true }));
+
+  assert.equal(document.querySelector('[data-i18n="Failures only"]').textContent, '실패만');
+  assert.equal(document.querySelector('#run-count').textContent, '로드된 1개 중 1개');
+  assert.equal(failures.checked, true);
+});
+
 test('run list reports an empty filter result without calling it a search miss', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.list.runs = [
@@ -800,6 +946,27 @@ test('run list describes an empty combined search and filter result', async (t) 
   search.dispatchEvent(new Event('input', { bubbles: true }));
   exit.value = 'nonzero';
   exit.dispatchEvent(new Event('change', { bubbles: true }));
+
+  assert.equal(document.querySelector('#run-list-empty').textContent, 'No loaded runs match this search and these filters.');
+});
+
+test('run list describes an empty combined search and failure result', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'run-search-match', project: 'needle', failure: false },
+    { ...data.list.runs[0], id: 'run-failure-match', project: 'other', exit: 'nonzero', failure: true },
+  ];
+  data.list.total = data.list.runs.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+
+  const search = document.querySelector('#run-search');
+  search.value = 'needle';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  const failures = document.querySelector('#run-failures-only');
+  failures.checked = true;
+  failures.dispatchEvent(new Event('change', { bubbles: true }));
 
   assert.equal(document.querySelector('#run-list-empty').textContent, 'No loaded runs match this search and these filters.');
 });

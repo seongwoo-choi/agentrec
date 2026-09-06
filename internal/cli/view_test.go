@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -1870,6 +1871,56 @@ func TestViewRunListUsesBoundedCursorPages(t *testing.T) {
 			t.Fatalf("run %q appeared on both pages", run.ID)
 		}
 		seen[run.ID] = true
+	}
+}
+
+func TestViewRunListReportsCanonicalFailures(t *testing.T) {
+	root := home(t)
+	for _, id := range []string{"process-failure", "verification-failure", "pass"} {
+		writeRun(t, root, id, "claude", early, "completed")
+		writeVerification(t, root, id, passedVerification())
+	}
+	writeEvidence(t, root, "process-failure", processDir, resultFile, map[string]any{
+		"startedAt":      early,
+		"endedAt":        early.Add(time.Second),
+		"durationMillis": 1000,
+		"exitCode":       1,
+		"exitReason":     "completed",
+	})
+	writeVerification(t, root, "verification-failure", map[string]any{
+		"status":      evidence.VerificationPassed,
+		"attribution": evidence.VerificationAttribution,
+		"checks": []any{map[string]any{
+			"name":   "tests",
+			"status": "failed",
+		}},
+	})
+
+	handler := newViewHandler(root, "pass", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	request := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
+	request.Host = "127.0.0.1"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Runs []struct {
+			ID      string `json:"id"`
+			Failure bool   `json:"failure"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]bool, len(body.Runs))
+	for _, run := range body.Runs {
+		got[run.ID] = run.Failure
+	}
+	want := map[string]bool{"process-failure": true, "verification-failure": true, "pass": false}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("failures = %#v, want %#v", got, want)
 	}
 }
 
