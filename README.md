@@ -308,6 +308,9 @@ the interactive TUI follow the same documented contract.
 
 Every documented top-level command accepts `-h` and `--help`. Help exits `0`,
 prints that command's usage to stdout, and performs no command action.
+The documented `shadow run`, `shadow show`, `hooks print`, `trash restore`,
+`trash empty`, and `trash sweep` paths accept the same help flags and no-action
+boundary.
 
 `agentrec hook <provider>` and `agentrec session serve` exist too; the provider
 runs the first and the first hook starts the second. Neither is meant to be typed.

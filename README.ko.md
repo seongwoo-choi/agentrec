@@ -294,6 +294,9 @@ TUI의 hook도 같은 문서화된 계약을 따릅니다.
 
 문서에 나온 모든 최상위 명령은 `-h`와 `--help`를 받습니다. 도움말은 명령을
 실행하지 않고 사용법을 stdout에 출력한 뒤 종료 코드 `0`으로 끝납니다.
+문서에 나온 `shadow run`, `shadow show`, `hooks print`, `trash restore`,
+`trash empty`, `trash sweep` 경로도 같은 도움말 옵션을 지원하며, 도움말을
+표시할 때 명령 자체는 실행하지 않습니다.
 
 `agentrec hook <provider>`와 `agentrec session serve`도 있습니다. 앞의 것은
 provider가 실행하고, 뒤의 것은 첫 hook이 띄웁니다. 둘 다 직접 입력하는 명령이
