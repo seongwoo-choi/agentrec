@@ -14,6 +14,7 @@ Usage:
   agentrec shadow show <group-id>
   agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]
   agentrec show <run-id>|latest [--failures-only] [--json]
+  agentrec changes <run-id>|latest [--json]
   agentrec events <run-id>|latest [--json]
   agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open] [--allow-run]
   agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]
@@ -53,6 +54,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runList(args[1:], stdout, stderr)
 	case "show":
 		return runShow(args[1:], stdout, stderr)
+	case "changes":
+		return runChanges(args[1:], stdout, stderr)
 	case "events":
 		return runEvents(args[1:], stdout, stderr)
 	case "view":
