@@ -304,6 +304,9 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 読み取り専用ビューアーをループバックで提供します。 |
 | 🏷️ `agentrec version [--verbose]` | タグ、コミット、UTC のビルド時刻を出力します。`--verbose` は `PATH` 順の実行可能な `agentrec` 候補を列挙し、現在のファイルを示します。 |
 
+記載されているすべてのトップレベルコマンドで `-h` と `--help` を利用できます。
+コマンド自体は実行せず、使い方を標準出力へ表示して終了コード `0` で終了します。
+
 `agentrec hook <provider>` と `agentrec session serve` も存在します。前者はプロバイダーが
 実行し、後者は最初の hook が起動します。どちらも手で入力するためのものではありません。
 
