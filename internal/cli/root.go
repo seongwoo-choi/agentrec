@@ -4,6 +4,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 const usage = `agentrec records coding-agent execution as a replayable action timeline.
@@ -21,7 +22,7 @@ Usage:
   agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]
   agentrec stop
   agentrec status
-  agentrec trash [restore <run-id> | empty | sweep <age>]
+  agentrec trash [restore <run-id> | empty | sweep <age> [--dry-run]]
   agentrec verify <run-id>|latest
   agentrec hooks print --claude|--codex [--verify]
   agentrec version [--verbose]
@@ -38,6 +39,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(stdout, usage)
 		return 0
+	}
+	if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
+		if commandUsage := usageForCommand(args[0]); commandUsage != "" {
+			fmt.Fprint(stdout, commandUsage)
+			return 0
+		}
 	}
 
 	switch args[0] {
@@ -82,4 +89,18 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stderr, "unknown command: %q\nrun 'agentrec --help' to see the available commands\n", args[0])
 	return 2
+}
+
+func usageForCommand(command string) string {
+	prefix := "  agentrec " + command
+	var lines []string
+	for _, line := range strings.Split(usage, "\n") {
+		if strings.HasPrefix(line, prefix) && (len(line) == len(prefix) || line[len(prefix)] == ' ') {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "Usage:\n" + strings.Join(lines, "\n") + "\n"
 }

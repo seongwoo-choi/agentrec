@@ -275,6 +275,9 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 在回环地址上提供只读查看器。 |
 | 🏷️ `agentrec version [--verbose]` | 输出标签、提交和 UTC 构建时间。`--verbose` 还会按 `PATH` 顺序列出可执行的 `agentrec` 候选项并标记当前文件。 |
 
+文档列出的所有顶层命令都支持 `-h` 和 `--help`。帮助选项不会执行命令本身，
+只会把用法输出到 stdout，并以退出码 `0` 结束。
+
 `agentrec hook <provider>` 和 `agentrec session serve` 也存在；前者由提供方运行，
 后者由第一个 hook 启动。两者都不是给人手动输入的。
 

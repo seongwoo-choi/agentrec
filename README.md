@@ -306,6 +306,9 @@ the interactive TUI follow the same documented contract.
 | 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | Serves the read-only viewer on loopback. |
 | 🏷️ `agentrec version [--verbose]` | Prints the tag, commit and UTC build time. `--verbose` also lists executable `agentrec` candidates in `PATH` order and marks the running file. |
 
+Every documented top-level command accepts `-h` and `--help`. Help exits `0`,
+prints that command's usage to stdout, and performs no command action.
+
 `agentrec hook <provider>` and `agentrec session serve` exist too; the provider
 runs the first and the first hook starts the second. Neither is meant to be typed.
 

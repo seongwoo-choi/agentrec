@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,53 @@ func TestRunHelpListsCoreCommands(t *testing.T) {
 	}
 }
 
+func TestRunPublicCommandHelpSucceedsWithoutSideEffects(t *testing.T) {
+	commands := []string{
+		"trace", "shadow", "verify", "list", "show", "changes", "events",
+		"view", "setup", "start", "stop", "status", "trash", "hooks", "version",
+	}
+	for _, command := range commands {
+		for _, flag := range []string{"--help", "-h"} {
+			t.Run(command+"/"+flag, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				t.Setenv("AGENTREC_HOME", home)
+				var stdout bytes.Buffer
+				var stderr bytes.Buffer
+
+				exitCode := Run([]string{command, flag}, &stdout, &stderr)
+
+				if exitCode != 0 {
+					t.Errorf("exit code = %d, want 0", exitCode)
+				}
+				if !strings.Contains(stdout.String(), "agentrec "+command) {
+					t.Errorf("stdout = %q, want command usage", stdout.String())
+				}
+				if command == "trash" && !strings.Contains(stdout.String(), "--dry-run") {
+					t.Errorf("stdout = %q, want trash sweep dry-run option", stdout.String())
+				}
+				wantLines := 2
+				if command == "shadow" {
+					wantLines = 3
+				}
+				if got := len(strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")); got != wantLines {
+					t.Errorf("stdout has %d lines, want %d command-specific lines: %q", got, wantLines, stdout.String())
+				}
+				if stderr.Len() != 0 {
+					t.Errorf("stderr = %q, want empty", stderr.String())
+				}
+				entries, err := os.ReadDir(home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Fatalf("help created files under AGENTREC_HOME: %v", entries)
+				}
+			})
+		}
+	}
+}
+
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -44,6 +92,23 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--help") {
 		t.Errorf("stderr = %q, want it to point at --help", stderr.String())
+	}
+}
+
+func TestRunDoesNotTreatUnknownCommandAsHelpPrefix(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"s", "--help"}, &stdout, &stderr)
+
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `unknown command: "s"`) {
+		t.Errorf("stderr = %q, want unknown command", stderr.String())
 	}
 }
 
