@@ -69,6 +69,11 @@ check_arg "output directory" "$output" '[^[:cntrl:]$`|;&<>*?"'"'"']+'
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 package=github.com/seongwoo-choi/agentrec/internal/cli
 semver=${version#v}
+host=$(uname -s)
+case $host in
+Darwin|Linux) ;;
+*) fail "unsupported release host: ${host}" ;;
+esac
 
 # Checksums must be portable between the macOS and Linux toolchains.
 if command -v sha256sum >/dev/null 2>&1; then
@@ -125,7 +130,16 @@ for platform in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
 		"${stage}/THIRD_PARTY_NOTICES.md" \
 		"${stage}/third_party/licenses/Apache-2.0.txt"
 
-	COPYFILE_DISABLE=1 tar --no-xattrs -czf "${output}/${base}.tar.gz" -C "$stage_root" "$base"
+	case $host in
+	Darwin)
+		COPYFILE_DISABLE=1 tar --no-xattrs --uid 0 --gid 0 --uname root --gname root \
+			-czf "${output}/${base}.tar.gz" -C "$stage_root" "$base"
+		;;
+	Linux)
+		tar --no-xattrs --owner=root --group=root \
+			-czf "${output}/${base}.tar.gz" -C "$stage_root" "$base"
+		;;
+	esac
 
 	printf 'built %s.tar.gz\n' "$base"
 done

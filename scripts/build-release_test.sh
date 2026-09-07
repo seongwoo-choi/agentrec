@@ -147,7 +147,7 @@ PATH="$tmp/bin:$PATH" "$repo_root/scripts/build-release.sh" \
 	2026-07-28T00:00:00Z \
 	"$clean_output" >"$stdout" 2>"$stderr"
 for archive in "$clean_output"/*.tar.gz; do
-	if python3 -c 'import sys, tarfile; a=tarfile.open(sys.argv[1]); raise SystemExit(not any(any(part.startswith("._") for part in member.name.split("/")) or any(key.startswith("LIBARCHIVE.xattr.") or key.startswith("SCHILY.xattr.") for key in member.pax_headers) or (member.mode & 0o777) != (0o755 if member.isdir() or member.name.endswith("/agentrec") else 0o644) for member in a.getmembers()))' "$archive"; then
+	if python3 -c 'import sys, tarfile; a=tarfile.open(sys.argv[1]); raise SystemExit(not any(any(part.startswith("._") for part in member.name.split("/")) or any(key.startswith("LIBARCHIVE.xattr.") or key.startswith("SCHILY.xattr.") for key in member.pax_headers) or (member.mode & 0o777) != (0o755 if member.isdir() or member.name.endswith("/agentrec") else 0o644) or member.uid != 0 or member.gid != 0 or member.uname != "root" or member.gname != "root" for member in a.getmembers()))' "$archive"; then
 		echo "$(basename "$archive") contains non-portable metadata or modes" >&2
 		exit 1
 	fi
