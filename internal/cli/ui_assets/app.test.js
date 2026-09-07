@@ -14,7 +14,7 @@ const response = (body) => Promise.resolve({
   json: async () => body,
 });
 
-async function renderFixture({ list, details, actions = [], events = [], configure = () => {} }) {
+async function renderFixture({ list, details, actions = [], changes = [], events = [], search = { hits: [], truncated: false }, configure = () => {} }) {
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
     url: 'http://localhost:42817/',
@@ -27,14 +27,17 @@ async function renderFixture({ list, details, actions = [], events = [], configu
   };
   window.HTMLElement.prototype.scrollIntoView = () => {};
   configure(window);
+  window.__fetchPaths = [];
   window.fetch = (input, init = {}) => {
     const url = new URL(String(input), window.location.href);
+    window.__fetchPaths.push(`${url.pathname}${url.search}`);
     if (url.pathname === '/api/shadow') return response({ allowRun: false });
     if (url.pathname === '/api/token') return response({ token: 'test-token' });
     if (init.method === 'DELETE' && /^\/api\/runs\/[^/]+$/.test(url.pathname)) {
       return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
     }
     if (url.pathname === '/api/runs') return response(list);
+    if (url.pathname === '/api/search') return response(search);
     const detailMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
     if (detailMatch) {
       const currentDetails = typeof details === 'function' ? details(decodeURIComponent(detailMatch[1])) : details;
@@ -48,7 +51,7 @@ async function renderFixture({ list, details, actions = [], events = [], configu
     }
     if (url.pathname.includes('/actions')) return response({ items: actions, nextCursor: null });
     if (url.pathname.includes('/events')) return response({ items: events, nextCursor: null });
-    if (url.pathname.includes('/changes')) return response({ files: [], nextCursor: null, total: 0 });
+    if (url.pathname.includes('/changes')) return response({ items: changes, nextCursor: null, total: changes.length, status: 'available' });
     throw new Error(`unexpected fetch ${url}`);
   };
   window.eval(app);
@@ -90,6 +93,55 @@ test('session_lost is failure-class in list and detail', async (t) => {
   const { document } = dom.window;
   assert.match(document.querySelector('.run-item .run-verdict-run').className, /\bfail\b/);
   assert.match(document.querySelector('#run-verdict').className, /\bfail\b/);
+});
+
+test('global search opens an exact changed-file result', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const path = 'internal/cli/search-target.go';
+  data.details.run.changeCount = 1;
+  const dom = await renderFixture({
+    ...data,
+    changes: [{ path, kind: 'modified', tracked: true, additions: 4, deletions: 1, patchAvailable: true }],
+    search: {
+      hits: [{
+        runId: data.details.run.id,
+        project: data.details.run.project,
+        provider: data.details.run.provider,
+        kind: 'change',
+        type: 'modified',
+        path,
+        index: 100,
+        snippet: path,
+        createdAt: data.details.run.startedAt,
+        status: 'PASS',
+      }],
+      truncated: false,
+    },
+  });
+  t.after(() => dom.window.close());
+  const { document, Event, KeyboardEvent } = dom.window;
+  const timelineSearch = document.querySelector('#timeline-search');
+  timelineSearch.value = 'unrelated-filter';
+  timelineSearch.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  const input = document.querySelector('#global-search input');
+  input.value = 'search-target.go';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const hit = document.querySelector('#search-results .search-hit');
+  assert.ok(hit);
+  assert.equal(hit.querySelector('.search-kind').textContent, 'change');
+  assert.equal(hit.querySelector('.search-snippet').textContent, path);
+  hit.click();
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(document.querySelector('#timeline-tab-changes').getAttribute('aria-selected'), 'true');
+  assert.ok(dom.window.__fetchPaths.includes(`/api/snapshots/${data.details.snapshotId}/changes?cursor=100`), dom.window.__fetchPaths.join('\n'));
+  const row = document.querySelector(`.change-row[data-path="${path}"]`);
+  assert.ok(row);
+  assert.match(row.className, /\bselected\b/);
+  assert.equal(document.querySelector('.inspector-title').textContent, path);
 });
 
 test('run list separates process and verification verdicts before opening a run', async (t) => {

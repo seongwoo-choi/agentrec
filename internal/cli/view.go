@@ -782,7 +782,7 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 				limit = parsed
 			}
 		}
-		result, err := searchRuns(root, r.URL.Query().Get("q"), limit)
+		result, err := searchRuns(r.Context(), root, r.URL.Query().Get("q"), limit)
 		if err != nil {
 			writeViewError(w, http.StatusBadRequest, err)
 			return
