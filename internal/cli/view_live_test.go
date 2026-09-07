@@ -156,6 +156,43 @@ func TestViewSearchFindsAcrossRuns(t *testing.T) {
 	}
 }
 
+func TestViewSearchActionHitCapSkipsChangeCapture(t *testing.T) {
+	root := home(t)
+	at := time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
+	b, err := storage.Create(root, "run-action-cap", storage.Manifest{Provider: "claude", CWD: "/tmp/project", StartedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const limit = 2
+	for i := 0; i < limit+1; i++ {
+		if err := b.WriteAction(action.Action{ID: fmt.Sprintf("a%d", i), Type: action.TypeShellExec, Provider: "claude", Assurance: action.AssuranceProviderReported, StartedAt: at, FinishedAt: at, Status: "completed", Input: json.RawMessage(`{"command":"echo rocket"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: at.Add(time.Minute), ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	captureCalls := 0
+	result, err := searchRunsWithChanges(context.Background(), root, "rocket", limit, func(context.Context, string, string) (*viewSnapshot, error) {
+		captureCalls++
+		return nil, errors.New("unexpected change capture")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != limit || !result.Truncated {
+		t.Fatalf("got %d hits, truncated %v; want %d hits, truncated true", len(result.Hits), result.Truncated, limit)
+	}
+	for _, hit := range result.Hits {
+		if hit.Kind != "action" {
+			t.Errorf("hit kind = %q, want action", hit.Kind)
+		}
+	}
+	if captureCalls != 0 {
+		t.Errorf("change capture calls = %d, want 0 after action hit cap", captureCalls)
+	}
+}
+
 func TestViewSearchStopsWhenRequestIsCanceled(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-cancel-search", "claude", time.Now(), "completed")
@@ -263,6 +300,25 @@ func TestViewSearchFindsRepositoryChangePathsWithoutPatchContents(t *testing.T) 
 	want := []string{"0:tracked:search-target/tracked.go", "1:file:search-target/untracked.txt"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("change hits = %v, want %v", got, want)
+	}
+
+	// Decode the HTTP response without searchHit: a missing index must not
+	// silently become Go's zero value for the first changed file.
+	var wire struct {
+		Hits []struct {
+			Kind  string `json:"kind"`
+			Path  string `json:"path"`
+			Index *int   `json:"index"`
+		} `json:"hits"`
+	}
+	viewJSONRequest(t, handler, "/api/search?q=search-target", &wire)
+	if len(wire.Hits) != 2 {
+		t.Fatalf("HTTP change hits = %+v, want two", wire.Hits)
+	}
+	for index, hit := range wire.Hits {
+		if hit.Kind != "change" || hit.Index == nil || *hit.Index != index {
+			t.Errorf("HTTP change hit %q index = %v, want explicit %d", hit.Path, hit.Index, index)
+		}
 	}
 
 	var patchOnly searchResult

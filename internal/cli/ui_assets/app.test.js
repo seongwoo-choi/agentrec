@@ -51,12 +51,17 @@ async function renderFixture({ list, details, actions = [], changes = [], events
     }
     if (url.pathname.includes('/actions')) return response({ items: actions, nextCursor: null });
     if (url.pathname.includes('/events')) return response({ items: events, nextCursor: null });
-    if (url.pathname.includes('/changes')) return response({ items: changes, nextCursor: null, total: changes.length, status: 'available' });
+    if (url.pathname.includes('/changes')) return response(typeof changes === 'function' ? changes(Number(url.searchParams.get('cursor') || 0)) : { items: changes, nextCursor: null, total: changes.length, status: 'available' });
     throw new Error(`unexpected fetch ${url}`);
   };
   window.eval(app);
   for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   return dom;
+}
+
+function paginatedChanges(targetPath) {
+  const items = Array.from({ length: 251 }, (_, index) => ({ path: index === 250 ? targetPath : `prefix/file-${index}.go`, kind: 'added', tracked: false }));
+  return (cursor) => ({ items: items.slice(cursor, cursor + 250), nextCursor: cursor + 250 < items.length ? cursor + 250 : null, total: items.length, status: 'available' });
 }
 
 function fixture(exitReason, statusClass, statusLabel) {
@@ -98,10 +103,10 @@ test('session_lost is failure-class in list and detail', async (t) => {
 test('global search opens an exact changed-file result', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const path = 'internal/cli/search-target.go';
-  data.details.run.changeCount = 1;
+  data.details.run.changeCount = 251;
   const dom = await renderFixture({
     ...data,
-    changes: [{ path, kind: 'modified', tracked: true, additions: 4, deletions: 1, patchAvailable: true }],
+    changes: paginatedChanges(path),
     search: {
       hits: [{
         runId: data.details.run.id,
@@ -110,7 +115,7 @@ test('global search opens an exact changed-file result', async (t) => {
         kind: 'change',
         type: 'modified',
         path,
-        index: 100,
+        index: 250,
         snippet: path,
         createdAt: data.details.run.startedAt,
         status: 'PASS',
@@ -137,7 +142,212 @@ test('global search opens an exact changed-file result', async (t) => {
   for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(document.querySelector('#timeline-tab-changes').getAttribute('aria-selected'), 'true');
-  assert.ok(dom.window.__fetchPaths.includes(`/api/snapshots/${data.details.snapshotId}/changes?cursor=100`), dom.window.__fetchPaths.join('\n'));
+  assert.ok(dom.window.__fetchPaths.includes(`/api/snapshots/${data.details.snapshotId}/changes?cursor=250`), dom.window.__fetchPaths.join('\n'));
+  const row = document.querySelector(`.change-row[data-path="${path}"]`);
+  assert.ok(row);
+  assert.match(row.className, /\bselected\b/);
+  assert.equal(document.querySelector('.inspector-title').textContent, path);
+  const params = new URLSearchParams(dom.window.location.search);
+  assert.equal(params.get('focus'), 'changes');
+  assert.equal(params.get('change'), path);
+  assert.equal(params.get('changeCursor'), '250');
+});
+
+test('changed-file deep link restores the exact paginated row and inspector', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const path = 'internal/cli/search-target.go';
+  data.details.run.changeCount = 251;
+  data.configure = (window) => window.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=${encodeURIComponent(path)}&changeCursor=250#kept`);
+
+  const dom = await renderFixture({
+    ...data,
+    changes: paginatedChanges(path),
+  });
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+
+  assert.ok(dom.window.__fetchPaths.includes(`/api/snapshots/${data.details.snapshotId}/changes?cursor=250`), dom.window.__fetchPaths.join('\n'));
+  assert.equal(document.querySelector('#timeline-tab-changes').getAttribute('aria-selected'), 'true');
+  const row = document.querySelector(`.change-row[data-path="${path}"]`);
+  assert.ok(row);
+  assert.match(row.className, /\bselected\b/);
+  assert.equal(document.querySelector('.inspector-title').textContent, path);
+  assert.equal(location.hash, '#kept');
+});
+
+test('outgoing change row cannot overwrite a deferred incoming run link', async (t) => {
+  for (const rerender of [false, true]) {
+    await t.test(rerender ? 'after Changes tab re-render' : 'original node', async (t) => {
+      const data = fixture('completed', 'pass', 'PASS');
+      const incoming = { ...data.details, snapshotId: 'snapshot-b', run: { ...data.details.run, id: 'run-b' } };
+      let release;
+      const deferred = new Promise((resolve) => { release = resolve; });
+      const dom = await renderFixture({
+        ...data,
+        list: { ...data.list, runs: [...data.list.runs, { ...incoming.run, verification: 'PASS' }], total: 2 },
+        details: (id) => id === incoming.run.id ? deferred : data.details,
+        changes: [{ path: 'old-run-only.go', kind: 'added', tracked: false }],
+        configure: (window) => window.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&q=agentrec&verification=PASS#kept`),
+      });
+      t.after(() => dom.window.close());
+      const { document, history, location } = dom.window;
+      const originalFetch = dom.window.fetch;
+      dom.window.fetch = (input, init) => String(input).includes('/api/snapshots/snapshot-b/changes')
+        ? response({ items: [{ path: 'new-run-only.go', kind: 'added', tracked: false }], nextCursor: null, total: 1, status: 'available' })
+        : originalFetch(input, init);
+      let oldRow = document.querySelector('.change-row[data-path="old-run-only.go"]');
+      assert.ok(oldRow);
+      document.querySelector('.run-item[data-run-id="run-b"]').click();
+      if (rerender) {
+        document.querySelector('#timeline-tab-changes').click();
+        const rerenderedRow = document.querySelector('.change-row[data-path="old-run-only.go"]');
+        assert.ok(rerenderedRow);
+        assert.notEqual(rerenderedRow, oldRow);
+        oldRow = rerenderedRow;
+      }
+      const destination = location.href;
+      const historyLength = history.length;
+      assert.equal(new URL(destination).searchParams.get('run'), 'run-b');
+      oldRow.click();
+      assert.equal(location.href, destination);
+      assert.equal(history.length, historyLength);
+      assert.equal(document.querySelector('.change-row.selected'), null);
+      release(incoming);
+      for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(document.querySelector('.change-row')?.dataset.path, 'new-run-only.go');
+      assert.equal(document.querySelector('.change-row.selected'), null);
+      assert.equal(location.href, destination);
+      assert.equal(new URL(location.href).searchParams.get('q'), 'agentrec');
+      assert.equal(new URL(location.href).searchParams.get('verification'), 'PASS');
+      assert.equal(location.hash, '#kept');
+    });
+  }
+});
+
+test('ordinary focus navigation clears exact change state and history restores it', async (t) => {
+  for (const focus of ['actions', 'events', 'changes', 'verification']) {
+    await t.test(focus, async (t) => {
+      const data = fixture('completed', 'pass', 'PASS');
+      data.details.evidence.verification.push({ name: 'Warning', value: 'Review verification evidence' });
+      const initial = `/?run=${data.details.run.id}&focus=changes&change=last.go&changeCursor=250&q=agentrec&exit=completed&verification=PASS#kept`;
+      const dom = await renderFixture({ ...data, changes: paginatedChanges('last.go'), configure: (window) => window.history.replaceState(null, '', initial) });
+      t.after(() => dom.window.close());
+      const { document, history, location } = dom.window;
+      assert.equal(document.querySelector('.change-row.selected')?.dataset.path, 'last.go');
+      const historyLength = history.length;
+      document.querySelector(focus === 'verification' ? '#triage-verification' : `#timeline-tab-${focus}`).click();
+      const params = new URLSearchParams(location.search);
+      assert.equal(params.get('focus'), focus);
+      assert.equal(params.has('change'), false);
+      assert.equal(params.has('changeCursor'), false);
+      assert.equal(history.length, historyLength + 1);
+      assert.equal(params.get('q'), 'agentrec');
+      assert.equal(params.get('exit'), 'completed');
+      assert.equal(params.get('verification'), 'PASS');
+      assert.equal(location.hash, '#kept');
+      if (focus !== 'changes') document.querySelector('#timeline-tab-changes').click();
+      const ordinary = location.href;
+      assert.equal(new URL(ordinary).searchParams.has('change'), false);
+      assert.equal(new URL(ordinary).searchParams.has('changeCursor'), false);
+      assert.equal(document.querySelector('.change-row.selected'), null);
+      assert.equal(document.querySelector('.inspector-title'), null);
+      const finalHistoryLength = history.length;
+      history.go(focus === 'changes' ? -1 : -2);
+      for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(`${location.pathname}${location.search}${location.hash}`, initial);
+      assert.equal(document.querySelector('.change-row.selected')?.dataset.path, 'last.go');
+      assert.equal(document.querySelector('.inspector-title')?.textContent, 'last.go');
+      assert.equal(history.length, finalHistoryLength);
+      history.go(focus === 'changes' ? 1 : 2);
+      for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(location.href, ordinary);
+      assert.equal(document.querySelector('.change-row.selected'), null);
+      assert.equal(history.length, finalHistoryLength);
+    });
+  }
+});
+
+test('selecting a different changed file updates the exact link', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.configure = (window) => window.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=first.go&changeCursor=250#kept`);
+  const items = Array.from({ length: 252 }, (_, index) => ({ path: index === 250 ? 'first.go' : index === 251 ? 'second.go' : `prefix/file-${index}.go`, kind: 'added', tracked: false }));
+  data.details.run.changeCount = items.length;
+  const changes = (cursor) => ({ items: items.slice(cursor, cursor + 250), nextCursor: cursor + 250 < items.length ? cursor + 250 : null, total: items.length, status: 'available' });
+  const dom = await renderFixture({ ...data, changes });
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('.change-row.selected')?.dataset.path, 'first.go');
+  assert.equal(dom.window.document.querySelectorAll('.change-row').length, 2);
+  assert.ok(dom.window.__fetchPaths.includes('/api/snapshots/snapshot/changes?cursor=250'));
+  dom.window.document.querySelector('.change-row[data-path="second.go"]').click();
+  const params = new URLSearchParams(dom.window.location.search);
+  assert.equal(params.get('change'), 'second.go');
+  assert.equal(params.get('changeCursor'), '251');
+  assert.equal(dom.window.location.hash, '#kept');
+  assert.equal(dom.window.document.querySelector('.change-row.selected')?.dataset.path, 'second.go');
+  assert.equal(dom.window.document.querySelector('.inspector-title')?.textContent, 'second.go');
+  const reload = await renderFixture({ ...data, changes, configure: (window) => window.history.replaceState(null, '', dom.window.location.href) });
+  t.after(() => reload.window.close());
+  assert.ok(reload.window.__fetchPaths.includes('/api/snapshots/snapshot/changes?cursor=251'));
+  assert.equal(reload.window.document.querySelectorAll('.change-row').length, 1);
+  assert.equal(reload.window.document.querySelector('.change-row.selected')?.dataset.path, 'second.go');
+  assert.equal(reload.window.document.querySelector('.inspector-title')?.textContent, 'second.go');
+  assert.equal(reload.window.location.href, dom.window.location.href);
+});
+
+test('leaving an exact change link restores page zero for ordinary or malformed links', async (t) => {
+  for (const suffix of ['', '&change=last.go', '&change=last.go&changeCursor=bogus', '&changeCursor=250']) {
+    const data = fixture('completed', 'pass', 'PASS');
+    data.configure = (window) => window.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=last.go&changeCursor=250`);
+    const items = Array.from({ length: 251 }, (_, i) => ({ path: i === 250 ? 'last.go' : `file${i}.go`, tracked: false, kind: 'added' }));
+    const dom = await renderFixture({ ...data, changes: (cursor) => ({ items: items.slice(cursor, cursor + 250), nextCursor: cursor + 250 < items.length ? cursor + 250 : null, total: items.length, status: 'available' }) });
+    t.after(() => dom.window.close());
+    assert.equal(dom.window.document.querySelector('.change-row.selected')?.dataset.path, 'last.go');
+    dom.window.__fetchPaths.length = 0;
+    dom.window.history.pushState(null, '', `/?run=${data.details.run.id}&focus=changes${suffix}`);
+    dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+    for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(dom.window.__fetchPaths.includes('/api/snapshots/snapshot/changes?cursor=0'), suffix);
+    assert.equal(dom.window.document.querySelector('.change-row')?.dataset.path, 'file0.go');
+    assert.equal(dom.window.document.querySelector('.change-row.selected'), null);
+  }
+});
+
+test('changed-file search badges use the selected language', async (t) => {
+  for (const [language, label] of [['ko', '변경'], ['ja', '変更'], ['zh-CN', '变更']]) {
+    const data = fixture('completed', 'pass', 'PASS');
+    const dom = await renderFixture({ ...data, search: { hits: [{ runId: data.details.run.id, kind: 'change', path: 'target.go', snippet: 'target.go', index: 0 }], truncated: false } });
+    t.after(() => dom.window.close());
+    const { document, Event, KeyboardEvent } = dom.window;
+    document.querySelector('#lang').value = language;
+    document.querySelector('#lang').dispatchEvent(new Event('change'));
+    document.querySelector('#search-all').value = 'target';
+    document.querySelector('#search-all').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(document.querySelector('.search-kind').textContent, label, language);
+  }
+});
+
+test('same-run popstate restores an exact changed-file deep link', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const path = 'internal/cli/search-target.go';
+  data.details.run.changeCount = 251;
+  data.configure = (window) => window.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes#kept`);
+
+  const dom = await renderFixture({
+    ...data,
+    changes: paginatedChanges(path),
+  });
+  t.after(() => dom.window.close());
+  const { document, history, PopStateEvent, Event } = dom.window;
+  document.querySelector('#timeline-search').value = 'unrelated';
+  document.querySelector('#timeline-search').dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+
+  history.pushState(null, '', `/?run=${data.details.run.id}&focus=changes&change=${encodeURIComponent(path)}&changeCursor=250#kept`);
+  dom.window.dispatchEvent(new PopStateEvent('popstate'));
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.ok(dom.window.__fetchPaths.includes(`/api/snapshots/${data.details.snapshotId}/changes?cursor=250`), dom.window.__fetchPaths.join('\n'));
   const row = document.querySelector(`.change-row[data-path="${path}"]`);
   assert.ok(row);
   assert.match(row.className, /\bselected\b/);
