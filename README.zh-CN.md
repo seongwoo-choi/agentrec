@@ -277,6 +277,9 @@ Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注�
 
 文档列出的所有顶层命令都支持 `-h` 和 `--help`。帮助选项不会执行命令本身，
 只会把用法输出到 stdout，并以退出码 `0` 结束。
+文档列出的 `shadow run`、`shadow show`、`hooks print`、`trash restore`、
+`trash empty` 和 `trash sweep` 路径也支持相同的帮助选项；显示帮助时不会执行
+命令本身。
 
 `agentrec hook <provider>` 和 `agentrec session serve` 也存在；前者由提供方运行，
 后者由第一个 hook 启动。两者都不是给人手动输入的。

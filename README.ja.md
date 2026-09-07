@@ -306,6 +306,9 @@ Codex は `PostToolUseFailure` を送らないため、失敗したコマンド�
 
 記載されているすべてのトップレベルコマンドで `-h` と `--help` を利用できます。
 コマンド自体は実行せず、使い方を標準出力へ表示して終了コード `0` で終了します。
+記載されている `shadow run`、`shadow show`、`hooks print`、`trash restore`、
+`trash empty`、`trash sweep` の各パスでも同じヘルプフラグを利用でき、
+ヘルプ表示時にコマンド自体は実行されません。
 
 `agentrec hook <provider>` と `agentrec session serve` も存在します。前者はプロバイダーが
 実行し、後者は最初の hook が起動します。どちらも手で入力するためのものではありません。

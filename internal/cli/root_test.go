@@ -59,6 +59,8 @@ func TestRunPublicCommandHelpSucceedsWithoutSideEffects(t *testing.T) {
 				wantLines := 2
 				if command == "shadow" {
 					wantLines = 3
+				} else if command == "trash" {
+					wantLines = 4
 				}
 				if got := len(strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")); got != wantLines {
 					t.Errorf("stdout has %d lines, want %d command-specific lines: %q", got, wantLines, stdout.String())
@@ -72,6 +74,53 @@ func TestRunPublicCommandHelpSucceedsWithoutSideEffects(t *testing.T) {
 				}
 				if len(entries) != 0 {
 					t.Fatalf("help created files under AGENTREC_HOME: %v", entries)
+				}
+			})
+		}
+	}
+}
+
+func TestRunPublicNestedCommandHelpSucceedsWithoutSideEffects(t *testing.T) {
+	commands := [][]string{
+		{"shadow", "run"},
+		{"shadow", "show"},
+		{"hooks", "print"},
+		{"trash", "restore"},
+		{"trash", "sweep"},
+		{"trash", "empty"},
+	}
+	for _, command := range commands {
+		for _, flag := range []string{"--help", "-h"} {
+			name := strings.Join(command, "/") + "/" + flag
+			t.Run(name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				t.Setenv("AGENTREC_HOME", home)
+				var stdout bytes.Buffer
+				var stderr bytes.Buffer
+
+				args := append(append([]string(nil), command...), flag)
+				exitCode := Run(args, &stdout, &stderr)
+
+				if exitCode != 0 {
+					t.Errorf("exit code = %d, want 0", exitCode)
+				}
+				wantUsage := "agentrec " + strings.Join(command, " ")
+				if !strings.Contains(stdout.String(), wantUsage) {
+					t.Errorf("stdout = %q, want %q", stdout.String(), wantUsage)
+				}
+				if got := len(strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")); got != 2 {
+					t.Errorf("stdout has %d lines, want 2 command-specific lines: %q", got, stdout.String())
+				}
+				if stderr.Len() != 0 {
+					t.Errorf("stderr = %q, want empty", stderr.String())
+				}
+				entries, err := os.ReadDir(home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Fatalf("help created files under HOME: %v", entries)
 				}
 			})
 		}
@@ -108,6 +157,40 @@ func TestRunDoesNotTreatUnknownCommandAsHelpPrefix(t *testing.T) {
 		t.Errorf("stdout = %q, want empty", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), `unknown command: "s"`) {
+		t.Errorf("stderr = %q, want unknown command", stderr.String())
+	}
+}
+
+func TestRunDoesNotTreatNestedCommandPrefixAsHelp(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"shadow", "s", "--help"}, &stdout, &stderr)
+
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("stderr is empty, want shadow usage error")
+	}
+}
+
+func TestRunDoesNotJoinCommandTokensForHelp(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"shadow run", "--help"}, &stdout, &stderr)
+
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `unknown command: "shadow run"`) {
 		t.Errorf("stderr = %q, want unknown command", stderr.String())
 	}
 }

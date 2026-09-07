@@ -22,7 +22,9 @@ Usage:
   agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]
   agentrec stop
   agentrec status
-  agentrec trash [restore <run-id> | empty | sweep <age> [--dry-run]]
+  agentrec trash restore <run-id>
+  agentrec trash empty
+  agentrec trash sweep <age> [--dry-run]
   agentrec verify <run-id>|latest
   agentrec hooks print --claude|--codex [--verify]
   agentrec version [--verbose]
@@ -40,8 +42,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
-	if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
-		if commandUsage := usageForCommand(args[0]); commandUsage != "" {
+	if len(args) >= 2 && (args[len(args)-1] == "-h" || args[len(args)-1] == "--help") {
+		if commandUsage := usageForCommand(args[:len(args)-1]); commandUsage != "" {
 			fmt.Fprint(stdout, commandUsage)
 			return 0
 		}
@@ -91,11 +93,24 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-func usageForCommand(command string) string {
-	prefix := "  agentrec " + command
+func usageForCommand(command []string) string {
 	var lines []string
 	for _, line := range strings.Split(usage, "\n") {
-		if strings.HasPrefix(line, prefix) && (len(line) == len(prefix) || line[len(prefix)] == ' ') {
+		if !strings.HasPrefix(line, "  agentrec ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < len(command)+1 {
+			continue
+		}
+		matches := true
+		for i, token := range command {
+			if fields[i+1] != token {
+				matches = false
+				break
+			}
+		}
+		if matches {
 			lines = append(lines, line)
 		}
 	}
