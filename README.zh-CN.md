@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.10.2.md) ·
+[发布说明](docs/releases/v0.11.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -52,9 +52,9 @@
 
 ## 快速开始
 
-> **状态：** v0.10.2 是最新发布版本。文档列出的 `shadow`、`hooks` 和 `trash`
-> 子命令路径现在会把 `-h` 和 `--help` 作为帮助选项处理，不再误认为运行参数，
-> 也不会执行命令本身。v0.10.1 的顶层帮助和 v0.10.0 的有界 JSON 流程仍可使用。
+> **状态：** v0.11.0 是最新发布版本。查看器的全局运行搜索现在可以找到已保存的
+> 仓库变更路径，并直接打开分页 Changes 列表中的对应行和 inspector。patch 与文件
+> 内容仍不会进入搜索索引。
 >
 > v0.6.0 新增了正在运行会话的实时视图，以及跨所有运行记录的搜索；v0.5.0 新增了把运行
 > 记录删除到回收站、无限滚动、从 transcript 读取用量和模型、取代 `UNAVAILABLE` 的三个
@@ -71,14 +71,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.10.2_darwin_arm64.tar.gz
+archive=agentrec_0.11.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.10.2_darwin_arm64/agentrec version
+./agentrec_0.11.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.10.2
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.11.0
 ```
 
 每个已打标签的发布版本都包含 `darwin_amd64`、`darwin_arm64`、`linux_amd64` 和
@@ -446,7 +446,7 @@ agentrec 不声称什么：
 
 ## 文档
 
-- [v0.10.2 发布说明](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.11.0 发布说明](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [飞行记录仪设计](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——recorder](docs/dogfood/2026-07-28-evidence.md)：一个固定的 20 次
@@ -466,7 +466,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.10.2 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.11.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 在本地构建发布归档，不发布任何内容；其输出目录必须
