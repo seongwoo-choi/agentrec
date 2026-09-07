@@ -1542,6 +1542,7 @@ function shortID(id) {
       selectItem(row, { kind: 'change', value: change, patch: null, patchCursor: 0, patchNextCursor: null, patchHistory: [], patchLoading: false });
       if (change.tracked) loadPatchPage(change.path, 0, false, state.loadGeneration);
     });
+    row.dataset.path = change.path;
     const marker = node('div', `change-marker ${type}`, change.tracked ? (change.binary ? 'B' : 'M') : '?');
     const rail = node('div', 'action-rail');
     rail.append(node('span', `action-dot ${type}`));
@@ -2960,13 +2961,26 @@ function shortID(id) {
     });
   }
 
-  // openHit opens the hit's run; an action hit loads the actions page that starts at the hit's offset and selects that row.
+  // openHit opens the hit's run and selects its exact action or changed-file row.
   async function openHit(index) {
     const hit = search.hits[index];
     if (!hit) return;
     closeSearch();
+    window.clearTimeout(state.searchTimer);
+    state.searchTimer = null;
+    state.query = '';
+    $('timeline-search').value = '';
     if (hit.kind === 'action') $('timeline-tab-actions').click();
-    await navigateRun(hit.runId, hit.kind === 'action' ? hit.offset || 0 : 0);
+    if (hit.kind === 'change') $('timeline-tab-changes').click();
+    await navigateRun(hit.runId, hit.kind === 'action' ? hit.offset || 0 : (hit.kind === 'change' ? hit.index || 0 : 0));
+    if (hit.kind === 'change' && state.run && state.run.run.id === hit.runId && state.mode === 'changes') {
+      const row = Array.from(document.querySelectorAll('.change-row')).find((item) => item.dataset.path === hit.path);
+      if (!row) return;
+      row.click();
+      row.scrollIntoView({ block: 'center' });
+      row.focus({ preventScroll: true });
+      return;
+    }
     if (hit.kind !== 'action' || !state.run || state.run.run.id !== hit.runId || state.mode !== 'actions') return;
     const items = state.streams.actions.items;
     const at = Math.max(0, items.findIndex((action) => action.id === hit.actionId));
@@ -3004,7 +3018,7 @@ function shortID(id) {
       state.activeTypes.clear();
       state.selected = null;
       renderRun();
-      await loadStreamPage(state.mode, state.mode === 'actions' ? cursor : 0, false, generation, false, controller.signal);
+      await loadStreamPage(state.mode, cursor, false, generation, false, controller.signal);
       if (state.mode !== 'actions') await loadStreamPage('actions', 0, false, generation, false, controller.signal);
       if (state.mode !== 'changes') await loadStreamPage('changes', 0, false, generation, false, controller.signal);
       if (generation !== state.loadGeneration) return;

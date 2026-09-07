@@ -214,6 +214,8 @@ type searchHit struct {
 	Kind      string    `json:"kind"`
 	ActionID  string    `json:"actionId,omitempty"`
 	Type      string    `json:"type,omitempty"`
+	Path      string    `json:"path,omitempty"`
+	Index     int       `json:"index,omitempty"`
 	Offset    int64     `json:"offset"`
 	Snippet   string    `json:"snippet"`
 }
@@ -230,9 +232,10 @@ type searchResult struct {
 // show is surfaced by a search.
 var searchSnippetKeys = []string{"prompt", "text", "command", "file_path", "path", "query", "pattern", "url", "tool", "name", "message"}
 
-// searchRuns looks for q, case-insensitively, in every run's prompt, project
-// and actions, newest run first, within a time budget and a hit limit.
-func searchRuns(root, q string, limit int) (searchResult, error) {
+// searchRuns looks for q, case-insensitively, in every run's prompt, project,
+// actions and validated repository change paths, newest run first, within a
+// time budget and a hit limit.
+func searchRuns(ctx context.Context, root, q string, limit int) (searchResult, error) {
 	result := searchResult{Query: q, Hits: []searchHit{}}
 	needle := strings.ToLower(strings.TrimSpace(q))
 	if len(needle) < searchMinQuery {
@@ -241,11 +244,17 @@ func searchRuns(root, q string, limit int) (searchResult, error) {
 	if limit <= 0 || limit > searchMaxHits {
 		limit = searchMaxHits
 	}
-	runs, _, err := listRuns(root, "")
+	searchCtx, cancel := context.WithTimeout(ctx, searchBudget)
+	defer cancel()
+	runs, _, err := listRunsContext(searchCtx, root, "")
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		result.Truncated = true
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}
-	deadline := time.Now().Add(searchBudget)
+	deadline, _ := searchCtx.Deadline()
 	// add keeps a hit while there is room, and says when there is none.
 	add := func(hit searchHit) bool {
 		if len(result.Hits) >= limit {
@@ -256,6 +265,13 @@ func searchRuns(root, q string, limit int) (searchResult, error) {
 		return true
 	}
 	for _, run := range runs {
+		if err := searchCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			result.Truncated = true
+			break
+		}
 		if result.Truncated {
 			break
 		}
@@ -287,16 +303,56 @@ func searchRuns(root, q string, limit int) (searchResult, error) {
 				break
 			}
 		}
-		err = searchActions(runRoot, needle, base, add)
+		err = searchActions(searchCtx, runRoot, needle, base, add)
 		runRoot.Close()
+		if err != nil && ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Truncated = true
+			break
+		}
 		if err != nil {
 			continue
 		}
+		snapshot, err := captureRunChangesContext(searchCtx, root, run.ID)
+		if err != nil && ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Truncated = true
+			break
+		}
+		if err != nil {
+			continue
+		}
+		for index, change := range snapshot.changes {
+			if err := searchCtx.Err(); err != nil {
+				if ctx.Err() != nil {
+					snapshot.Close()
+					return result, ctx.Err()
+				}
+				result.Truncated = true
+				break
+			}
+			if foldIndex(change.Path, needle) < 0 {
+				continue
+			}
+			hit := base
+			hit.Kind, hit.Type, hit.Path, hit.Index, hit.Snippet = "change", change.Kind, change.Path, index, snippetAround(change.Path, needle)
+			if !add(hit) {
+				break
+			}
+		}
+		snapshot.Close()
 	}
 	return result, nil
 }
 
-func searchActions(runRoot *os.Root, needle string, base searchHit, add func(searchHit) bool) error {
+func searchActions(ctx context.Context, runRoot *os.Root, needle string, base searchHit, add func(searchHit) bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f, err := openRegularFromRoot(runRoot, actionsFile)
 	if err != nil {
 		return err
@@ -306,6 +362,9 @@ func searchActions(runRoot *os.Root, needle string, base searchHit, add func(sea
 	sc.Buffer(nil, maxActionBytes)
 	var offset int64
 	for sc.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		line := sc.Bytes()
 		lineStart := offset
 		offset += int64(len(line)) + 1

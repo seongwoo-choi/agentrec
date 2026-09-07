@@ -125,19 +125,35 @@ func parseChangesOptions(args []string) (changesOptions, error) {
 }
 
 func readRunChanges(root, runID string) (viewChangePage, error) {
-	source, err := openRunRoot(root, runID)
+	return readRunChangesContext(context.Background(), root, runID)
+}
+
+func readRunChangesContext(ctx context.Context, root, runID string) (viewChangePage, error) {
+	snapshot, err := captureRunChangesContext(ctx, root, runID)
 	if err != nil {
 		return viewChangePage{}, err
+	}
+	defer snapshot.Close()
+	return readViewChangePage(snapshot, 0)
+}
+
+func captureRunChangesContext(ctx context.Context, root, runID string) (_ *viewSnapshot, retErr error) {
+	source, err := openRunRoot(root, runID)
+	if err != nil {
+		return nil, err
 	}
 	defer source.Close()
 
-	ctx := context.Background()
 	before, err := fingerprintChangeEvidence(ctx, source)
 	if err != nil {
-		return viewChangePage{}, err
+		return nil, err
 	}
 	snapshot := &viewSnapshot{documents: make(map[string][]byte)}
-	defer snapshot.Close()
+	defer func() {
+		if retErr != nil {
+			snapshot.Close()
+		}
+	}()
 	for _, name := range changeEvidenceFiles {
 		expected := before[name]
 		if !expected.present {
@@ -149,24 +165,20 @@ func readRunChanges(root, runID string) (viewChangePage, error) {
 			snapshot.documents[name], err = captureViewDocumentContext(ctx, source, name, expected)
 		}
 		if err != nil {
-			return viewChangePage{}, err
+			return nil, err
 		}
 	}
 	if err := prepareViewChangesContext(ctx, snapshot); err != nil {
-		return viewChangePage{}, err
-	}
-	page, err := readViewChangePage(snapshot, 0)
-	if err != nil {
-		return viewChangePage{}, err
+		return nil, err
 	}
 	after, err := fingerprintChangeEvidence(ctx, source)
 	if err != nil {
-		return viewChangePage{}, err
+		return nil, err
 	}
 	if !sameViewFingerprint(before, after) {
-		return viewChangePage{}, fmt.Errorf("run changed while reading repository evidence")
+		return nil, fmt.Errorf("run changed while reading repository evidence")
 	}
-	return page, nil
+	return snapshot, nil
 }
 
 func fingerprintChangeEvidence(ctx context.Context, root *os.Root) (map[string]viewFileIdentity, error) {

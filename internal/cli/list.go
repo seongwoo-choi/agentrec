@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -246,12 +247,23 @@ func listRunsForTable(root, cwd string, exitReasonSet bool, exitReasonFilter str
 // runs directory that does not exist yet is a tool that has recorded nothing,
 // not a failure.
 func listRuns(root, cwd string) ([]runSummary, int, error) {
-	return scanRuns(root, cwd, nil)
+	return listRunsContext(context.Background(), root, cwd)
+}
+
+func listRunsContext(ctx context.Context, root, cwd string) ([]runSummary, int, error) {
+	return scanRunsContext(ctx, root, cwd, nil)
 }
 
 type runEnricher func(*os.Root, *runSummary) (bool, error)
 
 func scanRuns(root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
+	return scanRunsContext(context.Background(), root, cwd, enrich)
+}
+
+func scanRunsContext(ctx context.Context, root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	runsRoot, err := os.OpenRoot(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, 0, nil
@@ -260,10 +272,17 @@ func scanRuns(root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
 		return nil, 0, fmt.Errorf("cli: read runs directory: %w", err)
 	}
 	defer runsRoot.Close()
-	return scanRunsFromRoot(runsRoot, cwd, enrich)
+	return scanRunsFromRootContext(ctx, runsRoot, cwd, enrich)
 }
 
 func scanRunsFromRoot(root *os.Root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
+	return scanRunsFromRootContext(context.Background(), root, cwd, enrich)
+}
+
+func scanRunsFromRootContext(ctx context.Context, root *os.Root, cwd string, enrich runEnricher) ([]runSummary, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	dir, err := root.Open(".")
 	if err != nil {
 		return nil, 0, fmt.Errorf("cli: read runs directory: %w", err)
@@ -282,6 +301,9 @@ func scanRunsFromRoot(root *os.Root, cwd string, enrich runEnricher) ([]runSumma
 	var runs []runSummary
 	unreadable := 0
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, unreadable, err
+		}
 		if err := validateRunID(entry.Name()); err != nil {
 			continue
 		}

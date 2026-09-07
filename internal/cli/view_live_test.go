@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -150,6 +153,122 @@ func TestViewSearchFindsAcrossRuns(t *testing.T) {
 	viewJSONRequest(t, handler, "/api/search?q=rocket&limit=1", &limited)
 	if len(limited.Hits) != 1 || !limited.Truncated {
 		t.Errorf("limit=1: %d hits, truncated %v", len(limited.Hits), limited.Truncated)
+	}
+}
+
+func TestViewSearchStopsWhenRequestIsCanceled(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-cancel-search", "claude", time.Now(), "completed")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := searchRuns(ctx, root, "anything", searchMaxHits); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled search error = %v, want context canceled", err)
+	}
+	runRoot, err := openRunRoot(root, "run-cancel-search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runRoot.Close()
+	if err := searchActions(ctx, runRoot, "anything", searchHit{}, func(searchHit) bool { return true }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled action search error = %v, want context canceled", err)
+	}
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer deadlineCancel()
+	if _, err := searchRuns(deadlineCtx, root, "anything", searchMaxHits); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired search error = %v, want deadline exceeded", err)
+	}
+	if err := searchActions(deadlineCtx, runRoot, "anything", searchHit{}, func(searchHit) bool { return true }); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired action search error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestViewSearchFindsChangePathAfterFirstPage(t *testing.T) {
+	root := home(t)
+	at := time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
+	b, err := storage.Create(root, "run-many-changes", storage.Manifest{Provider: "claude", CWD: "/tmp/projects/search", StartedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitPath := filepath.Join(b.Dir(), gitDir)
+	if err := os.Mkdir(gitPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const attribution = "observed during run, not causal proof"
+	files := make([]map[string]any, viewPageSize+1)
+	for index := range files {
+		path := fmt.Sprintf("ordinary/%03d.txt", index)
+		if index == viewPageSize {
+			path = "late-target/after-first-page.txt"
+		}
+		files[index] = map[string]any{"path": path, "kind": "file", "mode": "-rw-------", "size": 1, "stored": false, "reason": "not stored"}
+	}
+	resultJSON, err := json.Marshal(map[string]any{"status": "available", "attribution": attribution, "baseline": "abc123", "trackedFiles": 0, "added": 0, "deleted": 0, "untrackedFiles": len(files), "storedTextFiles": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statJSON, err := json.Marshal(map[string]any{"status": "available", "attribution": attribution, "baseline": "abc123", "files": []any{}, "totals": map[string]any{"files": 0, "additions": 0, "deletions": 0, "binary": 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrackedJSON, err := json.Marshal(map[string]any{"attribution": attribution, "count": len(files), "stored": 0, "files": files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeViewFixture(t, filepath.Join(gitPath, resultFile), string(resultJSON))
+	writeViewFixture(t, filepath.Join(gitPath, trackedStatFile), string(statJSON))
+	writeViewFixture(t, filepath.Join(gitPath, untrackedChangesFile), string(untrackedJSON))
+	if err := b.Finalize(storage.Finalization{EndedAt: at.Add(time.Minute), ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { handler.Close() })
+	var result searchResult
+	viewJSONRequest(t, handler, "/api/search?q=after-first-page", &result)
+	if result.Truncated || len(result.Hits) != 1 || result.Hits[0].Kind != "change" || result.Hits[0].Path != "late-target/after-first-page.txt" || result.Hits[0].Index != viewPageSize {
+		t.Fatalf("late change search = %+v", result)
+	}
+}
+
+func TestViewSearchFindsRepositoryChangePathsWithoutPatchContents(t *testing.T) {
+	root := home(t)
+	at := time.Date(2026, 7, 27, 9, 0, 0, 0, time.UTC)
+	b, err := storage.Create(root, "run-changes", storage.Manifest{Provider: "claude", CWD: "/tmp/projects/search", StartedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitPath := filepath.Join(b.Dir(), gitDir)
+	if err := os.Mkdir(gitPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const attribution = "observed during run, not causal proof"
+	writeViewFixture(t, filepath.Join(gitPath, resultFile), `{"status":"available","attribution":"`+attribution+`","baseline":"abc123","trackedFiles":1,"added":1,"deleted":0,"untrackedFiles":1,"storedTextFiles":0}`)
+	writeViewFixture(t, filepath.Join(gitPath, trackedStatFile), `{"status":"available","attribution":"`+attribution+`","baseline":"abc123","files":[{"path":"search-target/tracked.go","additions":1,"deletions":0}],"totals":{"files":1,"additions":1,"deletions":0,"binary":0}}`)
+	writeViewFixture(t, filepath.Join(gitPath, untrackedChangesFile), `{"attribution":"`+attribution+`","count":1,"stored":0,"files":[{"path":"search-target/untracked.txt","kind":"file","mode":"-rw-------","size":4,"stored":false,"reason":"not stored"}]}`)
+	writeViewFixture(t, filepath.Join(gitPath, trackedPatchFile), "diff --git a/search-target/tracked.go b/search-target/tracked.go\n--- a/search-target/tracked.go\n+++ b/search-target/tracked.go\n@@ -0,0 +1 @@\n+PATCH-ONLY-SECRET\n")
+	if err := b.Finalize(storage.Finalization{EndedAt: at.Add(time.Minute), ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { handler.Close() })
+	var result searchResult
+	viewJSONRequest(t, handler, "/api/search?q=search-target", &result)
+	var got []string
+	for _, hit := range result.Hits {
+		if hit.Kind == "change" {
+			got = append(got, fmt.Sprintf("%d:%s:%s", hit.Index, hit.Type, hit.Snippet))
+		}
+	}
+	want := []string{"0:tracked:search-target/tracked.go", "1:file:search-target/untracked.txt"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("change hits = %v, want %v", got, want)
+	}
+
+	var patchOnly searchResult
+	viewJSONRequest(t, handler, "/api/search?q=PATCH-ONLY-SECRET", &patchOnly)
+	if len(patchOnly.Hits) != 0 {
+		t.Errorf("patch-only search returned %+v, want no hits", patchOnly.Hits)
 	}
 }
 
