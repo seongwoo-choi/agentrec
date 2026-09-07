@@ -249,6 +249,7 @@
       'Results truncated': '결과가 잘렸습니다',
       action: '액션',
       run: '실행',
+      change: '변경',
       'Live · updated {time}': '실시간 · {time} 갱신',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '현재 작업 트리 — {time} 측정, 실행 중에 관측된 것으로 에이전트가 원인이라는 증명은 아닙니다',
       'Working tree': '작업 트리',
@@ -519,6 +520,7 @@
       'Results truncated': '結果は切り詰められています',
       action: 'アクション',
       run: '実行',
+      change: '変更',
       'Live · updated {time}': 'ライブ · {time} 更新',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '現在の作業ツリー — {time} に計測。実行中に観測されたもので、エージェントが原因であることの証明ではありません',
       'Working tree': '作業ツリー',
@@ -788,6 +790,7 @@
       '{n} hit(s) in {m} run(s)': '在 {m} 个运行中找到 {n} 条匹配',
       'Results truncated': '结果已截断',
       action: '操作',
+      change: '变更',
       run: '运行',
       'Live · updated {time}': '实时 · {time} 更新',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '当前工作树 — 测量于 {time}，在运行期间观测到，并非代理造成的证明',
@@ -1151,24 +1154,54 @@ function shortID(id) {
     $('run-failures-only').checked = params.get('failures') === '1';
   }
 
+  function changedFileFromURL() {
+    const params = new URLSearchParams(location.search);
+    const path = params.get('focus') === 'changes' ? params.get('change') : '';
+    const rawCursor = params.get('changeCursor');
+    if (!path || !/^(0|[1-9][0-9]*)$/.test(rawCursor || '')) return null;
+    const cursor = Number(rawCursor);
+    return Number.isSafeInteger(cursor) ? { path, cursor } : null;
+  }
+
   function focusRunEvidenceFromURL(defaultFocus = '') {
-    const focus = new URLSearchParams(location.search).get('focus') || defaultFocus;
+    const params = new URLSearchParams(location.search);
+    const focus = params.get('focus') || defaultFocus;
     if (focus === 'verification') {
       const target = $('evidence-verification');
       target.scrollIntoView({ block: 'start' });
       target.focus({ preventScroll: true });
     } else if (['actions', 'changes', 'events'].includes(focus)) {
+      const changedFile = changedFileFromURL();
+      if (changedFile) {
+        window.clearTimeout(state.searchTimer);
+        state.searchTimer = null;
+        state.query = '';
+        $('timeline-search').value = '';
+      }
       const tab = $(`timeline-tab-${focus}`);
       state.restoringNavigation = true;
       try { tab.click(); } finally { state.restoringNavigation = false; }
       tab.focus({ preventScroll: true });
+      if (changedFile) {
+        const row = Array.from(document.querySelectorAll('.change-row')).find((item) => item.dataset.path === changedFile.path);
+        if (row) {
+          row.click();
+          row.scrollIntoView({ block: 'center' });
+          row.focus({ preventScroll: true });
+        }
+      }
     }
   }
 
   function updateRunNavigationURL(name, value, mode = 'push') {
+    if (state.restoringNavigation) return;
     const url = new URL(location.href);
     if (value) url.searchParams.set(name, value);
     else url.searchParams.delete(name);
+    if (name === 'focus') {
+      url.searchParams.delete('change');
+      url.searchParams.delete('changeCursor');
+    }
     const next = `${url.pathname}${url.search}${url.hash}`;
     if (next === `${location.pathname}${location.search}${location.hash}`) return;
     history[`${mode}State`](history.state, '', next);
@@ -1534,11 +1567,20 @@ function shortID(id) {
     return row;
   }
 
-  function changeRow(change) {
+  function changeRow(change, index) {
     const type = changeFamily(change);
     const counts = change.binary ? t('binary') : [change.additions === undefined ? '' : `+${change.additions}`, change.deletions === undefined ? '' : `-${change.deletions}`].filter(Boolean).join(' ');
     if (!matches(change, type, `${type} ${change.path} ${change.kind || ''} ${counts}`)) return null;
+    const runID = state.run?.run.id;
+    const generation = state.loadGeneration;
+    const cursor = (state.streams.changes.startCursor || 0) + index;
     const row = timelineRow('action-row change-row', () => {
+      const url = new URL(location.href);
+      if (generation !== state.loadGeneration || runID !== state.run?.run.id || runID !== url.searchParams.get('run')) return;
+      url.searchParams.set('change', change.path);
+      url.searchParams.set('changeCursor', String(cursor));
+      url.searchParams.set('focus', 'changes');
+      if (url.href !== location.href) history.pushState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
       selectItem(row, { kind: 'change', value: change, patch: null, patchCursor: 0, patchNextCursor: null, patchHistory: [], patchLoading: false });
       if (change.tracked) loadPatchPage(change.path, 0, false, state.loadGeneration);
     });
@@ -2026,6 +2068,7 @@ function shortID(id) {
       const page = await getJSON(`/api/snapshots/${encodeURIComponent(state.run.snapshotId)}/${streamName}?cursor=${cursor}`, signal);
       // A page for a cursor this stream no longer waits on is stale and dropped.
       if (generation !== state.loadGeneration || cursor !== stream.currentCursor) return;
+      if (!append) stream.startCursor = cursor;
       stream.items = append ? stream.items.concat(page.items || []) : (page.items || []);
       stream.error = '';
       stream.nextCursor = page.nextCursor === undefined ? null : page.nextCursor;
@@ -2972,15 +3015,8 @@ function shortID(id) {
     $('timeline-search').value = '';
     if (hit.kind === 'action') $('timeline-tab-actions').click();
     if (hit.kind === 'change') $('timeline-tab-changes').click();
-    await navigateRun(hit.runId, hit.kind === 'action' ? hit.offset || 0 : (hit.kind === 'change' ? hit.index || 0 : 0));
-    if (hit.kind === 'change' && state.run && state.run.run.id === hit.runId && state.mode === 'changes') {
-      const row = Array.from(document.querySelectorAll('.change-row')).find((item) => item.dataset.path === hit.path);
-      if (!row) return;
-      row.click();
-      row.scrollIntoView({ block: 'center' });
-      row.focus({ preventScroll: true });
-      return;
-    }
+    await navigateRun(hit.runId, hit.kind === 'action' ? hit.offset || 0 : (hit.kind === 'change' ? hit.index || 0 : 0), 'push', hit.kind === 'change' ? hit.path : '');
+    if (hit.kind === 'change') return;
     if (hit.kind !== 'action' || !state.run || state.run.run.id !== hit.runId || state.mode !== 'actions') return;
     const items = state.streams.actions.items;
     const at = Math.max(0, items.findIndex((action) => action.id === hit.actionId));
@@ -3045,9 +3081,21 @@ function shortID(id) {
     }
   }
 
-  async function navigateRun(id, cursor = 0, mode = 'push') {
-    updateRunNavigationURL('run', id, mode);
-    await loadRun(id, false, cursor, true);
+  async function navigateRun(id, cursor = 0, mode = 'push', changedPath = '') {
+    const url = new URL(location.href);
+    url.searchParams.set('run', id);
+    if (changedPath) {
+      url.searchParams.set('focus', 'changes');
+      url.searchParams.set('change', changedPath);
+      url.searchParams.set('changeCursor', String(cursor));
+    } else {
+      url.searchParams.delete('change');
+      url.searchParams.delete('changeCursor');
+    }
+    history[`${mode}State`](history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    const changedFile = changedFileFromURL();
+    if (changedFile) state.mode = 'changes';
+    await loadRun(id, false, changedFile ? changedFile.cursor : cursor, true);
     if (!state.run || state.run.run.id !== id) return;
     focusRunEvidenceFromURL();
   }
@@ -3191,7 +3239,9 @@ function shortID(id) {
       state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
       const linkedRun = new URLSearchParams(location.search).get('run');
-      if (linkedRun) await loadRun(linkedRun, true, 0, true);
+      const linkedChange = changedFileFromURL();
+      if (linkedChange) state.mode = 'changes';
+      if (linkedRun) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : 0, true);
       else await autoSelect(list);
       if (linkedRun && state.run && state.run.run.id === linkedRun) focusRunEvidenceFromURL();
       const reopen = /^#compare=([^,]+),(.+)$/.exec(location.hash);
@@ -3237,7 +3287,10 @@ function shortID(id) {
       state.loadGeneration += 1;
     }
     const linkedRun = new URLSearchParams(location.search).get('run');
-    if (linkedRun && (!state.run || state.run.run.id !== linkedRun)) await loadRun(linkedRun, true, 0, true);
+    const linkedChange = changedFileFromURL();
+    if (linkedChange) state.mode = 'changes';
+    const leavingChangePage = state.streams && state.streams.changes.startCursor > 0;
+    if (linkedRun && (!state.run || state.run.run.id !== linkedRun || linkedChange || leavingChangePage)) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : 0, true);
     if (linkedRun && state.run && state.run.run.id === linkedRun) focusRunEvidenceFromURL('actions');
     if (!linkedRun) {
       state.run = null;

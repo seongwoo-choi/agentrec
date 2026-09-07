@@ -215,7 +215,7 @@ type searchHit struct {
 	ActionID  string    `json:"actionId,omitempty"`
 	Type      string    `json:"type,omitempty"`
 	Path      string    `json:"path,omitempty"`
-	Index     int       `json:"index,omitempty"`
+	Index     int       `json:"index"`
 	Offset    int64     `json:"offset"`
 	Snippet   string    `json:"snippet"`
 }
@@ -236,6 +236,10 @@ var searchSnippetKeys = []string{"prompt", "text", "command", "file_path", "path
 // actions and validated repository change paths, newest run first, within a
 // time budget and a hit limit.
 func searchRuns(ctx context.Context, root, q string, limit int) (searchResult, error) {
+	return searchRunsWithChanges(ctx, root, q, limit, captureRunChangesContext)
+}
+
+func searchRunsWithChanges(ctx context.Context, root, q string, limit int, capture func(context.Context, string, string) (*viewSnapshot, error)) (searchResult, error) {
 	result := searchResult{Query: q, Hits: []searchHit{}}
 	needle := strings.ToLower(strings.TrimSpace(q))
 	if len(needle) < searchMinQuery {
@@ -315,7 +319,10 @@ func searchRuns(ctx context.Context, root, q string, limit int) (searchResult, e
 		if err != nil {
 			continue
 		}
-		snapshot, err := captureRunChangesContext(searchCtx, root, run.ID)
+		if result.Truncated {
+			break
+		}
+		snapshot, err := capture(searchCtx, root, run.ID)
 		if err != nil && ctx.Err() != nil {
 			return result, ctx.Err()
 		}
