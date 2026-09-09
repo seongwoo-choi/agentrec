@@ -804,6 +804,349 @@ test('live failure transition updates a persistent triage status region', async 
   assert.match(status.textContent, /Verify FAIL/);
 });
 
+function recentRunsFixture() {
+  const data = fixture('completed', 'pass', 'PASS');
+  const base = data.list.runs[0], detail = data.details;
+  // API order is newest first; cutoff must be matching rows, never a wall clock.
+  data.list.runs = Array.from({ length: 29 }, (_, i) => ({ ...base, id: `run-${i}`, project: i % 2 ? 'dogfoodlab' : 'agentrec' }));
+  data.list.total = 29;
+  data.list.generation = 'same';
+  data.details = (id) => ({ ...detail, run: { ...detail.run, id } });
+  return data;
+}
+
+const runIDs = (d) => Array.from(d.querySelectorAll('#run-list .run-item'), (r) => r.dataset.runId);
+
+test('empty search and unreadable loaded page do not claim the whole store is empty', async (t) => {
+  for (const emptyPage of [false, true]) {
+    const data = recentRunsFixture();
+    data.list.total = 55;
+    data.list.nextCursor = 'more';
+    if (emptyPage) data.list.runs = [];
+    data.configure = (w) => w.history.replaceState(null, '', '/?q=absent');
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const d = dom.window.document;
+    assert.equal(d.querySelector('#run-list-empty').textContent, emptyPage ? 'No readable runs loaded yet. Load more to continue.' : 'No loaded runs match this search.');
+    if (emptyPage) assert.notEqual(d.querySelector('#workspace-empty-title').textContent, 'No runs recorded yet');
+    assert.equal(d.querySelector('#run-load-more').classList.contains('hidden'), false);
+    assert.equal(d.querySelector('#run-earlier-toggle').classList.contains('hidden'), true);
+  }
+});
+
+test('unreadable final page refreshes empty copy and hides exhausted load-more with unchanged runs', async (t) => {
+  const data = recentRunsFixture();
+  data.list.runs = [];
+  data.list.total = 55;
+  data.list.nextCursor = 'page-two';
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const more = d.querySelector('#run-load-more');
+  assert.equal(more.classList.contains('hidden'), false);
+  assert.equal(d.querySelector('#run-list-empty').textContent, 'No readable runs loaded yet. Load more to continue.');
+  const fetch = w.fetch;
+  let requests = 0;
+  w.fetch = (input, init) => {
+    if (String(input).includes('/api/runs?cursor=')) {
+      requests += 1;
+      assert.equal(String(input), '/api/runs?cursor=page-two');
+      return response({ runs: [], total: 55, nextCursor: '', generation: 'same', unreadable: 55 });
+    }
+    return fetch(input, init);
+  };
+  more.click();
+  await settle();
+  assert.equal(requests, 1);
+  assert.equal(more.classList.contains('hidden'), true);
+  assert.equal(more.disabled, false);
+  assert.deepEqual(runIDs(d), []);
+  assert.equal(d.querySelector('#run-list-empty').textContent, 'No readable runs loaded.');
+  assert.equal(d.querySelector('#run-list-status').textContent, 'No readable runs loaded.');
+  assert.equal(d.querySelector('#workspace-empty-title').textContent, 'No run selected');
+  assert.equal(d.querySelector('#unreadable-warning').textContent, '55 unreadable run(s) were excluded.');
+  assert.equal(d.querySelector('#unreadable-warning').classList.contains('hidden'), false);
+});
+
+test('project and recent-run controls explain loaded scope in all four locales', async (t) => {
+  const dom = await renderFixture(recentRunsFixture());
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  for (const [lang, project, all, show, hide, scope, count] of [
+    ['en', 'Filter by project', 'All projects', 'Show 19 earlier runs', 'Hide earlier runs', 'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.', '10 shown · 29 matching · 29 loaded · 19 folded'],
+    ['ko', '프로젝트로 필터링', '모든 프로젝트', '이전 실행 19개 보기', '이전 실행 숨기기', '필터와 프로젝트 목록은 로드된 실행만 포함합니다. 기본적으로 일치하는 최신 10개와 선택된 이전 실행을 표시합니다.', '표시 10개 · 일치 29개 · 로드 29개 · 접힘 19개'],
+    ['ja', 'プロジェクトで絞り込む', 'すべてのプロジェクト', '以前の実行を19件表示', '以前の実行を隠す', 'フィルターとプロジェクト候補は読み込み済みの実行のみが対象です。既定では、一致する最新10件と選択中の以前の実行を表示します。', '表示10件 · 一致29件 · 読み込み済み29件 · 折りたたみ19件'],
+    ['zh-CN', '按项目筛选', '所有项目', '显示19个较早运行', '隐藏较早运行', '筛选和项目选项仅涵盖已加载的运行。默认显示最新的10个匹配项，并保留选中的较早运行。', '显示10个 · 匹配29个 · 已加载29个 · 已折叠19个'],
+  ]) {
+    d.querySelector('#lang').value = lang;
+    d.querySelector('#lang').dispatchEvent(new w.Event('change'));
+    const select = d.querySelector('#run-project-filter');
+    assert.equal(select.getAttribute('aria-label'), project, lang);
+    assert.equal(select.options[0].textContent, all, lang);
+    assert.equal(select.getAttribute('aria-describedby'), 'run-list-scope');
+    assert.equal(d.querySelector('#run-list-scope').textContent, scope, lang);
+    assert.equal(d.querySelector('#run-count').textContent, count, lang);
+    const toggle = d.querySelector('#run-earlier-toggle');
+    assert.equal(toggle.textContent, show, lang);
+    toggle.click();
+    assert.equal(toggle.textContent, hide, lang);
+    assert.equal(d.querySelector('#run-list-scope').textContent, scope, `${lang} expanded default explanation`);
+    toggle.click();
+  }
+});
+
+test('project dropdown spans its row and run counts wrap below the header', () => {
+  assert.match(css, /#run-project-filter\s*\{[^}]*grid-column:\s*1 \/ -1/);
+  assert.match(css, /\.sidebar-head\s*\{[^}]*flex-wrap:\s*wrap/);
+  assert.match(css, /#run-count\s*\{[^}]*border-radius:\s*8px/);
+});
+
+test('new-run polling moves focused cutoff row to earlier toggle without expanding the list', async (t) => {
+  let poll;
+  const data = recentRunsFixture();
+  data.configure = (w) => {
+    w.setInterval = (fn, delay) => { if (delay === 5000) poll = fn; return delay; };
+    w.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  const toggle = d.querySelector('#run-earlier-toggle');
+  assert.equal(d.querySelector('#run-title').textContent, 'run-0');
+  d.querySelector('[data-run-id="run-9"]').focus();
+  data.list.runs.unshift({ ...data.list.runs[0], id: 'new-run' });
+  data.list.total = 30;
+  await poll();
+  assert.equal(d.activeElement, toggle, 'newly folded unselected row hands focus to the stable toggle');
+  assert.equal(toggle.classList.contains('hidden'), false);
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(toggle.textContent, 'Show 20 earlier runs');
+  assert.deepEqual(runIDs(d), ['new-run', ...Array.from({ length: 9 }, (_, i) => `run-${i}`)]);
+  assert.equal(d.querySelector('#run-count').textContent, '10 shown · 30 matching · 30 loaded · 20 folded');
+  assert.equal(d.querySelector('#run-title').textContent, 'run-0');
+  d.querySelector('[data-run-id="run-5"]').focus();
+  data.list.runs.unshift({ ...data.list.runs[0], id: 'newer-run' });
+  data.list.total = 31;
+  await poll();
+  assert.equal(d.activeElement.dataset.runId, 'run-5', 'still-visible focus is restored rather than sent to toggle');
+  assert.deepEqual(runIDs(d), ['newer-run', 'new-run', ...Array.from({ length: 8 }, (_, i) => `run-${i}`)]);
+  assert.equal(d.querySelector('#run-count').textContent, '10 shown · 31 matching · 31 loaded · 21 folded');
+});
+
+test('fold expansion survives same-generation polling and load-more, resets on history filter changes', async (t) => {
+  let poll;
+  const data = recentRunsFixture();
+  data.list.total = 40;
+  data.list.nextCursor = 'page-two';
+  data.configure = (w) => {
+    w.setInterval = (fn, delay) => { if (delay === 5000) poll = fn; return delay; };
+    w.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const toggle = d.querySelector('#run-earlier-toggle');
+  const more = d.querySelector('#run-load-more');
+  assert.equal(more.classList.contains('hidden'), false);
+  assert.equal(toggle.contains(more), false);
+  toggle.click();
+  const row = d.querySelector('[data-run-id="run-20"]');
+  row.focus();
+  await poll();
+  assert.equal(d.activeElement, row, 'unchanged polling preserves DOM/focus');
+  data.list.runs[20].warningCount = 1;
+  await poll();
+  assert.equal(d.activeElement.dataset.runId, 'run-20', 'changed same-generation polling restores row focus');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  const fetch = w.fetch;
+  w.fetch = (input, init) => String(input).includes('/api/runs?cursor=')
+    ? response({ runs: [{ ...data.list.runs[28], id: 'run-29', project: 'new-project' }], total: 40, nextCursor: 'page-three', generation: 'same' })
+    : fetch(input, init);
+  more.click();
+  await settle();
+  assert.equal(runIDs(d).length, 30);
+  assert.equal(d.querySelector('#run-count').textContent, '30 shown · 30 matching · 30 loaded · 0 folded');
+  assert.ok(Array.from(d.querySelector('#run-project-filter').options).some((o) => o.value === 'new-project'));
+  await poll();
+  assert.equal(runIDs(d).length, 30, 'first-page poll retains appended rows');
+  toggle.click();
+  assert.equal(toggle.textContent, 'Show 20 earlier runs');
+  assert.equal(more.classList.contains('hidden'), false);
+  toggle.click();
+  w.localStorage.setItem('agentrec.project', 'wrong');
+  w.history.pushState(null, '', '/?project=dogfoodlab&run=run-0#kept');
+  w.dispatchEvent(new w.PopStateEvent('popstate'));
+  await settle();
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false', 'history filter change resets fold');
+  assert.equal(runIDs(d).length, 10);
+  assert.equal(d.querySelector('#run-title').textContent, 'run-0');
+});
+
+test('fold cutoff uses matching projects and changing any filter resets expansion without changing open run', async (t) => {
+  const data = recentRunsFixture();
+  data.configure = (w) => w.history.replaceState(null, '', '/?project=dogfoodlab');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  assert.deepEqual(runIDs(d), Array.from({ length: 10 }, (_, i) => `run-${i * 2 + 1}`));
+  assert.equal(d.querySelector('#run-count').textContent, '10 shown · 14 matching · 29 loaded · 4 folded');
+  for (const [id, value, event] of [['run-project-filter', '', 'change'], ['run-search', 'run', 'input'], ['run-exit-filter', 'completed', 'change'], ['run-verification-filter', 'PASS', 'change'], ['run-failures-only', true, 'change']]) {
+    const toggle = d.querySelector('#run-earlier-toggle');
+    toggle.click();
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+    const filter = d.getElementById(id);
+    if (id === 'run-failures-only') filter.checked = value; else filter.value = value;
+    filter.dispatchEvent(new w.Event(event));
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false', id);
+    assert.equal(d.querySelector('#run-title').textContent, 'run-1', id);
+  }
+});
+
+test('selected matching older run remains reachable exactly once while other earlier runs stay folded', async (t) => {
+  const data = recentRunsFixture();
+  data.configure = (w) => w.history.replaceState(null, '', '/?project=agentrec&run=run-28&focus=verification#kept');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  assert.deepEqual(runIDs(d), [...Array.from({ length: 10 }, (_, i) => `run-${i * 2}`), 'run-28']);
+  assert.equal(d.querySelector('#run-count').textContent, '11 shown · 15 matching · 29 loaded · 4 folded');
+  assert.equal(d.querySelector('#run-earlier-toggle').textContent, 'Show 4 earlier runs');
+  assert.equal(d.querySelector('[data-run-id="run-28"]').getAttribute('aria-current'), 'true');
+  assert.equal(d.querySelector('[data-run-id="run-28"]').tabIndex, 0);
+  d.querySelector('#run-earlier-toggle').click();
+  assert.equal(runIDs(d).length, 15);
+  assert.equal(new Set(runIDs(d)).size, 15);
+  d.querySelector('#run-earlier-toggle').click();
+  assert.equal(runIDs(d).length, 11);
+  d.querySelector('#run-project-filter').value = 'dogfoodlab';
+  d.querySelector('#run-project-filter').dispatchEvent(new w.Event('change'));
+  assert.equal(runIDs(d).includes('run-28'), false);
+  assert.equal(d.querySelector('#run-title').textContent, 'run-28');
+  assert.equal(new URLSearchParams(w.location.search).get('focus'), 'verification');
+  assert.equal(w.location.hash, '#kept');
+});
+
+test('recent runs show ten of 29 loaded with an accessible earlier-run toggle and honest count', async (t) => {
+  const dom = await renderFixture(recentRunsFixture());
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.deepEqual(runIDs(d), Array.from({ length: 10 }, (_, i) => `run-${i}`));
+  assert.equal(d.querySelector('#run-count').textContent, '10 shown · 29 matching · 29 loaded · 19 folded');
+  const toggle = d.querySelector('#run-earlier-toggle');
+  assert.equal(toggle.tagName, 'BUTTON');
+  assert.equal(toggle.type, 'button');
+  assert.equal(toggle.getAttribute('aria-controls'), 'run-list');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(toggle.textContent, 'Show 19 earlier runs');
+  toggle.focus();
+  toggle.click(); // Native button activation (Enter/Space behavior is provided by the browser).
+  assert.equal(d.activeElement, toggle);
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(toggle.textContent, 'Hide earlier runs');
+  assert.equal(runIDs(d).length, 29);
+  assert.equal(d.querySelector('#run-count').textContent, '29 shown · 29 matching · 29 loaded · 0 folded');
+  toggle.click();
+  assert.equal(runIDs(d).length, 10);
+});
+
+test('project changes remember exact choice including All without disturbing evidence URLs or inspector', async (t) => {
+  const data = actionLinkFixture();
+  data.list.runs.push({ ...data.list.runs[0], id: 'other', project: 'other project' });
+  data.list.total = 2;
+  data.configure = (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&action=action-250&actionCursor=98765&q=agentrec&exit=completed&verification=PASS&failures=1#kept`);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const inspector = d.querySelector('#inspector').textContent;
+  const original = new URLSearchParams(w.location.search);
+  for (const value of ['other project', '']) {
+    const select = d.querySelector('#run-project-filter');
+    select.value = value;
+    select.dispatchEvent(new w.Event('change'));
+    assert.equal(w.localStorage.getItem('agentrec.project'), value);
+    const params = new URLSearchParams(w.location.search);
+    assert.equal(params.has('project'), true);
+    assert.equal(params.get('project'), value);
+    for (const [key, val] of original) assert.equal(params.get(key), val, key);
+    assert.equal(w.location.hash, '#kept');
+    assert.equal(d.querySelector('#run-title').textContent, data.details.run.id);
+    assert.equal(d.querySelector('#inspector').textContent, inspector);
+    assert.ok(d.querySelector('.action-row.selected'));
+  }
+});
+
+test('project storage read and write failures are harmless', async (t) => {
+  for (const url of ['/', '/?project=agentrec']) {
+    const data = fixture('completed', 'pass', 'PASS');
+    data.configure = (w) => {
+      w.history.replaceState(null, '', url);
+      Object.defineProperty(w, 'localStorage', { get() { throw new Error('blocked'); } });
+    };
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const w = dom.window, d = w.document;
+    const select = d.querySelector('#run-project-filter');
+    select.value = 'agentrec';
+    select.dispatchEvent(new w.Event('change'));
+    assert.equal(new URLSearchParams(w.location.search).get('project'), 'agentrec');
+    assert.equal(d.querySelector('#run-title').textContent, data.details.run.id);
+  }
+});
+
+test('project preference applies only to bare landing; explicit and legacy shared URLs win', async (t) => {
+  for (const [url, expected] of [
+    ['/', 'remembered'], ['/?project=', ''], ['/?project=unknown', 'unknown'],
+    ['/?q=agentrec', ''], ['/?exit=completed', ''], ['/?verification=PASS', ''], ['/?failures=1', ''],
+    ['/?run=outside&focus=verification', ''], ['/#compare=outside,other', ''],
+    ['/?focus=changes', ''], ['/?kept=1#kept', ''],
+  ]) {
+    const data = fixture('completed', 'pass', 'PASS');
+    const detail = data.details;
+    data.list.runs.push({ ...data.list.runs[0], id: 'remembered-run', project: 'remembered' });
+    data.list.total = 2;
+    data.details = (id) => ({ ...detail, run: { ...detail.run, id } });
+    data.configure = (w) => {
+      w.localStorage.setItem('agentrec.project', 'remembered');
+      w.history.replaceState(null, '', url);
+    };
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const select = dom.window.document.querySelector('#run-project-filter');
+    assert.equal(select.value, expected, url);
+    if (expected === 'unknown') {
+      assert.equal(select.selectedOptions[0].textContent, 'unknown');
+      assert.equal(dom.window.document.querySelectorAll('#run-list .run-item').length, 0);
+    }
+    if (url === '/') {
+      assert.equal(dom.window.document.querySelector('#run-title').textContent, 'remembered-run');
+      assert.equal(new URLSearchParams(dom.window.location.search).get('project'), 'remembered', 'canonical landing URL survives reload');
+    }
+    if (url.includes('run=outside')) assert.equal(dom.window.document.querySelector('#run-title').textContent, 'outside');
+  }
+});
+
+test('project filter matches exact loaded projects and composes with other filters', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const base = data.list.runs[0];
+  data.list.runs = [
+    { ...base, id: 'exact', project: 'agentrec', failure: true },
+    { ...base, id: 'substring', project: 'agentrec-tools', failure: true },
+    { ...base, id: 'not-failed', project: 'agentrec', failure: false },
+  ];
+  data.list.total = 3;
+  const detail = data.details;
+  data.details = (id) => ({ ...detail, run: { ...detail.run, id } });
+  data.configure = (w) => w.history.replaceState(null, '', '/?project=agentrec&q=agentrec&exit=completed&verification=PASS&failures=1#kept');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  assert.ok(d.querySelector('#run-project-filter'), 'exact project dropdown exists');
+  assert.deepEqual(Array.from(d.querySelector('#run-project-filter').options, (o) => o.value), ['', 'agentrec', 'agentrec-tools']);
+  assert.equal(d.querySelector('#run-project-filter').value, 'agentrec');
+  assert.deepEqual(Array.from(d.querySelectorAll('#run-list .run-item'), (r) => r.dataset.runId), ['exact']);
+  assert.equal(d.querySelector('#run-title').textContent, 'exact');
+});
+
 test('run list filters by an exact persisted exit value', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.list.runs = [
@@ -1363,7 +1706,7 @@ test('run list filters the canonical failure union and stores it in the URL', as
     'run-verification-failed',
   ]);
   const count = document.querySelector('#run-count');
-  assert.equal(count.textContent, '2 of 3 loaded');
+  assert.equal(count.textContent, '2 shown · 2 matching · 3 loaded · 0 folded');
   assert.equal(count.getAttribute('role'), 'status');
   assert.equal(count.getAttribute('aria-live'), 'polite');
   assert.equal(new URL(dom.window.location.href).searchParams.get('failures'), '1');
@@ -1459,7 +1802,7 @@ test('failure-only filter localizes without losing its checked state', async (t)
   language.dispatchEvent(new Event('change', { bubbles: true }));
 
   assert.equal(document.querySelector('[data-i18n="Failures only"]').textContent, '실패만');
-  assert.equal(document.querySelector('#run-count').textContent, '로드된 1개 중 1개');
+  assert.equal(document.querySelector('#run-count').textContent, '표시 1개 · 일치 1개 · 로드 1개 · 접힘 0개');
   assert.equal(failures.checked, true);
 });
 
