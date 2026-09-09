@@ -41,7 +41,7 @@
 コードレビュー、障害調査、引き継ぎ、新しいエージェントバージョンを信頼するかの判断を、
 要約ではなく観測された事実から始められます。
 
-[リリースノート](docs/releases/v0.11.0.md) ·
+[リリースノート](docs/releases/v0.11.1.md) ·
 [設計ノート](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood の証拠](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,7 +55,7 @@
 
 ## クイックスタート
 
-> **ステータス:** 最新リリースは v0.11.0 です。ビューアーで全実行を検索すると、保存済みの
+> **ステータス:** 最新リリースは v0.11.1 です。ビューアーで全実行を検索すると、保存済みの
 > リポジトリ変更パスを見つけ、ページ分割された変更一覧の該当行と証拠インスペクターを直接
 > 開けるようになりました。パッチとファイル内容は検索インデックスに含まれません。
 >
@@ -75,14 +75,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.11.0_darwin_arm64.tar.gz
+archive=agentrec_0.11.1_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.11.0_darwin_arm64/agentrec version
+./agentrec_0.11.1_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.11.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.11.1
 ```
 
 各タグ付きリリースには `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64`
@@ -183,7 +183,7 @@ run を開きます。サイドバーでは、ブラウザーに
 維持され、ブックマークや `#compare=...` の比較リンクと一緒に共有できます。共有リンクでは
 最初に読み込まれた run にこの設定が適用され、**さらに読み込む**と対象が増えます。
 
-**未リリース:** 変更ファイルの検索結果へのディープリンクは、再読み込みやブラウザーの
+**v0.11.1:** 変更ファイルの検索結果へのディープリンクは、再読み込みやブラウザーの
 「戻る」「進む」で移動しても対象ファイルを保持し、ページ分割された変更一覧の該当行と
 証拠インスペクターを再び開きます。
 
@@ -494,7 +494,7 @@ run は `agentrec trash empty` まで `trash/` で待ち、動作中のビュー
 
 ## ドキュメント
 
-- [v0.11.0 のリリースノート](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.11.1 のリリースノート](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [フライトレコーダーの設計](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood の証拠 — recorder](docs/dogfood/2026-07-28-evidence.md): 固定 20 回の
@@ -514,7 +514,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.11.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.11.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` はリリースアーカイブをローカルでビルドするだけで、何も公開
