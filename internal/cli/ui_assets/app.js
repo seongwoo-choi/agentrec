@@ -4,6 +4,8 @@
   const POLL_MS = 5000;
   const LIVE_MS = 3000;
   const SEARCH_MS = 400;
+  const RECENT_RUN_LIMIT = 10;
+  let earlierRunsExpanded = false;
   const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
@@ -21,6 +23,12 @@
   const STRINGS = {
     ko: {
       'Action Timeline': '액션 타임라인',
+      'Filter by project': '프로젝트로 필터링',
+      'All projects': '모든 프로젝트',
+      'Show {n} earlier runs': '이전 실행 {n}개 보기',
+      'Hide earlier runs': '이전 실행 숨기기',
+      'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.': '필터와 프로젝트 목록은 로드된 실행만 포함합니다. 기본적으로 일치하는 최신 10개와 선택된 이전 실행을 표시합니다.',
+      '{shown} shown · {matching} matching · {loaded} loaded · {folded} folded': '표시 {shown}개 · 일치 {matching}개 · 로드 {loaded}개 · 접힘 {folded}개',
       'Loading recorded evidence…': '기록된 증거를 불러오는 중…',
       'Recorded runs': '기록된 실행',
       'Find a run or project': '실행 또는 프로젝트 검색',
@@ -37,6 +45,9 @@
       unknown: '알 수 없음',
       'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.': '기록된 실행이 아직 없습니다. Claude Code 또는 Codex 세션을 시작하면 종료 시 여기에 표시됩니다.',
       'No runs match this search.': '검색 결과가 없습니다.',
+      'No loaded runs match this search.': '로드된 실행 중 검색에 맞는 항목이 없습니다.',
+      'No readable runs loaded yet. Load more to continue.': '아직 읽을 수 있는 실행이 로드되지 않았습니다. 더 불러와 계속 확인하세요.',
+      'No readable runs loaded.': '읽을 수 있는 실행이 로드되지 않았습니다.',
       'No loaded runs match these filters.': '로드된 실행 중 필터에 맞는 항목이 없습니다.',
       'No loaded runs match this search and these filters.': '로드된 실행 중 검색어와 필터에 모두 맞는 항목이 없습니다.',
       'All exits': '모든 종료 상태',
@@ -292,6 +303,12 @@
     },
     ja: {
       'Action Timeline': 'アクションタイムライン',
+      'Filter by project': 'プロジェクトで絞り込む',
+      'All projects': 'すべてのプロジェクト',
+      'Show {n} earlier runs': '以前の実行を{n}件表示',
+      'Hide earlier runs': '以前の実行を隠す',
+      'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.': 'フィルターとプロジェクト候補は読み込み済みの実行のみが対象です。既定では、一致する最新10件と選択中の以前の実行を表示します。',
+      '{shown} shown · {matching} matching · {loaded} loaded · {folded} folded': '表示{shown}件 · 一致{matching}件 · 読み込み済み{loaded}件 · 折りたたみ{folded}件',
       'Loading recorded evidence…': '記録された証跡を読み込んでいます…',
       'Recorded runs': '記録された実行',
       'Find a run or project': '実行またはプロジェクトを検索',
@@ -308,6 +325,9 @@
       unknown: '不明',
       'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.': 'まだ記録された実行はありません。Claude Code または Codex のセッションを開始すると、終了時にここに表示されます。',
       'No runs match this search.': '検索に一致する実行はありません。',
+      'No loaded runs match this search.': '読み込み済みの実行に検索と一致する項目がありません。',
+      'No readable runs loaded yet. Load more to continue.': '読み取り可能な実行はまだ読み込まれていません。さらに読み込んで確認してください。',
+      'No readable runs loaded.': '読み取り可能な実行が読み込まれていません。',
       'No loaded runs match these filters.': '読み込み済みの実行にフィルターと一致する項目がありません。',
       'No loaded runs match this search and these filters.': '読み込み済みの実行に検索語とフィルターの両方に一致する項目がありません。',
       'All exits': 'すべての終了状態',
@@ -563,6 +583,12 @@
     },
     'zh-CN': {
       'Action Timeline': '操作时间线',
+      'Filter by project': '按项目筛选',
+      'All projects': '所有项目',
+      'Show {n} earlier runs': '显示{n}个较早运行',
+      'Hide earlier runs': '隐藏较早运行',
+      'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.': '筛选和项目选项仅涵盖已加载的运行。默认显示最新的10个匹配项，并保留选中的较早运行。',
+      '{shown} shown · {matching} matching · {loaded} loaded · {folded} folded': '显示{shown}个 · 匹配{matching}个 · 已加载{loaded}个 · 已折叠{folded}个',
       'Loading recorded evidence…': '正在加载记录的证据…',
       'Recorded runs': '已记录的运行',
       'Find a run or project': '搜索运行或项目',
@@ -579,6 +605,9 @@
       unknown: '未知',
       'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.': '尚未记录任何运行。启动 Claude Code 或 Codex 会话，结束后会显示在这里。',
       'No runs match this search.': '没有匹配的运行。',
+      'No loaded runs match this search.': '已加载的运行中没有匹配的搜索结果。',
+      'No readable runs loaded yet. Load more to continue.': '尚未加载可读取的运行。请加载更多以继续查看。',
+      'No readable runs loaded.': '未加载可读取的运行。',
       'No loaded runs match these filters.': '已加载的运行中没有符合筛选条件的项目。',
       'No loaded runs match this search and these filters.': '已加载的运行中没有同时符合搜索词和筛选条件的项目。',
       'All exits': '所有退出状态',
@@ -1147,8 +1176,21 @@ function shortID(id) {
   }
 
   function restoreRunFiltersFromURL() {
+    earlierRunsExpanded = false;
     const params = new URLSearchParams(location.search);
     $('run-search').value = params.get('q') || '';
+    let project = params.get('project') || '';
+    // Only the bare landing page inherits a preference. Old shared URLs remain
+    // deterministic, including legacy filters and exact evidence/compare links.
+    if (!location.search && !location.hash) {
+      try { project = localStorage.getItem('agentrec.project') || ''; } catch (_) { /* storage may be blocked */ }
+      if (project) {
+        const url = new URL(location.href);
+        url.searchParams.set('project', project);
+        history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+    }
+    setRunFilterValue('run-project-filter', project);
     setRunFilterValue('run-exit-filter', params.get('exit') || '');
     setRunFilterValue('run-verification-filter', params.get('verification') || '');
     $('run-failures-only').checked = params.get('failures') === '1';
@@ -1230,6 +1272,8 @@ function shortID(id) {
 
   function updateRunFilterURL() {
     const url = new URL(location.href);
+    // Empty is explicit All, not permission to inherit a stored project.
+    url.searchParams.set('project', $('run-project-filter').value);
     const values = [
       ['q', $('run-search').value],
       ['exit', $('run-exit-filter').value],
@@ -1245,6 +1289,7 @@ function shortID(id) {
   }
 
   function changeRunFilters() {
+    earlierRunsExpanded = false;
     updateRunFilterURL();
     renderRunList();
   }
@@ -1263,14 +1308,17 @@ function shortID(id) {
     setRunFilterValue(id, selected);
   }
 
-  const runMatches = (run, query, exit, verification, failuresOnly) =>
+  const runMatches = (run, query, exit, verification, failuresOnly, project) =>
     (!query || `${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase().includes(query))
+    && (!project || run.project === project)
     && (!exit || run.exit === exit)
     && (!verification || run.verification === verification)
     && (!failuresOnly || run.failure === true);
 
   function renderRunList() {
     const query = $('run-search').value.trim().toLowerCase();
+    syncRunFilter('run-project-filter', state.runs.map((run) => run.project), 'All projects');
+    const project = $('run-project-filter').value;
     syncRunFilter('run-exit-filter', state.runs.map((run) => run.exit), 'All exits');
     syncRunFilter('run-verification-filter', state.runs.map((run) => run.verification), 'All verification');
     const exit = $('run-exit-filter').value;
@@ -1279,17 +1327,29 @@ function shortID(id) {
     const list = $('run-list');
     const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.runId : undefined;
     list.replaceChildren();
-    let shown = 0;
-    for (const run of state.runs) {
-      if (!runMatches(run, query, exit, verification, failuresOnly)) continue;
-      shown += 1;
+    const matching = state.runs.filter((run) => runMatches(run, query, exit, verification, failuresOnly, project));
+    // A selected older match stays a single ordinary, keyboard-reachable row.
+    const displayed = earlierRunsExpanded ? matching : matching.filter((run, index) => index < RECENT_RUN_LIMIT || (state.run && state.run.run.id === run.id));
+    const shown = displayed.length;
+    for (const run of displayed) {
       const button = runItem(run, Boolean(state.run && state.run.run.id === run.id));
       button.addEventListener('click', () => navigateRun(run.id));
       list.append(button);
       if (focused === run.id) button.focus({ preventScroll: true });
     }
-    const filtered = Boolean(query || exit || verification || failuresOnly);
-    $('run-count').textContent = filtered ? t('{shown} of {loaded} loaded', { shown, loaded: state.runs.length }) : String(state.runs.length);
+    const folded = matching.length - shown;
+    $('run-count').textContent = t('{shown} shown · {matching} matching · {loaded} loaded · {folded} folded', { shown, matching: matching.length, loaded: state.runs.length, folded });
+    const toggle = $('run-earlier-toggle');
+    toggle.classList.toggle('hidden', earlierRunsExpanded ? matching.length <= RECENT_RUN_LIMIT : folded === 0);
+    toggle.setAttribute('aria-expanded', String(earlierRunsExpanded));
+    toggle.textContent = earlierRunsExpanded ? t('Hide earlier runs') : t('Show {n} earlier runs', { n: folded });
+    // Polling can fold the focused cutoff row; keep navigation at its reveal control.
+    if (focused && matching.some((run) => run.id === focused) && !displayed.some((run) => run.id === focused)) toggle.focus({ preventScroll: true });
+    renderRunListPaging();
+  }
+
+  // Metadata-only pages must update controls without replacing clickable rows.
+  function renderRunListPaging() {
     const more = $('run-load-more');
     more.textContent = t('Load more');
     more.classList.toggle('hidden', !state.runNextCursor);
@@ -1303,11 +1363,16 @@ function shortID(id) {
     size.classList.toggle('hidden', parts.length === 0);
     const empty = $('run-list-empty');
     const status = $('run-list-status');
-    if (shown === 0) {
+    if (!$('run-list').querySelector('.run-item')) {
+      const query = $('run-search').value.trim();
+      const exit = $('run-exit-filter').value;
+      const verification = $('run-verification-filter').value;
+      const failuresOnly = $('run-failures-only').checked;
+      const project = $('run-project-filter').value;
       let emptyMessage = 'No loaded runs match these filters.';
-      if (state.runs.length === 0) emptyMessage = 'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.';
-      else if (query && (exit || verification || failuresOnly)) emptyMessage = 'No loaded runs match this search and these filters.';
-      else if (query) emptyMessage = 'No runs match this search.';
+      if (state.runs.length === 0) emptyMessage = state.runNextCursor ? 'No readable runs loaded yet. Load more to continue.' : state.runTotal > 0 ? 'No readable runs loaded.' : 'No runs recorded yet — start a Claude Code or Codex session; it appears here when it ends.';
+      else if (query && (exit || verification || failuresOnly || project)) emptyMessage = 'No loaded runs match this search and these filters.';
+      else if (query) emptyMessage = 'No loaded runs match this search.';
       empty.textContent = t(emptyMessage);
       status.textContent = t(emptyMessage);
       empty.classList.remove('hidden');
@@ -1333,7 +1398,7 @@ function shortID(id) {
       $('top-meta').textContent = t('{n} recorded run(s)', { n: state.runs.length });
       return;
     }
-    const noRuns = state.runs.length === 0;
+    const noRuns = state.runs.length === 0 && state.runTotal === 0 && !state.runNextCursor;
     $('workspace-empty-title').textContent = t(noRuns ? 'No runs recorded yet' : 'No run selected');
     $('workspace-empty-body').textContent = t(noRuns ? 'Start a Claude Code or Codex session; it appears here when it ends.' : 'Pick a run from the list to inspect its recorded evidence.');
     $('top-meta').textContent = noRuns ? t('No recorded runs') : t('{n} recorded run(s)', { n: state.runs.length });
@@ -3144,6 +3209,7 @@ function shortID(id) {
     const incoming = list.runs || [];
     const previousRuns = state.runs;
     const previousCursor = state.runNextCursor;
+    const previousTotal = state.runTotal;
     const sameGeneration = (list.generation || '') === state.runGeneration;
     const pageIDs = new Set(list.pageIds || incoming.map((run) => run.id));
     const runs = append && sameGeneration
@@ -3174,6 +3240,7 @@ function shortID(id) {
         const run = byID.get(button.dataset.runId);
         if (run) button.querySelector('.run-time').textContent = relativeTime(run.startedAt);
       });
+      if (previousCursor !== state.runNextCursor || previousTotal !== state.runTotal) renderRunListPaging();
     }
     renderWorkspaceState();
   }
@@ -3198,12 +3265,13 @@ function shortID(id) {
   // Selects the initial or newest run when nothing is shown; a failed attempt is retried quietly on the next poll.
   async function autoSelect(list) {
     if (state.run || state.runError || state.runAbortController) return;
+    const project = $('run-project-filter').value;
     const query = $('run-search').value.trim().toLowerCase();
     const exit = $('run-exit-filter').value;
     const verification = $('run-verification-filter').value;
     const failuresOnly = $('run-failures-only').checked;
-    if (query || exit || verification || failuresOnly) {
-      const match = state.runs.find((run) => runMatches(run, query, exit, verification, failuresOnly));
+    if (query || exit || verification || failuresOnly || project) {
+      const match = state.runs.find((run) => runMatches(run, query, exit, verification, failuresOnly, project));
       if (!match) return;
       await loadRun(match.id, true);
       if (state.run && state.run.run.id === match.id) updateRunNavigationURL('run', match.id, 'replace');
@@ -3345,10 +3413,18 @@ function shortID(id) {
     }
   });
   $('run-search').addEventListener('input', changeRunFilters);
+  $('run-project-filter').addEventListener('change', () => {
+    try { localStorage.setItem('agentrec.project', $('run-project-filter').value); } catch (_) { /* storage may be blocked */ }
+    changeRunFilters();
+  });
   $('run-exit-filter').addEventListener('change', changeRunFilters);
   $('run-verification-filter').addEventListener('change', changeRunFilters);
   $('run-failures-only').addEventListener('change', changeRunFilters);
   $('run-load-more').addEventListener('click', loadMoreRuns);
+  $('run-earlier-toggle').addEventListener('click', () => {
+    earlierRunsExpanded = !earlierRunsExpanded;
+    renderRunList();
+  });
   const searchAll = $('search-all');
   searchAll.addEventListener('input', scheduleSearch);
   searchAll.addEventListener('focus', () => { if (search.hits.length && searchAll.value.trim() === search.query) renderSearch(); });

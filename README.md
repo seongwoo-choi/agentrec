@@ -184,6 +184,19 @@ reloads and can be bookmarked or shared alongside comparison links in
 `#compare=...`. A shared link applies them to the runs loaded on arrival;
 **Load more** extends that set.
 
+**Unreleased — focused run list:** Choose an exact project name to narrow the
+sidebar together with the existing `q`, `exit`, `verification`, and `failures`
+filters. The project choice is reflected in the `project` URL parameter and
+remembered in the browser; an explicit URL choice takes precedence. Direct run
+or evidence links without `project` do not inherit the remembered project scope.
+By default, the list shows the 10 most recent matching **loaded** runs; older
+matches stay folded and can be expanded. A selected older match remains reachable
+without expanding all older runs, and filtering leaves the currently open evidence
+unchanged. This is browser-side filtering, not a store-wide backend query: load
+more runs to include records not yet loaded, especially in larger stores. Folding
+and filtering do not delete, archive, or change retention, and test projects are
+not hidden automatically.
+
 **v0.11.1:** Changed-file search deep links preserve the matching file through
 reloads and browser Back/Forward navigation, reopening its paginated Changes row
 and inspector.
