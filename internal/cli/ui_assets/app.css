@@ -229,6 +229,13 @@ h1 { margin: 6px 0; font: 600 20px/1.3 var(--mono); letter-spacing: -.01em; over
 .event-row .action-dot.fail { background: var(--fail); }
 
 /* inspector */
+.evidence-link { margin: 8px 0 14px; }
+.copy-evidence-link { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font-size: 12px; }
+.copy-evidence-link:hover { background: var(--surface-hover); }
+.copy-evidence-link:disabled { cursor: wait; opacity: .7; }
+.evidence-link-caption, .evidence-link-status { margin: 6px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.evidence-link-status:empty { margin: 0; }
+.evidence-link-url { width: 100%; min-width: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; font: 12px/1.5 var(--mono); }
 .inspector-panel { padding: 14px 16px; overflow: auto; }
 .inspector-empty { margin-top: 12px; border: 1px dashed var(--border); border-radius: 8px; padding: 20px 16px; color: var(--muted); font-size: 13px; line-height: 1.55; text-align: center; }
 .inspector-title { margin: 12px 0 8px; font: 600 14px/1.4 var(--mono); color: var(--text); overflow-wrap: anywhere; }
