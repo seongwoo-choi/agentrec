@@ -41,7 +41,7 @@ comes from a different observer, and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.13.0.md) ·
+[Release notes](docs/releases/v0.14.0.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,7 +55,7 @@ version starts from what was observed rather than from a summary.
 
 ## Quick start
 
-> **Status:** v0.13.0 is the latest release. Global Viewer search now finds
+> **Status:** v0.14.0 is the latest release. Global Viewer search now finds
 > stored repository change paths and opens the exact paginated Changes row and
 > inspector. Patch and file contents remain outside the search index.
 >
@@ -76,14 +76,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.13.0_darwin_arm64.tar.gz
+archive=agentrec_0.14.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.13.0_darwin_arm64/agentrec version
+./agentrec_0.14.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.13.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.14.0
 ```
 
 Each tagged release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -207,7 +207,7 @@ navigation. Selecting another action updates the link; opening a regular evidenc
 tab clears the exact action selection. If the linked action is absent, the viewer
 does not select another action in its place.
 
-**Unreleased — copy a local evidence link:** With a recorded action or stored
+**v0.14.0 — copy a local evidence link:** With a recorded action or stored
 changed-file row selected, use the link-copy button to copy its canonical URL:
 `run`, `focus`, the action ID or file path, and the evidence cursor (the action
 page's byte offset or the changed file's absolute index), without sidebar filters
@@ -529,7 +529,7 @@ directory.
 
 ## Documentation
 
-- [Release notes for v0.13.0](docs/releases/v0.13.0.md) · [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [Release notes for v0.14.0](docs/releases/v0.14.0.md) · [v0.13.0](docs/releases/v0.13.0.md) · [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed
@@ -550,7 +550,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.13.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.14.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the release archives locally and publishes

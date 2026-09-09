@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.13.0.md) ·
+[发布说明](docs/releases/v0.14.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -52,7 +52,7 @@
 
 ## 快速开始
 
-> **状态：** v0.13.0 是最新发布版本。查看器的全局运行搜索现在可以找到已保存的
+> **状态：** v0.14.0 是最新发布版本。查看器的全局运行搜索现在可以找到已保存的
 > 仓库变更路径，并直接打开分页变更列表中的对应行和证据检视器。补丁与文件
 > 内容仍不会进入搜索索引。
 >
@@ -71,14 +71,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.13.0_darwin_arm64.tar.gz
+archive=agentrec_0.14.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.13.0_darwin_arm64/agentrec version
+./agentrec_0.14.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.13.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.14.0
 ```
 
 每个已打标签的发布版本都包含 `darwin_amd64`、`darwin_arm64`、`linux_amd64` 和
@@ -185,7 +185,7 @@ URL 的 `project` 参数中，也会保存在浏览器中；URL 中明确指定�
 后退、前进功能后，仍会打开同一条已记录的操作。选择其他操作会更新链接；打开普通证据标签页
 会清除对具体操作的选择。如果链接指向的操作不存在，查看器不会选择其他操作来替代。
 
-**尚未发布 — 复制本地证据链接：** 选中一条已记录的操作或已存储的变更文件行后，
+**v0.14.0 — 复制本地证据链接：** 选中一条已记录的操作或已存储的变更文件行后，
 使用链接复制按钮即可复制其规范 URL，其中包含 `run`、`focus`、操作 ID 或文件路径，
 以及证据位置游标：操作使用所在分页的字节偏移量，变更文件使用其在完整变更文件列表中的
 绝对索引。链接不包含侧栏筛选条件或 `#compare` 片段。按钮仅支持这两类选择。
@@ -473,7 +473,7 @@ agentrec 不声称什么：
 
 ## 文档
 
-- [v0.13.0 发布说明](docs/releases/v0.13.0.md) · [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [v0.14.0 发布说明](docs/releases/v0.14.0.md) · [v0.13.0](docs/releases/v0.13.0.md) · [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [飞行记录仪设计](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——recorder](docs/dogfood/2026-07-28-evidence.md)：一个固定的 20 次
@@ -493,7 +493,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.13.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.14.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 在本地构建发布归档，不发布任何内容；其输出目录必须
