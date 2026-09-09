@@ -207,6 +207,17 @@ navigation. Selecting another action updates the link; opening a regular evidenc
 tab clears the exact action selection. If the linked action is absent, the viewer
 does not select another action in its place.
 
+**Unreleased — copy a local evidence link:** With a recorded action or stored
+changed-file row selected, use the link-copy button to copy its canonical URL:
+`run`, `focus`, the action ID or file path, and the evidence cursor (the action
+page's byte offset or the changed file's absolute index), without sidebar filters
+or the `#compare` fragment. The button supports only these two
+selection types. Copy success is shown only after the clipboard write succeeds;
+if clipboard access is denied or unavailable, a selectable URL is shown for
+manual copying instead. This is a local link for the same viewer with the same
+recorded data, not a public share link. Copying does not upload or export evidence
+or post anything externally.
+
 A selected run and evidence destination are
 stored as `run=...&focus=...`; `focus` can reopen Actions, Changes, Provider
 events, or focus Verification. The linked run is fetched directly even when it

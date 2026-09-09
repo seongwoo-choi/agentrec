@@ -58,6 +58,12 @@
       '{shown} of {loaded} loaded': '로드된 {loaded}개 중 {shown}개',
       'No runs recorded yet': '기록된 실행이 없습니다',
       'No run selected': '선택된 실행이 없습니다',
+      'Copy evidence link': '증거 링크 복사',
+      'Copied': '복사됨',
+      'Local evidence URL': '로컬 증거 URL',
+      'Clipboard unavailable or denied. Select and copy the local URL manually.': '클립보드를 사용할 수 없거나 권한이 거부되었습니다. 로컬 URL을 선택하여 직접 복사하세요.',
+      'Local link: requires the same Viewer and recorded data. Not a public share.': '로컬 링크: 동일한 Viewer와 기록된 데이터가 필요합니다. 공개 공유 링크가 아닙니다.',
+
       'Start a Claude Code or Codex session; it appears here when it ends.': 'Claude Code 또는 Codex 세션을 시작하면 종료 시 여기에 표시됩니다.',
       'Pick a run from the list to inspect its recorded evidence.': '목록에서 실행을 선택하면 기록된 증거를 확인할 수 있습니다.',
       'No recorded runs': '기록된 실행 없음',
@@ -338,6 +344,12 @@
       '{shown} of {loaded} loaded': '読込済み {loaded} 件中 {shown} 件',
       'No runs recorded yet': '記録された実行はありません',
       'No run selected': '実行が選択されていません',
+      'Copy evidence link': '証拠リンクをコピー',
+      'Copied': 'コピーしました',
+      'Local evidence URL': 'ローカル証拠URL',
+      'Clipboard unavailable or denied. Select and copy the local URL manually.': 'クリップボードを利用できないか、許可されていません。ローカルURLを選択して手動でコピーしてください。',
+      'Local link: requires the same Viewer and recorded data. Not a public share.': 'ローカルリンク: 同じViewerと記録済みデータが必要です。公開共有リンクではありません。',
+
       'Start a Claude Code or Codex session; it appears here when it ends.': 'Claude Code または Codex のセッションを開始すると、終了時にここに表示されます。',
       'Pick a run from the list to inspect its recorded evidence.': '一覧から実行を選ぶと、記録された証跡を確認できます。',
       'No recorded runs': '記録された実行なし',
@@ -618,6 +630,12 @@
       '{shown} of {loaded} loaded': '已加载 {loaded} 条中的 {shown} 条',
       'No runs recorded yet': '尚未记录任何运行',
       'No run selected': '未选择运行',
+      'Copy evidence link': '复制证据链接',
+      'Copied': '已复制',
+      'Local evidence URL': '本地证据URL',
+      'Clipboard unavailable or denied. Select and copy the local URL manually.': '剪贴板不可用或权限被拒绝。请选择并手动复制本地URL。',
+      'Local link: requires the same Viewer and recorded data. Not a public share.': '本地链接：需要同一Viewer和已记录的数据。不是公开分享链接。',
+
       'Start a Claude Code or Codex session; it appears here when it ends.': '启动 Claude Code 或 Codex 会话，结束后会显示在这里。',
       'Pick a run from the list to inspect its recorded evidence.': '从列表中选择一个运行以查看其记录的证据。',
       'No recorded runs': '没有记录的运行',
@@ -1838,6 +1856,8 @@ function shortID(id) {
       el.classList.remove('selected');
     });
     row.classList.add('selected');
+    selected.generation = state.loadGeneration;
+    selected.runID = state.run?.run.id;
     state.selected = selected;
     renderInspector();
     const label = selected.kind === 'change' || selected.kind === 'live' ? selected.value.path : (selected.kind === 'event' ? eventType(selected.value) : (selected.value.type || selected.kind));
@@ -1865,8 +1885,79 @@ function shortID(id) {
     return pre;
   }
 
+  // Derive an allowlisted local destination from loaded evidence, never copy filters or hash.
+  function selectedEvidenceURL(selected = state.selected) {
+    if (!selected || selected !== state.selected || selected.generation !== state.loadGeneration || selected.runID !== state.run?.run.id) return '';
+    const current = new URL(location.href);
+    if (current.searchParams.get('run') !== selected.runID || !['http:', 'https:'].includes(current.protocol)) return '';
+    if (!['action', 'change'].includes(selected.kind)) return '';
+    const action = selected.kind === 'action';
+    const stream = state.streams?.[action ? 'actions' : 'changes'];
+    const index = stream?.items.indexOf(selected.value) ?? -1;
+    // Action offsets are byte page boundaries, not ordinal row indices.
+    const cursor = action ? stream?.pageCursors?.[index] : (stream?.startCursor ?? 0) + index;
+    const target = action ? selected.value.id : selected.value.path;
+    if (index < 0 || !target || !Number.isSafeInteger(cursor) || cursor < 0) return '';
+    const url = new URL(current.pathname, current.origin);
+    url.searchParams.set('run', selected.runID);
+    url.searchParams.set('focus', action ? 'actions' : 'changes');
+    url.searchParams.set(selected.kind, target);
+    url.searchParams.set(`${selected.kind}Cursor`, String(cursor));
+    return url.href;
+  }
+
+  function evidenceLinkControls(holder) {
+    const selected = state.selected;
+    const url = selectedEvidenceURL(selected);
+    if (!url) return;
+    // Patch pages rerender the inspector, not the selected evidence or copy attempt.
+    if (selected.evidenceLink?.url === url) {
+      holder.append(selected.evidenceLink.controls);
+      return;
+    }
+    const controls = node('div', 'evidence-link');
+    const button = node('button', 'copy-evidence-link', t('Copy evidence link'));
+    button.type = 'button';
+    const status = node('div', 'evidence-link-status');
+    status.setAttribute('aria-live', 'polite');
+    const stillCurrent = () => controls.isConnected && selectedEvidenceURL(selected) === url;
+    button.addEventListener('click', async () => {
+      if (!stillCurrent()) return;
+      button.disabled = true;
+      status.textContent = '';
+      try {
+        await navigator.clipboard.writeText(url);
+        if (stillCurrent()) status.textContent = t('Copied');
+      } catch (_) {
+        if (!stillCurrent()) return;
+        status.textContent = t('Clipboard unavailable or denied. Select and copy the local URL manually.');
+        let input = controls.querySelector('.evidence-link-url');
+        if (!input) {
+          input = node('input', 'evidence-link-url');
+          input.type = 'text';
+          input.readOnly = true;
+          input.value = url;
+          input.setAttribute('aria-label', t('Local evidence URL'));
+          controls.append(input);
+        }
+        input.focus();
+        input.select();
+      } finally {
+        if (stillCurrent()) button.disabled = false;
+      }
+    });
+    controls.append(button, node('p', 'evidence-link-caption', t('Local link: requires the same Viewer and recorded data. Not a public share.')), status);
+    selected.evidenceLink = { url, controls };
+    holder.append(controls);
+  }
+
   function renderInspector() {
     const holder = $('inspector');
+    const cached = state.selected?.evidenceLink;
+    const focused = cached?.url === selectedEvidenceURL() && cached?.controls.contains(document.activeElement)
+      ? document.activeElement : null;
+    const selection = focused?.matches('.evidence-link-url')
+      ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
     holder.replaceChildren();
     if (!state.selected) {
       holder.className = 'inspector-empty';
@@ -1877,6 +1968,11 @@ function shortID(id) {
     const { kind, value } = state.selected;
     const title = kind === 'action' ? value.type : (kind === 'change' || kind === 'live' ? value.path : (value.type || value.hook_event_name || t('(untyped event)')));
     holder.append(node('div', 'inspector-title', title));
+    evidenceLinkControls(holder);
+    if (focused?.isConnected) {
+      focused.focus({ preventScroll: true });
+      if (selection) focused.setSelectionRange(...selection);
+    }
     const meta = node('div', 'inspector-meta');
     if (kind === 'action') {
       if (value.provider) meta.append(node('span', 'pill', value.provider));

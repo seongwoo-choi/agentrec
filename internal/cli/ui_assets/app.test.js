@@ -89,6 +89,341 @@ async function openActionHit(window, index = 0) {
   await settle();
 }
 
+test('copy evidence link uses selected action and page bytes, not address-bar filters', async (t) => {
+  const data = actionLinkFixture();
+  const writes = [];
+  let resolve;
+  data.configure = (w) => {
+    w.history.replaceState(null, '', '/?q=agentrec&exit=completed&verification=PASS#compare');
+    Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: (url) => { writes.push(url); return new Promise((r) => { resolve = r; }); } } });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  await openActionHit(w);
+  w.document.querySelector('.action-row[data-index="1"]').click();
+  const button = w.document.querySelector('.copy-evidence-link');
+  assert.ok(button, 'selected action offers a native copy button');
+  assert.equal(button.tagName, 'BUTTON');
+  assert.deepEqual(writes, []);
+  button.click();
+  assert.equal(writes[0], `http://localhost:42817/?run=${data.details.run.id}&focus=actions&action=action-251&actionCursor=98765`);
+  assert.doesNotMatch(w.document.querySelector('.evidence-link-status').textContent, /Copied/);
+  resolve();
+  await settle();
+  assert.equal(w.document.querySelector('.evidence-link-status').textContent, 'Copied');
+  assert.match(w.document.querySelector('.evidence-link').textContent, /same Viewer and recorded data/);
+});
+
+test('copy evidence link preserves other supported loopback origins', async (t) => {
+  const data = actionLinkFixture();
+  const writes = [];
+  data.configure = (w) => Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.reconfigure({ url: dom.window.location.href.replace('localhost', '127.0.0.2') });
+  dom.window.document.querySelector('#timeline .action-row').click();
+  const button = dom.window.document.querySelector('.copy-evidence-link');
+  assert.ok(button, 'supported Viewer loopback origin retains copy control');
+  button.click();
+  await settle();
+  assert.equal(new URL(writes[0]).origin, 'http://127.0.0.2:42817');
+});
+
+test('copy evidence link for stored change uses absolute index and no unrelated state', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.changes = paginatedChanges('src/a b&c.js');
+  const writes = [];
+  data.configure = (w) => {
+    w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=src%2Fa+b%26c.js&changeCursor=250&q=agentrec#compare`);
+    Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  const button = w.document.querySelector('.copy-evidence-link');
+  assert.ok(button, 'stored selected change offers copy');
+  w.history.replaceState(null, '', `${w.location.href.split('#')[0]}&project=other&action=stale&actionCursor=123&exit=fail&verification=FAIL#compare`);
+  button.click();
+  await settle();
+  assert.equal(writes[0], `http://localhost:42817/?run=${data.details.run.id}&focus=changes&change=src%2Fa+b%26c.js&changeCursor=250`);
+});
+
+for (const clipboard of ['absent', 'denied']) test(`copy evidence link ${clipboard} offers focused selectable manual URL`, async (t) => {
+  const data = actionLinkFixture();
+  data.configure = (w) => {
+    if (clipboard === 'denied') Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async () => { throw new Error('denied'); } } });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  w.document.querySelector('.action-row').click();
+  w.document.querySelector('.copy-evidence-link').click();
+  await settle();
+  const input = w.document.querySelector('.evidence-link-url');
+  assert.ok(input, 'clipboard failure offers manual URL');
+  assert.equal(input.readOnly, true);
+  assert.equal(input.getAttribute('aria-label'), 'Local evidence URL');
+  assert.equal(w.document.activeElement, input);
+  assert.equal(input.selectionStart, 0);
+  assert.equal(input.selectionEnd, input.value.length);
+  assert.match(input.value, /action=action-0&actionCursor=0$/);
+  const status = w.document.querySelector('.evidence-link-status');
+  assert.equal(status.getAttribute('aria-live'), 'polite');
+  assert.equal(status.textContent, 'Clipboard unavailable or denied. Select and copy the local URL manually.');
+});
+
+for (const [lang, copy, copied, label, failure, caption] of [
+  ['en', 'Copy evidence link', 'Copied', 'Local evidence URL', 'Clipboard unavailable or denied. Select and copy the local URL manually.', 'Local link: requires the same Viewer and recorded data. Not a public share.'],
+  ['ko', '증거 링크 복사', '복사됨', '로컬 증거 URL', '클립보드를 사용할 수 없거나 권한이 거부되었습니다. 로컬 URL을 선택하여 직접 복사하세요.', '로컬 링크: 동일한 Viewer와 기록된 데이터가 필요합니다. 공개 공유 링크가 아닙니다.'],
+  ['ja', '証拠リンクをコピー', 'コピーしました', 'ローカル証拠URL', 'クリップボードを利用できないか、許可されていません。ローカルURLを選択して手動でコピーしてください。', 'ローカルリンク: 同じViewerと記録済みデータが必要です。公開共有リンクではありません。'],
+  ['zh-CN', '复制证据链接', '已复制', '本地证据URL', '剪贴板不可用或权限被拒绝。请选择并手动复制本地URL。', '本地链接：需要同一Viewer和已记录的数据。不是公开分享链接。'],
+]) test(`copy evidence link labels and feedback are localized (${lang})`, async (t) => {
+  const data = actionLinkFixture();
+  let denied = false;
+  data.configure = (w) => Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async () => { if (denied) throw new Error('denied'); } } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  w.document.querySelector('#lang').value = lang;
+  w.document.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+  w.document.querySelector('.action-row').click();
+  const button = w.document.querySelector('.copy-evidence-link');
+  assert.equal(button.textContent, copy);
+  assert.equal(w.document.querySelector('.evidence-link-caption').textContent, caption);
+  button.click();
+  await settle();
+  assert.equal(w.document.querySelector('.evidence-link-status').textContent, copied);
+  denied = true;
+  button.click();
+  await settle();
+  assert.equal(w.document.querySelector('.evidence-link-status').textContent, failure);
+  assert.equal(w.document.querySelector('.evidence-link-url').getAttribute('aria-label'), label);
+});
+
+test('copy evidence link after append retains per-item byte page boundary', async (t) => {
+  const data = actionLinkFixture();
+  const writes = [];
+  data.configure = (w) => Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  w.document.querySelector('#timeline .load-more').click();
+  await settle();
+  w.document.querySelector('.action-row[data-index="251"]').click();
+  w.document.querySelector('.copy-evidence-link').click();
+  await settle();
+  assert.match(writes[0], /action=action-251&actionCursor=98765$/);
+});
+
+async function trackedCopyFixture(t, clipboard = 'deferred') {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.changes = [{ path: 'tracked.js', kind: 'modified', tracked: true }, { path: 'other.js', kind: 'added', tracked: false }];
+  let resolveCopy, rejectCopy, releasePatch;
+  const writes = [];
+  data.configure = (w) => {
+    if (clipboard !== 'absent') Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: (url) => {
+      writes.push(url);
+      return new Promise((resolve, reject) => { resolveCopy = resolve; rejectCopy = () => reject(new Error('denied')); });
+    } } });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  const original = w.fetch;
+  w.fetch = (input, init) => String(input).includes('/patch?')
+    ? new Promise((resolve) => { releasePatch = () => resolve(response({ path: 'tracked.js', patch: '+retained patch', nextCursor: null })); })
+    : original(input, init);
+  w.document.querySelector('#timeline-tab-changes').click();
+  await settle();
+  w.document.querySelector('.action-row').click();
+  assert.equal(typeof releasePatch, 'function', 'tracked patch is pending');
+  return { w, writes, releasePatch: () => releasePatch(), resolveCopy: () => resolveCopy(), rejectCopy: () => rejectCopy() };
+}
+
+test('copy evidence link rejection before tracked patch retains fallback focus and selection', async (t) => {
+  const f = await trackedCopyFixture(t);
+  const d = f.w.document;
+  d.querySelector('.copy-evidence-link').click();
+  f.rejectCopy();
+  await settle();
+  const input = d.querySelector('.evidence-link-url');
+  assert.ok(input);
+  input.setSelectionRange(7, 20, 'backward');
+  f.releasePatch();
+  await settle();
+  assert.match(d.querySelector('.diff-patch').textContent, /retained patch/);
+  assert.equal(d.querySelector('.evidence-link-url'), input);
+  assert.equal(d.activeElement, input);
+  assert.equal(input.selectionStart, 7);
+  assert.equal(input.selectionEnd, 20);
+  assert.equal(input.selectionDirection, 'backward');
+  assert.equal(input.readOnly, true);
+  assert.match(d.querySelector('.evidence-link-status').textContent, /Clipboard unavailable or denied/);
+  assert.equal(d.querySelectorAll('.evidence-link').length, 1);
+});
+
+for (const outcome of ['resolve', 'reject']) test(`copy evidence link ${outcome} after tracked patch settles current controls`, async (t) => {
+  const f = await trackedCopyFixture(t);
+  const d = f.w.document;
+  const button = d.querySelector('.copy-evidence-link');
+  button.click();
+  assert.equal(button.disabled, true);
+  f.releasePatch();
+  await settle();
+  assert.equal(d.querySelector('.copy-evidence-link'), button);
+  assert.equal(button.disabled, true);
+  assert.equal(d.querySelector('.evidence-link-status').textContent, '');
+  assert.equal(f.writes.length, 1);
+  if (outcome === 'resolve') f.resolveCopy();
+  else f.rejectCopy();
+  await settle();
+  assert.equal(button.disabled, false);
+  if (outcome === 'resolve') {
+    assert.equal(d.querySelector('.evidence-link-status').textContent, 'Copied');
+    assert.equal(d.querySelector('.evidence-link-url'), null);
+  } else {
+    const input = d.querySelector('.evidence-link-url');
+    assert.ok(input);
+    assert.equal(input.value, f.writes[0]);
+    assert.equal(input.readOnly, true);
+    assert.equal(d.activeElement, input);
+    assert.equal(input.selectionStart, 0);
+    assert.equal(input.selectionEnd, input.value.length);
+    assert.match(d.querySelector('.evidence-link-status').textContent, /Clipboard unavailable or denied/);
+  }
+  assert.equal(d.querySelectorAll('.evidence-link').length, 1);
+  // A subsequent attempt must still be invalidated by a genuinely new target.
+  button.click();
+  d.querySelectorAll('#timeline .action-row')[1].click();
+  const current = d.querySelector('.copy-evidence-link');
+  current.focus();
+  if (outcome === 'resolve') f.resolveCopy();
+  else f.rejectCopy();
+  await settle();
+  assert.equal(d.querySelector('.evidence-link-status').textContent, '');
+  assert.equal(d.querySelector('.evidence-link-url'), null);
+  assert.equal(d.activeElement, current);
+  assert.equal(current.disabled, false);
+  button.click();
+  assert.equal(f.writes.length, 2, 'detached old control cannot write again');
+});
+
+for (const keepFocus of [true, false]) test(`copy evidence link missing API survives tracked patch without stealing focus (focused=${keepFocus})`, async (t) => {
+  const f = await trackedCopyFixture(t, 'absent');
+  const d = f.w.document;
+  d.querySelector('.copy-evidence-link').click();
+  await settle();
+  const input = d.querySelector('.evidence-link-url');
+  assert.ok(input);
+  const elsewhere = d.querySelector('#timeline-search');
+  if (!keepFocus) elsewhere.focus();
+  f.releasePatch();
+  await settle();
+  assert.equal(d.querySelector('.evidence-link-url'), input);
+  assert.equal(d.activeElement, keepFocus ? input : elsewhere);
+  assert.equal(input.selectionStart, 0);
+  assert.equal(input.selectionEnd, input.value.length);
+  assert.equal(d.querySelectorAll('.copy-evidence-link').length, 1);
+  assert.match(d.querySelector('.evidence-link-status').textContent, /Clipboard unavailable or denied/);
+});
+
+for (const outcome of ['resolve', 'reject']) test(`copy evidence link async ${outcome} never labels a new selection`, async (t) => {
+  const data = actionLinkFixture();
+  let finish;
+  data.configure = (w) => Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: () => new Promise((resolve, reject) => { finish = () => outcome === 'resolve' ? resolve() : reject(new Error('denied')); }) } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  w.document.querySelector('.action-row').click();
+  w.document.querySelector('.copy-evidence-link').click();
+  w.document.querySelector('.action-row[data-index="1"]').click();
+  const current = w.document.querySelector('.copy-evidence-link');
+  current.focus();
+  finish();
+  await settle();
+  assert.equal(w.document.querySelector('.evidence-link-status').textContent, '');
+  assert.equal(w.document.querySelector('.evidence-link-url'), null);
+  assert.equal(w.document.activeElement, current);
+  assert.equal(current.disabled, false);
+});
+
+for (const rerender of [false, true]) test(`copy evidence link rejects pending run transition and stale rows (rerender=${rerender})`, async (t) => {
+  const data = actionLinkFixture();
+  const original = data.details;
+  const next = { ...original, run: { ...original.run, id: 'next-run' } };
+  data.list.runs.push({ ...next.run, verification: 'PASS' });
+  let release;
+  data.details = (id) => id === original.run.id ? original : new Promise((r) => { release = () => r(next); });
+  const writes = [];
+  data.configure = (w) => Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  w.document.querySelector('.action-row').click();
+  const oldButton = w.document.querySelector('.copy-evidence-link');
+  w.document.querySelector('[data-run-id="next-run"]').click();
+  await settle();
+  if (rerender) {
+    w.document.querySelector('#timeline-search').dispatchEvent(new w.Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 220));
+  }
+  w.document.querySelector('.action-row').click();
+  oldButton.click();
+  w.document.querySelector('.copy-evidence-link')?.click();
+  assert.deepEqual(writes, []);
+  assert.equal(new URLSearchParams(w.location.search).get('run'), 'next-run');
+  release();
+  await settle();
+  assert.equal(w.document.querySelector('.copy-evidence-link'), null);
+});
+
+test('copy evidence link is absent for no selection and unsupported provider event', async (t) => {
+  const data = actionLinkFixture();
+  data.details.eventCount = 1;
+  data.events = [{ type: 'provider.event', value: 'test' }];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  assert.equal(w.document.querySelector('.copy-evidence-link'), null);
+  w.document.querySelector('#timeline-tab-events').click();
+  await settle();
+  w.document.querySelector('.action-row').click();
+  assert.equal(w.document.querySelector('.copy-evidence-link'), null);
+});
+
+test('copy evidence link excludes live working-tree selections', async (t) => {
+  const dom = await renderFixture(fixture('running', 'pending', 'RUNNING'));
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  const original = w.fetch;
+  w.fetch = (input, init) => String(input).endsWith('/live') ? response({ files: [{ path: 'live.js', status: 'M' }] }) : original(input, init);
+  w.document.querySelector('#timeline-tab-changes').click();
+  await settle();
+  w.document.querySelector('.change-row').click();
+  assert.match(w.document.querySelector('#inspector').textContent, /Working tree/);
+  assert.equal(w.document.querySelector('.copy-evidence-link'), null);
+});
+
+test('copy evidence link excludes actions without exact IDs and empty runs', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const empty = await renderFixture(data);
+  t.after(() => empty.window.close());
+  assert.equal(empty.window.document.querySelector('.copy-evidence-link'), null);
+  data.details.actionCount = 1;
+  data.actions = [{ type: 'tool.call', input: { command: 'test' } }];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.window.document.querySelector('.action-row').click();
+  assert.equal(dom.window.document.querySelector('.copy-evidence-link'), null);
+});
+
+test('copy evidence link controls have bounded themed styles and visible focus', () => {
+  assert.match(css, /\.copy-evidence-link\s*\{[^}]*background:\s*var\(--panel\)/);
+  assert.match(css, /\.evidence-link-url\s*\{[^}]*width:\s*100%/);
+  assert.match(css, /:focus-visible\s*\{[^}]*outline:/);
+});
+
 test('action search records exact byte link and reload restores selection', async (t) => {
   const data = actionLinkFixture();
   data.configure = (w) => w.history.replaceState(null, '', '/?q=agentrec#kept');
