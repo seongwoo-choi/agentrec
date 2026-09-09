@@ -49,7 +49,7 @@ async function renderFixture({ list, details, actions = [], changes = [], events
       }
       if (currentDetails && url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
     }
-    if (url.pathname.includes('/actions')) return response({ items: actions, nextCursor: null });
+    if (url.pathname.includes('/actions')) return response(typeof actions === 'function' ? actions(Number(url.searchParams.get('cursor') || 0)) : { items: actions, nextCursor: null });
     if (url.pathname.includes('/events')) return response({ items: events, nextCursor: null });
     if (url.pathname.includes('/changes')) return response(typeof changes === 'function' ? changes(Number(url.searchParams.get('cursor') || 0)) : { items: changes, nextCursor: null, total: changes.length, status: 'available' });
     throw new Error(`unexpected fetch ${url}`);
@@ -63,6 +63,304 @@ function paginatedChanges(targetPath) {
   const items = Array.from({ length: 251 }, (_, index) => ({ path: index === 250 ? targetPath : `prefix/file-${index}.go`, kind: 'added', tracked: false }));
   return (cursor) => ({ items: items.slice(cursor, cursor + 250), nextCursor: cursor + 250 < items.length ? cursor + 250 : null, total: items.length, status: 'available' });
 }
+
+// Explicit byte boundaries: no action index is a usable cursor.
+function actionLinkFixture() {
+  const data = fixture('completed', 'pass', 'PASS');
+  const items = Array.from({ length: 253 }, (_, i) => ({ id: `action-${i}`, type: 'tool.call', status: 'success', input: { command: i === 250 ? 'go test' : i === 251 ? 'git status' : `command-${i}` } }));
+  const boundaries = new Map([[0, 0], [98765, 250], [99234, 251]]);
+  data.details.actionCount = items.length;
+  data.actions = (cursor) => {
+    assert.ok(boundaries.has(cursor), `invalid byte cursor ${cursor}`);
+    const start = boundaries.get(cursor);
+    return { items: items.slice(start, start + 250), nextCursor: start === 0 ? 98765 : null };
+  };
+  data.search = { hits: [250, 251].map((i) => ({ runId: data.details.run.id, kind: 'action', actionId: items[i].id, offset: i === 250 ? 98765 : 99234, snippet: items[i].input.command })), truncated: false };
+  return data;
+}
+
+const settle = async () => { for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
+async function openActionHit(window, index = 0) {
+  const input = window.document.querySelector('#search-all');
+  input.value = 'test';
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  window.document.querySelectorAll('.search-hit')[index].click();
+  await settle();
+}
+
+test('action search records exact byte link and reload restores selection', async (t) => {
+  const data = actionLinkFixture();
+  data.configure = (w) => w.history.replaceState(null, '', '/?q=agentrec#kept');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  await openActionHit(dom.window);
+  const params = new URLSearchParams(dom.window.location.search);
+  assert.equal(params.get('action'), 'action-250');
+  assert.equal(params.get('actionCursor'), '98765');
+  assert.equal(params.get('q'), 'agentrec');
+  assert.equal(dom.window.location.hash, '#kept');
+  const url = dom.window.location.href;
+  const reloaded = await renderFixture({ ...data, configure: (w) => w.history.replaceState(null, '', url) });
+  t.after(() => reloaded.window.close());
+  assert.match(reloaded.window.document.querySelector('.action-row.selected').textContent, /go test/);
+  assert.match(reloaded.window.document.querySelector('#inspector').textContent, /go test/);
+});
+
+test('manual second action retains its page byte cursor across reload', async (t) => {
+  const data = actionLinkFixture();
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  await openActionHit(dom.window);
+  dom.window.document.querySelector('.action-row[data-index="1"]').click();
+  const params = new URLSearchParams(dom.window.location.search);
+  assert.equal(params.get('action'), 'action-251');
+  assert.equal(params.get('actionCursor'), '98765');
+  const reload = await renderFixture({ ...data, configure: (w) => w.history.replaceState(null, '', dom.window.location.href) });
+  t.after(() => reload.window.close());
+  assert.match(reload.window.document.querySelector('.action-row.selected').textContent, /git status/);
+});
+
+test('action tab and history roundtrip clears exact params and restores page zero', async (t) => {
+  const dom = await renderFixture(actionLinkFixture());
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  await openActionHit(w);
+  w.document.querySelector('#timeline-tab-events').click();
+  await settle();
+  assert.equal(new URLSearchParams(w.location.search).has('action'), false);
+  w.history.back();
+  await settle();
+  assert.match(w.document.querySelector('.action-row.selected').textContent, /go test/);
+  w.history.forward();
+  await settle();
+  assert.equal(w.document.querySelector('#timeline-tab-events').getAttribute('aria-selected'), 'true');
+  w.history.back();
+  await settle();
+  w.document.querySelector('#timeline-tab-actions').click();
+  await settle();
+  assert.equal(new URLSearchParams(w.location.search).has('action'), false);
+  assert.match(w.document.querySelector('.action-row').textContent, /command-0/);
+  assert.equal(w.document.querySelector('.action-row.selected'), null);
+});
+
+for (const rerender of [false, true]) test(`stale action row cannot hijack deferred destination (rerender=${rerender})`, async (t) => {
+  const data = actionLinkFixture();
+  const next = { ...data.details, run: { ...data.details.run, id: 'next-run' }, snapshotId: 'next-snapshot' };
+  data.list.runs.push({ ...next.run, verification: 'PASS' });
+  let resolve;
+  data.details = ((original) => (id) => id === original.run.id ? original : new Promise((r) => { resolve = () => r(next); }))(data.details);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  w.document.querySelector('.action-row').click();
+  let row = w.document.querySelector('.action-row');
+  w.document.querySelector('[data-run-id="next-run"]').click();
+  await settle();
+  if (rerender) {
+    const input = w.document.querySelector('#timeline-search');
+    input.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 220));
+    row = w.document.querySelector('.action-row');
+  }
+  row.click();
+  assert.equal(new URLSearchParams(w.location.search).get('run'), 'next-run');
+  assert.equal(new URLSearchParams(w.location.search).has('action'), false);
+  resolve();
+  await settle();
+  assert.equal(w.document.querySelector('.action-row.selected'), null);
+});
+
+for (const delay of [0, 220]) test(`action hit clears pending or settled timeline filter (${delay})`, async (t) => {
+  const dom = await renderFixture(actionLinkFixture());
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  const input = w.document.querySelector('#timeline-search');
+  input.value = 'not-present';
+  input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  if (delay) await new Promise((r) => setTimeout(r, delay));
+  await openActionHit(w, 1);
+  await new Promise((r) => setTimeout(r, 220));
+  assert.match(w.document.querySelector('.action-row.selected').textContent, /git status/);
+  assert.equal(input.value, '');
+});
+
+for (const cursor of ['-1', '1.5', 'NaN', '9007199254740992', '01']) test(`malformed action cursor ${cursor} never selects a substitute`, async (t) => {
+  const data = actionLinkFixture();
+  data.configure = (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&action=action-250&actionCursor=${cursor}`);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('.action-row.selected'), null);
+  assert.ok(dom.window.__fetchPaths.includes('/api/snapshots/snapshot/actions?cursor=0'));
+});
+
+test('nonexistent action ID at valid byte cursor never selects first row', async (t) => {
+  const data = actionLinkFixture();
+  data.search.hits[0].actionId = 'missing-action';
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  await openActionHit(dom.window);
+  assert.equal(dom.window.document.querySelector('.action-row.selected'), null);
+});
+
+test('pending exact restoration cannot overwrite newer run or focus', async (t) => {
+  const data = actionLinkFixture();
+  const original = data.details;
+  const other = { ...original, run: { ...original.run, id: 'other-run' } };
+  data.list.runs.push({ ...other.run, verification: 'PASS' });
+  let release;
+  let deferred = false;
+  data.details = (id) => id === 'other-run' ? other : deferred ? new Promise((r) => { release = () => r(original); }) : original;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  deferred = true;
+  await openActionHit(dom.window);
+  dom.window.document.querySelector('[data-run-id="other-run"]').click();
+  await settle();
+  release();
+  await settle();
+  assert.equal(new URLSearchParams(dom.window.location.search).get('run'), 'other-run');
+  assert.equal(dom.window.document.querySelector('.action-row.selected'), null);
+});
+
+test('manual selection after append stores byte page cursor not row index', async (t) => {
+  const data = actionLinkFixture();
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.window.document.querySelector('#timeline .load-more').click();
+  await settle();
+  dom.window.document.querySelector('.action-row[data-index="251"]').click();
+  assert.equal(new URLSearchParams(dom.window.location.search).get('actionCursor'), '98765');
+  const reload = await renderFixture({ ...data, configure: (w) => w.history.replaceState(null, '', dom.window.location.href) });
+  t.after(() => reload.window.close());
+  assert.match(reload.window.document.querySelector('.action-row.selected').textContent, /git status/);
+});
+
+// Defer one real fixture response, ignoring abort deliberately so stale results
+// still exercise the application's generation checks when explicitly released.
+function deferFetch(window, matches) {
+  const original = window.fetch;
+  let release;
+  let pending = false;
+  window.fetch = (input, init) => {
+    const result = original(input, init);
+    if (!pending && matches(String(input))) {
+      pending = true;
+      return new Promise((resolve) => { release = () => resolve(result); });
+    }
+    return result;
+  };
+  return () => {
+    assert.ok(release, 'expected request must be pending before release');
+    release();
+  };
+}
+
+for (const destination of ['same-run search', 'cross-run search', 'history']) test(`old ordinary reset cannot clear newer exact action: ${destination}`, async (t) => {
+  const data = actionLinkFixture();
+  const original = data.details;
+  const other = { ...original, snapshotId: 'other-snapshot', run: { ...original.run, id: 'other-run' } };
+  data.list.runs.push({ ...other.run, verification: 'PASS' });
+  data.details = (id) => id === 'other-run' ? other : original;
+  if (destination === 'cross-run search') data.search.hits[1].runId = 'other-run';
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  await openActionHit(w);
+  if (destination === 'history') await openActionHit(w, 1);
+  const release = deferFetch(w, (url) => url.endsWith('/actions?cursor=0'));
+  w.document.querySelector('#timeline-tab-actions').click();
+  await settle();
+  if (destination === 'history') {
+    w.history.back();
+    await settle();
+  } else await openActionHit(w, 1);
+  const expectedURL = w.location.href;
+  assert.match(w.document.querySelector('.action-row.selected')?.textContent || '', /git status/);
+  release();
+  await settle();
+  assert.equal(w.location.href, expectedURL);
+  assert.equal(new URLSearchParams(w.location.search).get('action'), 'action-251');
+  assert.match(w.document.querySelector('.action-row.selected')?.textContent || '', /git status/);
+  assert.match(w.document.querySelector('#inspector').textContent, /git status/);
+  assert.match(w.document.querySelector('.action-row').textContent, /git status/);
+});
+
+for (const pending of ['exact page', 'same-run detail', 'cross-run detail', 'append', 'reset']) {
+  for (const mode of ['actions', 'events', 'changes']) test(`ordinary ${mode} supersedes pending ${pending} with page zero`, async (t) => {
+    const data = actionLinkFixture();
+    data.details.eventCount = 1;
+    data.events = [{ type: 'stdout', text: 'ordinary event' }];
+    data.changes = [{ path: 'ordinary.go', kind: 'added', tracked: false }];
+    const original = data.details;
+    const other = { ...original, snapshotId: 'other-snapshot', run: { ...original.run, id: 'other-run' } };
+    data.list.runs.push({ ...other.run, verification: 'PASS' });
+    data.details = (id) => id === 'other-run' ? other : original;
+    if (pending === 'cross-run detail') data.search.hits[0].runId = 'other-run';
+    if (pending === 'append') {
+      const pages = data.actions;
+      data.actions = (cursor) => cursor === 98765
+        ? { items: pages(cursor).items.slice(0, 1), nextCursor: 99234 }
+        : pages(cursor);
+    }
+    data.configure = (w) => w.history.replaceState(null, '', '/?q=agentrec&exit=completed&verification=PASS#kept');
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const w = dom.window;
+    let release;
+    if (pending === 'append' || pending === 'reset') {
+      await openActionHit(w);
+      release = deferFetch(w, (url) => url.endsWith(`/actions?cursor=${pending === 'append' ? 99234 : 0}`));
+      w.document.querySelector(pending === 'append' ? '#timeline .load-more' : '#timeline-tab-actions').click();
+      await settle();
+    } else {
+      release = deferFetch(w, (url) => pending === 'exact page'
+        ? url.endsWith('/actions?cursor=98765')
+        : url === `/api/runs/${pending === 'cross-run detail' ? 'other-run' : original.run.id}`);
+      await openActionHit(w);
+    }
+    const requestsBeforeOrdinary = w.__fetchPaths.length;
+    w.document.querySelector(`#timeline-tab-${mode}`).click();
+    await settle();
+    const ordinaryURL = w.location.href;
+    const params = new URLSearchParams(w.location.search);
+    assert.equal(params.has('action'), false);
+    assert.equal(params.has('actionCursor'), false);
+    assert.equal(params.get('focus'), mode);
+    assert.equal(params.get('run'), pending === 'cross-run detail' ? 'other-run' : original.run.id);
+    assert.equal(params.get('q'), 'agentrec');
+    assert.equal(params.get('exit'), 'completed');
+    assert.equal(params.get('verification'), 'PASS');
+    assert.equal(w.location.hash, '#kept');
+    const snapshot = pending === 'cross-run detail' ? 'other-snapshot' : 'snapshot';
+    assert.ok(w.__fetchPaths.slice(requestsBeforeOrdinary).includes(`/api/snapshots/${snapshot}/actions?cursor=0`), 'ordinary navigation must issue a fresh page-zero load before the obsolete response resolves');
+    assert.equal(w.document.querySelector(`#timeline-tab-${mode}`).getAttribute('aria-selected'), 'true');
+    release();
+    await settle();
+    assert.equal(w.location.href, ordinaryURL);
+    assert.equal(w.document.querySelector(`#timeline-tab-${mode}`).getAttribute('aria-selected'), 'true');
+    assert.equal(w.document.querySelector('.action-row.selected, .change-row.selected'), null);
+    if (mode !== 'actions') {
+      w.document.querySelector('#timeline-tab-actions').click();
+      await settle();
+    }
+    assert.match(w.document.querySelector('.action-row').textContent, /command-0/);
+    assert.equal(w.document.querySelectorAll('.action-row').length, 250);
+    assert.equal(w.document.querySelector('.action-row.selected'), null);
+    assert.doesNotMatch(w.document.querySelector('#inspector').textContent, /go test|git status/);
+  });
+}
+
+test('ordinary actions after leaving exact tab starts at page zero', async (t) => {
+  const dom = await renderFixture(actionLinkFixture());
+  t.after(() => dom.window.close());
+  await openActionHit(dom.window);
+  dom.window.document.querySelector('#timeline-tab-events').click();
+  await settle();
+  dom.window.document.querySelector('#timeline-tab-actions').click();
+  await settle();
+  assert.match(dom.window.document.querySelector('.action-row').textContent, /command-0/);
+});
 
 function fixture(exitReason, statusClass, statusLabel) {
   const startedAt = '2026-09-03T00:00:00Z';

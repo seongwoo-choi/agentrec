@@ -1154,6 +1154,15 @@ function shortID(id) {
     $('run-failures-only').checked = params.get('failures') === '1';
   }
 
+  function actionFromURL() {
+    const params = new URLSearchParams(location.search);
+    const id = params.get('focus') === 'actions' ? params.get('action') : '';
+    const raw = params.get('actionCursor');
+    if (!id || !/^(0|[1-9][0-9]*)$/.test(raw || '')) return null;
+    const cursor = Number(raw);
+    return Number.isSafeInteger(cursor) ? { id, cursor } : null;
+  }
+
   function changedFileFromURL() {
     const params = new URLSearchParams(location.search);
     const path = params.get('focus') === 'changes' ? params.get('change') : '';
@@ -1172,7 +1181,8 @@ function shortID(id) {
       target.focus({ preventScroll: true });
     } else if (['actions', 'changes', 'events'].includes(focus)) {
       const changedFile = changedFileFromURL();
-      if (changedFile) {
+      const action = actionFromURL();
+      if (changedFile || action) {
         window.clearTimeout(state.searchTimer);
         state.searchTimer = null;
         state.query = '';
@@ -1182,6 +1192,15 @@ function shortID(id) {
       state.restoringNavigation = true;
       try { tab.click(); } finally { state.restoringNavigation = false; }
       tab.focus({ preventScroll: true });
+      if (action) {
+        const index = state.streams.actions.items.findIndex((item) => item.id === action.id);
+        const row = $('timeline').querySelector(`.action-row[data-index="${index}"]`);
+        if (row) {
+          selectItem(row, { kind: 'action', value: state.streams.actions.items[index] });
+          row.scrollIntoView({ block: 'center' });
+          row.focus({ preventScroll: true });
+        }
+      }
       if (changedFile) {
         const row = Array.from(document.querySelectorAll('.change-row')).find((item) => item.dataset.path === changedFile.path);
         if (row) {
@@ -1198,7 +1217,9 @@ function shortID(id) {
     const url = new URL(location.href);
     if (value) url.searchParams.set(name, value);
     else url.searchParams.delete(name);
-    if (name === 'focus') {
+    if (name === 'focus' || name === 'run') {
+      url.searchParams.delete('action');
+      url.searchParams.delete('actionCursor');
       url.searchParams.delete('change');
       url.searchParams.delete('changeCursor');
     }
@@ -1540,7 +1561,22 @@ function shortID(id) {
     const searchable = `${type} ${action.provider || ''} ${action.status || ''} ${detail} ${JSON.stringify(action.input || {})}`;
     if (!matches(action, type, searchable)) return null;
     const family = actionFamily(type);
-    const row = timelineRow(`action-row${speech === null ? '' : ` conversation-row ${family}`}`, () => selectItem(row, { kind: 'action', value: action }));
+    const generation = state.loadGeneration;
+    const runID = state.run.run.id;
+    const cursor = state.streams.actions.pageCursors?.[index];
+    const row = timelineRow(`action-row${speech === null ? '' : ` conversation-row ${family}`}`, () => {
+      const url = new URL(location.href);
+      if (generation !== state.loadGeneration || runID !== state.run?.run.id || runID !== url.searchParams.get('run')) return;
+      if (action.id && Number.isSafeInteger(cursor) && cursor >= 0) {
+        url.searchParams.set('focus', 'actions');
+        url.searchParams.set('action', action.id);
+        url.searchParams.set('actionCursor', String(cursor));
+        url.searchParams.delete('change');
+        url.searchParams.delete('changeCursor');
+        if (url.href !== location.href) history.pushState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+      selectItem(row, { kind: 'action', value: action });
+    });
     row.style.setProperty('--depth', String(actionDepth(action, byID)));
     row.dataset.index = String(index);
     const time = node('div', 'action-time', clock(action.startedAt));
@@ -2069,6 +2105,10 @@ function shortID(id) {
       // A page for a cursor this stream no longer waits on is stale and dropped.
       if (generation !== state.loadGeneration || cursor !== stream.currentCursor) return;
       if (!append) stream.startCursor = cursor;
+      if (streamName === 'actions') {
+        const cursors = (page.items || []).map(() => cursor);
+        stream.pageCursors = append ? (stream.pageCursors || []).concat(cursors) : cursors;
+      }
       stream.items = append ? stream.items.concat(page.items || []) : (page.items || []);
       stream.error = '';
       stream.nextCursor = page.nextCursor === undefined ? null : page.nextCursor;
@@ -3015,16 +3055,7 @@ function shortID(id) {
     $('timeline-search').value = '';
     if (hit.kind === 'action') $('timeline-tab-actions').click();
     if (hit.kind === 'change') $('timeline-tab-changes').click();
-    await navigateRun(hit.runId, hit.kind === 'action' ? hit.offset || 0 : (hit.kind === 'change' ? hit.index || 0 : 0), 'push', hit.kind === 'change' ? hit.path : '');
-    if (hit.kind === 'change') return;
-    if (hit.kind !== 'action' || !state.run || state.run.run.id !== hit.runId || state.mode !== 'actions') return;
-    const items = state.streams.actions.items;
-    const at = Math.max(0, items.findIndex((action) => action.id === hit.actionId));
-    const row = $('timeline').querySelector(`.action-row[data-index="${at}"]`);
-    if (!row || !items[at]) return;
-    selectItem(row, { kind: 'action', value: items[at] });
-    row.scrollIntoView({ block: 'center' });
-    row.focus({ preventScroll: true });
+    await navigateRun(hit.runId, hit.kind === 'action' ? hit.offset : (hit.kind === 'change' ? hit.index || 0 : 0), 'push', hit.kind === 'change' ? hit.path : '', hit.kind === 'action' ? hit.actionId : '');
   }
 
   // quiet loads (auto-selection) report failure in the empty state rather than a toast, so the poll can retry without nagging.
@@ -3081,9 +3112,16 @@ function shortID(id) {
     }
   }
 
-  async function navigateRun(id, cursor = 0, mode = 'push', changedPath = '') {
+  async function navigateRun(id, cursor = 0, mode = 'push', changedPath = '', actionID = '') {
     const url = new URL(location.href);
     url.searchParams.set('run', id);
+    url.searchParams.delete('action');
+    url.searchParams.delete('actionCursor');
+    if (actionID) {
+      url.searchParams.set('focus', 'actions');
+      url.searchParams.set('action', actionID);
+      url.searchParams.set('actionCursor', String(cursor));
+    }
     if (changedPath) {
       url.searchParams.set('focus', 'changes');
       url.searchParams.set('change', changedPath);
@@ -3094,8 +3132,10 @@ function shortID(id) {
     }
     history[`${mode}State`](history.state, '', `${url.pathname}${url.search}${url.hash}`);
     const changedFile = changedFileFromURL();
+    const action = actionFromURL();
     if (changedFile) state.mode = 'changes';
-    await loadRun(id, false, changedFile ? changedFile.cursor : cursor, true);
+    if (actionID) state.mode = 'actions';
+    await loadRun(id, false, changedFile ? changedFile.cursor : action ? action.cursor : 0, true);
     if (!state.run || state.run.run.id !== id) return;
     focusRunEvidenceFromURL();
   }
@@ -3240,8 +3280,10 @@ function shortID(id) {
       applyRunList(list);
       const linkedRun = new URLSearchParams(location.search).get('run');
       const linkedChange = changedFileFromURL();
+      const linkedAction = actionFromURL();
       if (linkedChange) state.mode = 'changes';
-      if (linkedRun) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : 0, true);
+      if (linkedAction) state.mode = 'actions';
+      if (linkedRun) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : linkedAction ? linkedAction.cursor : 0, true);
       else await autoSelect(list);
       if (linkedRun && state.run && state.run.run.id === linkedRun) focusRunEvidenceFromURL();
       const reopen = /^#compare=([^,]+),(.+)$/.exec(location.hash);
@@ -3288,9 +3330,11 @@ function shortID(id) {
     }
     const linkedRun = new URLSearchParams(location.search).get('run');
     const linkedChange = changedFileFromURL();
+    const linkedAction = actionFromURL();
     if (linkedChange) state.mode = 'changes';
-    const leavingChangePage = state.streams && state.streams.changes.startCursor > 0;
-    if (linkedRun && (!state.run || state.run.run.id !== linkedRun || linkedChange || leavingChangePage)) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : 0, true);
+    if (linkedAction) state.mode = 'actions';
+    const leavingExactPage = state.selected || (state.streams && (state.streams.changes.startCursor > 0 || state.streams.actions.startCursor > 0));
+    if (linkedRun && (!state.run || state.run.run.id !== linkedRun || linkedChange || linkedAction || leavingExactPage)) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : linkedAction ? linkedAction.cursor : 0, true);
     if (linkedRun && state.run && state.run.run.id === linkedRun) focusRunEvidenceFromURL('actions');
     if (!linkedRun) {
       state.run = null;
@@ -3350,7 +3394,19 @@ function shortID(id) {
       });
       $('timeline').setAttribute('aria-labelledby', tab.id);
       state.mode = tab.dataset.mode;
+      const leavingExact = !state.restoringNavigation && (actionFromURL() || changedFileFromURL());
       if (!state.restoringNavigation) updateRunNavigationURL('focus', state.mode);
+      if (!state.restoringNavigation && (leavingExact || state.runAbortController || Object.values(state.streams || {}).some((stream) => stream.loading || stream.startCursor > 0))) {
+        // Ordinary navigation supersedes both pending details and stream pages.
+        // Reload the URL's run (not possibly stale displayed details), giving page
+        // zero fresh streams and a new generation instead of hitting loading's
+        // early return. There must be no tab continuation after this await.
+        state.activeTypes.clear();
+        state.selected = null;
+        renderTimeline();
+        const id = new URLSearchParams(location.search).get('run');
+        if (id) return loadRun(id, false, 0, true);
+      }
       state.activeTypes.clear();
       renderTimeline();
       if (isLive() && state.mode === 'changes') {

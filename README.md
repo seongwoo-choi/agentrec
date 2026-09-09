@@ -188,6 +188,12 @@ reloads and can be bookmarked or shared alongside comparison links in
 reloads and browser Back/Forward navigation, reopening its paginated Changes row
 and inspector.
 
+**Unreleased:** Exact action links preserve the action ID and its page's byte
+cursor, reopening the same recorded action after reloads or browser Back/Forward
+navigation. Selecting another action updates the link; opening a regular evidence
+tab clears the exact action selection. If the linked action is absent, the viewer
+does not select another action in its place.
+
 A selected run and evidence destination are
 stored as `run=...&focus=...`; `focus` can reopen Actions, Changes, Provider
 events, or focus Verification. The linked run is fetched directly even when it
