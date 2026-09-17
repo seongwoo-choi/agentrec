@@ -28,6 +28,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/seongwoo-choi/agentrec/internal/redaction"
 	"github.com/seongwoo-choi/agentrec/internal/report"
 )
 
@@ -35,6 +36,8 @@ const (
 	viewUsage         = "usage: agentrec view [<run-id>|latest] [--listen <loopback-address>] [--no-open] [--allow-run]\n"
 	defaultViewListen = "127.0.0.1:0"
 	promptFile        = "prompt.txt"
+	viewTitleMaxBytes = 64 << 10
+	viewTitleMaxRunes = 120
 )
 
 //go:embed ui_assets/index.html ui_assets/app.css ui_assets/app.js
@@ -47,6 +50,7 @@ type viewField struct {
 
 type viewRunSummary struct {
 	ID           string    `json:"id"`
+	Title        string    `json:"title,omitempty"`
 	Provider     string    `json:"provider"`
 	Project      string    `json:"project"`
 	StartedAt    time.Time `json:"startedAt"`
@@ -334,7 +338,7 @@ func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error)
 		return runSummary{}, err
 	}
 	run := runSummary{
-		ID: runID, Provider: manifest.Provider, Project: projectName(manifest.CWD),
+		ID: runID, Title: readViewRunTitle(runRoot), Provider: manifest.Provider, Project: projectName(manifest.CWD),
 		StartedAt: manifest.StartedAt, Exit: exitReason(manifest, nil), WarningCount: manifest.WarningCount,
 		Failure: supervisorFailed(manifest, result),
 	}
@@ -349,6 +353,35 @@ func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error)
 		run.Failure = run.Failure || failureVerification(verification) != nil
 	}
 	return run, nil
+}
+
+func readViewRunTitle(root *os.Root) string {
+	f, err := openRegularFromRoot(root, promptFile)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, viewTitleMaxBytes+1))
+	if err != nil || len(raw) > viewTitleMaxBytes || !utf8.Valid(raw) {
+		return ""
+	}
+	// Redact the complete prompt before splitting: quoted secrets can span lines.
+	safe, err := redactFreeText(redaction.New(), string(raw))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(safe, "\n") {
+		title := strings.TrimSpace(line)
+		if title == "" {
+			continue
+		}
+		runes := []rune(title)
+		if len(runes) > viewTitleMaxRunes {
+			runes = runes[:viewTitleMaxRunes]
+		}
+		return string(runes)
+	}
+	return ""
 }
 
 func runView(args []string, stdout, stderr io.Writer) int {
@@ -735,7 +768,7 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 		for _, run := range page.runs {
 			statusClass, statusLabel := viewRunStatus(run.Exit, run.Verification, run.VerificationWarnings)
 			out = append(out, viewRunSummary{
-				ID: run.ID, Provider: run.Provider, Project: run.Project,
+				ID: run.ID, Title: run.Title, Provider: run.Provider, Project: run.Project,
 				StartedAt: run.StartedAt, Exit: run.Exit, Verification: run.Verification,
 				StatusClass: statusClass, StatusLabel: statusLabel, WarningCount: run.WarningCount + run.VerificationWarnings,
 				Failure: run.Failure,

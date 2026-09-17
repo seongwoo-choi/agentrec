@@ -184,6 +184,20 @@ reloads and can be bookmarked or shared alongside comparison links in
 `#compare=...`. A shared link applies them to the runs loaded on arrival;
 **Load more** extends that set.
 
+**Unreleased — title-first run list:** Each loaded sidebar row now leads with a
+Viewer-only title derived from a complete, valid UTF-8 `prompt.txt` no larger
+than 64 KiB. The whole prompt is re-redacted before taking its first non-empty
+line and limiting it to 120 Unicode characters; missing, unreadable, invalid, or oversized prompts fall
+back to the run ID. This does not change canonical bundle storage or the
+`agentrec list --json` contract. Project, provider, and time remain visible as
+secondary facts, while process and verification stay separate; routine outcomes
+are neutral and failures, warnings, and running work are emphasized. Title
+search and the project selector remain visible. Exit, verification, and
+failure-only controls start collapsed under **Advanced filters**, show how many
+are applied, and keep their values when hidden. Search still covers only loaded
+summaries and makes no per-row detail requests; the recent-10 fold, selected
+older run, exact evidence links, and **Load more** scope are unchanged.
+
 **v0.13.0 — focused run list:** Choose an exact project name to narrow the
 sidebar together with the existing `q`, `exit`, `verification`, and `failures`
 filters. The project choice is reflected in the `project` URL parameter and

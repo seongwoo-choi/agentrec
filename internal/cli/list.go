@@ -26,6 +26,7 @@ const (
 // runSummary is one row of the run table.
 type runSummary struct {
 	ID                   string
+	Title                string
 	Provider             string
 	Project              string
 	StartedAt            time.Time

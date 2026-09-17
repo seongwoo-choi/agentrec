@@ -1009,8 +1009,8 @@ test('run list separates process and verification verdicts before opening a run'
   assert.deepEqual(verdicts('run-verification-tainted'), ['Run COMPLETED', 'Verify TAINTED']);
   assert.deepEqual(verdicts('run-pending'), ['Run UNKNOWN', 'Verify PENDING']);
   assert.equal(cards.get('run-process-failed').querySelector('.run-verdict-run').classList.contains('fail'), true);
-  assert.equal(cards.get('run-process-failed').querySelector('.run-verdict-verify').classList.contains('pass'), true);
-  assert.equal(cards.get('run-verification-failed').querySelector('.run-verdict-run').classList.contains('pass'), true);
+  assert.equal(cards.get('run-process-failed').querySelector('.run-verdict-verify').classList.contains('pass'), false);
+  assert.equal(cards.get('run-verification-failed').querySelector('.run-verdict-run').classList.contains('pass'), false);
   assert.equal(cards.get('run-verification-failed').querySelector('.run-verdict-verify').classList.contains('fail'), true);
   assert.equal(cards.get('run-verification-tainted').querySelector('.run-verdict-verify').classList.contains('warn'), true);
   assert.equal(cards.get('run-pending').querySelector('.run-verdict-verify').classList.contains('fail'), false);
@@ -1027,6 +1027,78 @@ test('run list separates process and verification verdicts before opening a run'
   assert.deepEqual(localizedVerdicts('run-verification-failed'), ['실행 정상 종료', '검증 실패']);
   assert.deepEqual(localizedVerdicts('run-parse-error'), ['실행 파싱 오류', '검증 미실행']);
   assert.equal(localizedCards.get('run-verification-failed').querySelector('.run-warning-count').textContent.trim(), '경고 2개');
+});
+
+test('long run titles stay within a shrinkable sidebar grid track', () => {
+  assert.match(css, /\.run-list\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+});
+
+test('run list is title-first and searches loaded summary titles without detail calls', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const base = data.list.runs[0], detail = data.details;
+  data.list.runs = [
+    { ...base, id: 'normal-id', title: 'Review the release notes', project: 'agentrec', exit: 'completed', verification: 'PASS' },
+    { ...base, id: 'failure-id', title: 'Repair the broken build', project: 'dogfood', exit: 'nonzero', verification: 'FAIL' },
+    { ...base, id: 'warning-id', title: 'Inspect tainted evidence', exit: 'completed', verification: 'TAINTED' },
+    { ...base, id: 'running-id', title: 'Watch the active recorder', exit: 'running', verification: 'PENDING' },
+    { ...base, id: 'fallback-id', title: '' },
+  ];
+  data.list.total = data.list.runs.length;
+  data.details = (id) => ({ ...detail, run: { ...detail.run, id } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const rows = new Map(Array.from(d.querySelectorAll('.run-item'), (row) => [row.dataset.runId, row]));
+
+  assert.equal(rows.get('normal-id').querySelector('.run-title-text').textContent, 'Review the release notes');
+  assert.match(rows.get('normal-id').querySelector('.run-item-meta').textContent, /agentrec.*claude.*ago/);
+  assert.equal(rows.get('fallback-id').querySelector('.run-title-text').textContent, 'fallback-id');
+  assert.equal(rows.get('normal-id').querySelector('.run-verdict-run').classList.contains('pass'), false);
+  assert.equal(rows.get('normal-id').querySelector('.run-verdict-verify').classList.contains('pass'), false);
+  assert.equal(rows.get('failure-id').querySelector('.run-verdict-run').classList.contains('fail'), true);
+  assert.equal(rows.get('warning-id').querySelector('.run-verdict-verify').classList.contains('warn'), true);
+  assert.equal(rows.get('running-id').querySelector('.run-verdict-run').classList.contains('running'), true);
+
+  const detailCalls = () => w.__fetchPaths.filter((path) => /^\/api\/runs\/[^/]+$/.test(path)).length;
+  assert.equal(detailCalls(), 1, 'only the selected run detail is loaded');
+  const search = d.querySelector('#run-search');
+  search.value = 'broken build';
+  search.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.deepEqual(runIDs(d), ['failure-id']);
+  assert.equal(detailCalls(), 1, 'title filtering uses /api/runs summaries');
+});
+
+test('advanced run filters start collapsed, report applied count, and retain hidden values', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs[0].failure = true;
+  data.configure = (w) => w.history.replaceState(null, '', '/?exit=completed&verification=PASS&failures=1');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  const advanced = d.querySelector('#run-advanced-filters');
+
+  assert.ok(advanced);
+  assert.equal(advanced.open, false);
+  assert.equal(d.querySelector('#run-advanced-count').textContent, '3 filters applied');
+  assert.equal(advanced.contains(d.querySelector('#run-search')), false);
+  assert.equal(advanced.contains(d.querySelector('#run-project-filter')), false);
+  advanced.open = true;
+  advanced.open = false;
+  assert.equal(d.querySelector('#run-exit-filter').value, 'completed');
+  assert.equal(d.querySelector('#run-verification-filter').value, 'PASS');
+  assert.equal(d.querySelector('#run-failures-only').checked, true);
+  assert.deepEqual(runIDs(d), [data.list.runs[0].id]);
+  for (const [lang, label, count] of [
+    ['en', 'Advanced filters', '3 filters applied'],
+    ['ko', '고급 필터', '필터 3개 적용'],
+    ['ja', '詳細フィルター', 'フィルター適用 3 件'],
+    ['zh-CN', '高级筛选', '已应用 3 个筛选条件'],
+  ]) {
+    d.querySelector('#lang').value = lang;
+    d.querySelector('#lang').dispatchEvent(new dom.window.Event('change'));
+    assert.equal(advanced.querySelector('summary span').textContent, label);
+    assert.equal(d.querySelector('#run-advanced-count').textContent, count);
+  }
 });
 
 test('failure triage separates failures and navigates to existing evidence', async (t) => {
