@@ -25,13 +25,16 @@
       'Action Timeline': '액션 타임라인',
       'Filter by project': '프로젝트로 필터링',
       'All projects': '모든 프로젝트',
+      'Advanced filters': '고급 필터',
+      '{n} filter applied': '필터 {n}개 적용',
+      '{n} filters applied': '필터 {n}개 적용',
       'Show {n} earlier runs': '이전 실행 {n}개 보기',
       'Hide earlier runs': '이전 실행 숨기기',
       'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.': '필터와 프로젝트 목록은 로드된 실행만 포함합니다. 기본적으로 일치하는 최신 10개와 선택된 이전 실행을 표시합니다.',
       '{shown} shown · {matching} matching · {loaded} loaded · {folded} folded': '표시 {shown}개 · 일치 {matching}개 · 로드 {loaded}개 · 접힘 {folded}개',
       'Loading recorded evidence…': '기록된 증거를 불러오는 중…',
       'Recorded runs': '기록된 실행',
-      'Find a run or project': '실행 또는 프로젝트 검색',
+      'Find a title, run, or project': '제목, 실행 또는 프로젝트 검색',
       Request: '요청',
       'No recorded request.': '기록된 요청이 없습니다.',
       Actions: '액션',
@@ -311,13 +314,16 @@
       'Action Timeline': 'アクションタイムライン',
       'Filter by project': 'プロジェクトで絞り込む',
       'All projects': 'すべてのプロジェクト',
+      'Advanced filters': '詳細フィルター',
+      '{n} filter applied': 'フィルター適用 {n} 件',
+      '{n} filters applied': 'フィルター適用 {n} 件',
       'Show {n} earlier runs': '以前の実行を{n}件表示',
       'Hide earlier runs': '以前の実行を隠す',
       'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.': 'フィルターとプロジェクト候補は読み込み済みの実行のみが対象です。既定では、一致する最新10件と選択中の以前の実行を表示します。',
       '{shown} shown · {matching} matching · {loaded} loaded · {folded} folded': '表示{shown}件 · 一致{matching}件 · 読み込み済み{loaded}件 · 折りたたみ{folded}件',
       'Loading recorded evidence…': '記録された証跡を読み込んでいます…',
       'Recorded runs': '記録された実行',
-      'Find a run or project': '実行またはプロジェクトを検索',
+      'Find a title, run, or project': 'タイトル、実行、プロジェクトを検索',
       Request: 'リクエスト',
       'No recorded request.': '記録されたリクエストはありません。',
       Actions: 'アクション',
@@ -597,13 +603,16 @@
       'Action Timeline': '操作时间线',
       'Filter by project': '按项目筛选',
       'All projects': '所有项目',
+      'Advanced filters': '高级筛选',
+      '{n} filter applied': '已应用 {n} 个筛选条件',
+      '{n} filters applied': '已应用 {n} 个筛选条件',
       'Show {n} earlier runs': '显示{n}个较早运行',
       'Hide earlier runs': '隐藏较早运行',
       'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.': '筛选和项目选项仅涵盖已加载的运行。默认显示最新的10个匹配项，并保留选中的较早运行。',
       '{shown} shown · {matching} matching · {loaded} loaded · {folded} folded': '显示{shown}个 · 匹配{matching}个 · 已加载{loaded}个 · 已折叠{folded}个',
       'Loading recorded evidence…': '正在加载记录的证据…',
       'Recorded runs': '已记录的运行',
-      'Find a run or project': '搜索运行或项目',
+      'Find a title, run, or project': '搜索标题、运行或项目',
       Request: '请求',
       'No recorded request.': '没有记录的请求。',
       Actions: '操作',
@@ -1161,25 +1170,32 @@ function shortID(id) {
     button.type = 'button';
     button.dataset.runId = run.id;
     if (active) button.setAttribute('aria-current', 'true');
-    const head = node('div', 'run-item-head');
-    head.append(node('span', 'run-project', run.project || t('unknown project')), node('span', 'run-time', relativeTime(run.startedAt)));
-    const foot = node('div', 'run-item-foot');
+    const title = run.title || run.id;
+    if (run.title) button.title = run.id;
+    const meta = node('div', 'run-item-meta');
+    meta.append(
+      node('span', 'run-project', run.project || t('unknown project')),
+      node('span', 'run-meta-separator', '·'),
+      node('span', 'run-provider', run.provider || t('unknown')),
+      node('span', 'run-meta-separator', '·'),
+      node('span', 'run-time', relativeTime(run.startedAt)),
+    );
     const verdicts = node('span', 'run-verdicts');
     const process = outcome(run.exit, new Map());
     const verification = verdictWord(String(run.verification || 'NOT RUN').toUpperCase());
+    const emphasis = (value, tone) => value === 'RUNNING' ? 'running' : (tone === 'fail' || tone === 'warn' ? tone : '');
     const badge = (kind, value, tone, detail) => {
       const el = node('span', `mini-status run-verdict run-verdict-${kind.toLowerCase()}${tone ? ` ${tone}` : ''}`);
       el.append(node('span', 'run-verdict-kind', `${t(kind)} `), statusNode('span', 'run-verdict-value', value, detail));
       return el;
     };
     verdicts.append(
-      badge('Run', process.value, process.tone, process.detail),
-      badge('Verify', verification, statusClass(verification), explainVerification(verification)),
+      badge('Run', process.value, emphasis(process.value, process.tone), process.detail),
+      badge('Verify', verification, emphasis(verification, statusClass(verification)), explainVerification(verification)),
     );
     const warningCount = Number(run.warningCount || 0);
     if (warningCount > 0) verdicts.append(node('span', 'run-warning-count', t(warningCount === 1 ? '{n} warning' : '{n} warnings', { n: warningCount })));
-    foot.append(node('span', 'run-provider', run.provider || t('unknown')), verdicts);
-    button.append(head, node('div', 'run-id', shortID(run.id)), foot);
+    button.append(node('span', 'run-title-text', title), meta, verdicts);
     return button;
   }
 
@@ -1327,7 +1343,7 @@ function shortID(id) {
   }
 
   const runMatches = (run, query, exit, verification, failuresOnly, project) =>
-    (!query || `${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase().includes(query))
+    (!query || `${run.title || ''} ${run.id} ${run.provider} ${run.project} ${run.exit} ${run.verification}`.toLowerCase().includes(query))
     && (!project || run.project === project)
     && (!exit || run.exit === exit)
     && (!verification || run.verification === verification)
@@ -1342,6 +1358,8 @@ function shortID(id) {
     const exit = $('run-exit-filter').value;
     const verification = $('run-verification-filter').value;
     const failuresOnly = $('run-failures-only').checked;
+    const applied = [exit, verification, failuresOnly].filter(Boolean).length;
+    $('run-advanced-count').textContent = t(applied === 1 ? '{n} filter applied' : '{n} filters applied', { n: applied });
     const list = $('run-list');
     const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.runId : undefined;
     list.replaceChildren();
@@ -3312,7 +3330,7 @@ function shortID(id) {
       ? [...previousRuns, ...incoming.filter((run) => !previousRuns.some((current) => current.id === run.id))]
       : (!append && sameGeneration ? [...incoming, ...previousRuns.filter((run) => !pageIDs.has(run.id))] : incoming);
     // ponytail: rebuild the list only when its content changed; a rebuild mid-click would swallow the click.
-    const signature = JSON.stringify(runs.map((run) => [run.id, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.failure, run.startedAt]));
+    const signature = JSON.stringify(runs.map((run) => [run.id, run.title, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.failure, run.startedAt]));
     const changed = signature !== state.runsSignature;
     state.runsSignature = signature;
     state.runs = runs;
