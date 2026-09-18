@@ -1068,6 +1068,115 @@ test('run list is title-first and searches loaded summary titles without detail 
   assert.equal(detailCalls(), 1, 'title filtering uses /api/runs summaries');
 });
 
+test('main heading uses only the loaded safe summary title and keeps the full run ID visible', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs[0].title = 'Review the release notes';
+  data.details.run.title = 'detail-only title must not be projected';
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+
+  assert.equal(document.querySelector('#run-title').textContent, 'Review the release notes');
+  assert.equal(document.querySelector('#run-id').textContent, data.details.run.id);
+  assert.match(document.querySelector('.run-subtitle').textContent, new RegExp(data.details.run.id));
+});
+
+test('main heading falls back to the ID for an older unloaded run', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs[0] = { ...data.list.runs[0], id: 'loaded-run', title: 'Loaded safe title' };
+  data.details.run = { ...data.details.run, id: 'older-unloaded-run', title: 'detail-only title must not be projected' };
+  data.configure = (w) => w.history.replaceState(null, '', '/?run=older-unloaded-run');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+
+  assert.equal(document.querySelector('#run-title').textContent, 'older-unloaded-run');
+  assert.equal(document.querySelector('#run-id').textContent, 'older-unloaded-run');
+});
+
+test('polling updates the selected safe summary title without refetching terminal details', async (t) => {
+  let poll;
+  let detailReads = 0;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.generation = 'generation';
+  data.list.runs[0].title = 'Initial safe title';
+  data.details = () => {
+    detailReads += 1;
+    return { ...fixture('completed', 'pass', 'PASS').details };
+  };
+  data.configure = (w) => {
+    w.setInterval = (callback, delay) => { if (delay === 5000) poll = callback; return delay; };
+    w.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(document.querySelector('#run-title').textContent, 'Initial safe title');
+  assert.equal(detailReads, 1);
+
+  data.list.runs[0] = { ...data.list.runs[0], title: 'Polled safe title' };
+  await poll();
+
+  assert.equal(document.querySelector('#run-title').textContent, 'Polled safe title');
+  assert.equal(detailReads, 1);
+});
+
+test('request uses a localized native disclosure, preserves full text, and resets on run change', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const first = '첫 줄의 아주 긴 요청\nSecond line stays fully inspectable.';
+  const second = '次の実行の完全なリクエスト';
+  const base = data.details;
+  data.list.runs = [
+    { ...data.list.runs[0], id: 'first-run' },
+    { ...data.list.runs[0], id: 'second-run' },
+  ];
+  data.list.total = 2;
+  data.details = (id) => ({ ...base, run: { ...base.run, id, prompt: id === 'first-run' ? first : second } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const disclosure = d.querySelector('#request-disclosure');
+
+  assert.equal(disclosure.tagName, 'DETAILS');
+  assert.ok(disclosure.querySelector(':scope > summary'));
+  assert.equal(disclosure.open, false);
+  assert.equal(d.querySelector('#run-prompt').textContent, first);
+  assert.match(d.querySelector('#request-preview').textContent, /첫 줄의 아주 긴 요청/);
+
+  disclosure.open = true;
+  for (const [lang, request, show, hide] of [
+    ['en', 'Request', 'Show request', 'Hide request'],
+    ['ko', '요청', '요청 보기', '요청 접기'],
+    ['ja', 'リクエスト', 'リクエストを表示', 'リクエストを隠す'],
+    ['zh-CN', '请求', '显示请求', '隐藏请求'],
+  ]) {
+    d.querySelector('#lang').value = lang;
+    d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+    assert.equal(disclosure.open, true, `${lang} keeps disclosure state`);
+    assert.equal(disclosure.querySelector('.section-label').textContent, request);
+    assert.equal(d.querySelector('#request-expand-label').textContent, show);
+    assert.equal(d.querySelector('#request-collapse-label').textContent, hide);
+    assert.equal(d.querySelector('#run-prompt').textContent, first);
+  }
+
+  d.querySelector('[data-run-id="second-run"]').click();
+  await settle();
+  assert.equal(disclosure.open, false);
+  assert.equal(d.querySelector('#run-prompt').textContent, second);
+  assert.equal(d.querySelector('#request-preview').textContent, second);
+});
+
+test('request preview bounds Unicode text without shortening full evidence', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const prompt = '🧪'.repeat(200) + '\nFull evidence remains here.';
+  data.details.run.prompt = prompt;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.equal(d.querySelector('#request-preview').textContent, '🧪'.repeat(160) + '…');
+  assert.equal(d.querySelector('#run-prompt').textContent, prompt);
+});
+
 test('advanced run filters start collapsed, report applied count, and retain hidden values', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.list.runs[0].failure = true;
@@ -1279,11 +1388,14 @@ test('project and recent-run controls explain loaded scope in all four locales',
   const dom = await renderFixture(recentRunsFixture());
   t.after(() => dom.window.close());
   const w = dom.window, d = w.document;
-  for (const [lang, project, all, show, hide, scope, count] of [
-    ['en', 'Filter by project', 'All projects', 'Show 19 earlier runs', 'Hide earlier runs', 'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.', '10 shown · 29 matching · 29 loaded · 19 folded'],
-    ['ko', '프로젝트로 필터링', '모든 프로젝트', '이전 실행 19개 보기', '이전 실행 숨기기', '필터와 프로젝트 목록은 로드된 실행만 포함합니다. 기본적으로 일치하는 최신 10개와 선택된 이전 실행을 표시합니다.', '표시 10개 · 일치 29개 · 로드 29개 · 접힘 19개'],
-    ['ja', 'プロジェクトで絞り込む', 'すべてのプロジェクト', '以前の実行を19件表示', '以前の実行を隠す', 'フィルターとプロジェクト候補は読み込み済みの実行のみが対象です。既定では、一致する最新10件と選択中の以前の実行を表示します。', '表示10件 · 一致29件 · 読み込み済み29件 · 折りたたみ19件'],
-    ['zh-CN', '按项目筛选', '所有项目', '显示19个较早运行', '隐藏较早运行', '筛选和项目选项仅涵盖已加载的运行。默认显示最新的10个匹配项，并保留选中的较早运行。', '显示10个 · 匹配29个 · 已加载29个 · 已折叠19个'],
+  const scopeDetails = d.querySelector('.run-scope-help');
+  assert.equal(scopeDetails.tagName, 'DETAILS');
+  assert.equal(scopeDetails.open, false);
+  for (const [lang, project, all, show, hide, scopeLabel, scope, count] of [
+    ['en', 'Filter by project', 'All projects', 'Show 19 earlier runs', 'Hide earlier runs', 'Loaded-run scope', 'Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.', '10 shown · 29 matching · 29 loaded · 19 folded'],
+    ['ko', '프로젝트로 필터링', '모든 프로젝트', '이전 실행 19개 보기', '이전 실행 숨기기', '로드된 실행 범위', '필터와 프로젝트 목록은 로드된 실행만 포함합니다. 기본적으로 일치하는 최신 10개와 선택된 이전 실행을 표시합니다.', '표시 10개 · 일치 29개 · 로드 29개 · 접힘 19개'],
+    ['ja', 'プロジェクトで絞り込む', 'すべてのプロジェクト', '以前の実行を19件表示', '以前の実行を隠す', '読み込み済みの範囲', 'フィルターとプロジェクト候補は読み込み済みの実行のみが対象です。既定では、一致する最新10件と選択中の以前の実行を表示します。', '表示10件 · 一致29件 · 読み込み済み29件 · 折りたたみ19件'],
+    ['zh-CN', '按项目筛选', '所有项目', '显示19个较早运行', '隐藏较早运行', '已加载运行范围', '筛选和项目选项仅涵盖已加载的运行。默认显示最新的10个匹配项，并保留选中的较早运行。', '显示10个 · 匹配29个 · 已加载29个 · 已折叠19个'],
   ]) {
     d.querySelector('#lang').value = lang;
     d.querySelector('#lang').dispatchEvent(new w.Event('change'));
@@ -1291,6 +1403,7 @@ test('project and recent-run controls explain loaded scope in all four locales',
     assert.equal(select.getAttribute('aria-label'), project, lang);
     assert.equal(select.options[0].textContent, all, lang);
     assert.equal(select.getAttribute('aria-describedby'), 'run-list-scope');
+    assert.equal(scopeDetails.querySelector('summary').textContent, scopeLabel, lang);
     assert.equal(d.querySelector('#run-list-scope').textContent, scope, lang);
     assert.equal(d.querySelector('#run-count').textContent, count, lang);
     const toggle = d.querySelector('#run-earlier-toggle');
@@ -1302,10 +1415,101 @@ test('project and recent-run controls explain loaded scope in all four locales',
   }
 });
 
-test('project dropdown spans its row and run counts wrap below the header', () => {
+test('project dropdown spans its row while counts and scope help stay quiet', () => {
   assert.match(css, /#run-project-filter\s*\{[^}]*grid-column:\s*1 \/ -1/);
   assert.match(css, /\.sidebar-head\s*\{[^}]*flex-wrap:\s*wrap/);
-  assert.match(css, /#run-count\s*\{[^}]*border-radius:\s*8px/);
+  assert.match(css, /#run-count\s*\{[^}]*color:\s*var\(--quiet\)/);
+  assert.doesNotMatch(css, /#run-count\s*\{[^}]*border/);
+  assert.match(css, /\.run-scope-help\s*\{[^}]*font-size:\s*11px/);
+});
+
+test('polish layout keeps row contents uncompressed and request disclosure inline', () => {
+  assert.match(css, /\.run-list\s*\{[^}]*grid-auto-rows:\s*max-content/);
+  assert.match(css, /\.request-card summary\s*\{[^}]*display:\s*flex/);
+  assert.match(css, /#run-count\s*\{[^}]*word-break:\s*keep-all/);
+  assert.match(css, /\.metrics\s*\{[^}]*repeat\(9,minmax\(0,1fr\)\)/);
+});
+
+// JSDOM has no layout engine or responsive media evaluation. Flatten only the
+// applicable width rules to test the cascade, not pixel geometry (browser QA owns that).
+function responsiveFixture(markup, width) {
+  const dom = new JSDOM(markup);
+  const style = dom.window.document.createElement('style');
+  style.textContent = css;
+  dom.window.document.head.append(style);
+  const flatten = (rules) => Array.from(rules).flatMap((rule) => {
+    if (rule.selectorText) return [rule.cssText];
+    if (!rule.cssRules) return [];
+    const maxWidth = /^\(max-width: (\d+)px\)$/.exec(rule.conditionText);
+    return maxWidth && width <= Number(maxWidth[1]) ? flatten(rule.cssRules) : [];
+  }).join('\n');
+  style.textContent = flatten(style.sheet.cssRules);
+  return dom;
+}
+
+test('responsive fix: conversation keeps two tracks with intrinsic timestamp width', (t) => {
+  for (const width of [320, 375, 720]) {
+    const dom = responsiveFixture('<div class="action-row conversation-row"><div class="action-time">23:59:59</div><div class="speech-body">Recorded speech</div></div>', width);
+    t.after(() => dom.window.close());
+    const row = dom.window.document.querySelector('.conversation-row');
+    assert.equal(dom.window.getComputedStyle(row).gridTemplateColumns, 'max-content minmax(0,1fr)', `two children must not inherit the action rail at ${width}px`);
+    assert.equal(dom.window.getComputedStyle(row.firstElementChild).whiteSpace, 'nowrap');
+    assert.equal(dom.window.getComputedStyle(row.lastElementChild).minWidth, '0px');
+  }
+});
+
+test('responsive fix: mobile tabs stack full wrapping labels and counts without a fixed height', (t) => {
+  const dom = responsiveFixture(html, 375);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const style = (element) => dom.window.getComputedStyle(element);
+  assert.equal(style(document.querySelector('.tabs')).height, 'auto');
+  for (const tab of document.querySelectorAll('.tab')) {
+    assert.equal(style(tab).display, 'flex');
+    assert.equal(style(tab).flexDirection, 'column');
+    assert.equal(style(tab).whiteSpace, 'normal');
+    for (const span of tab.children) {
+      assert.equal(style(span).overflowWrap, 'anywhere');
+      assert.equal(style(span).wordBreak, 'keep-all');
+      assert.notEqual(style(span).display, 'none');
+      assert.notEqual(style(span).textOverflow, 'ellipsis');
+    }
+  }
+});
+
+test('responsive fix: empty navigation collapses while populated rows retain their scroll area', (t) => {
+  for (const width of [375, 900]) {
+    const dom = responsiveFixture('<nav class="run-list"></nav>', width);
+    t.after(() => dom.window.close());
+    const nav = dom.window.document.querySelector('nav');
+    assert.equal(dom.window.getComputedStyle(nav).minHeight, '0px', `empty navigation at ${width}px`);
+    assert.equal(dom.window.getComputedStyle(nav).height, 'auto');
+    nav.innerHTML = '<button class="run-item">Recorded run</button>';
+    assert.equal(dom.window.getComputedStyle(nav).minHeight, '144px');
+    assert.equal(dom.window.getComputedStyle(nav).height, `${Math.max(144, Math.min(dom.window.innerHeight * 0.32, 320))}px`);
+    assert.equal(dom.window.getComputedStyle(nav).gridAutoRows, 'max-content');
+  }
+});
+
+test('responsive fix: unresolved advanced filter count has no English loading placeholder', (t) => {
+  const dom = new JSDOM(html);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('#run-advanced-count').textContent, '');
+});
+
+test('responsive CSS keeps navigation reachable and reflows dense controls', () => {
+  const tablet = css.slice(css.indexOf('@media (max-width: 1023px)'), css.indexOf('@media (max-width: 720px)'));
+  const mobile = css.slice(css.indexOf('@media (max-width: 720px)'), css.indexOf('@media (prefers-reduced-motion: reduce)'));
+
+  assert.doesNotMatch(tablet, /max-height:\s*280px/);
+  assert.doesNotMatch(tablet, /overflow-x:\s*hidden/);
+  assert.match(tablet, /\.run-list\s*\{[^}]*min-height:\s*144px[^}]*height:/);
+  assert.match(mobile, /\.topbar\s*\{[^}]*grid-template-areas:\s*"brand controls"\s*"search search"/);
+  assert.match(mobile, /\.global-search\s*\{[^}]*grid-area:\s*search[^}]*max-width:\s*none/);
+  assert.match(mobile, /\.run-header-side\s*\{[^}]*align-items:\s*flex-start/);
+  assert.match(mobile, /\.evidence-fields\s*\{[^}]*grid-template-columns:\s*1fr/);
+  assert.match(css, /\.metrics\s*\{[^}]*border:\s*1px solid var\(--border\)[^}]*background:\s*var\(--panel\)/);
+  assert.match(css, /\.metric\s*\{[^}]*border:\s*0/);
 });
 
 test('new-run polling moves focused cutoff row to earlier toggle without expanding the list', async (t) => {

@@ -198,6 +198,15 @@ are applied, and keep their values when hidden. Search still covers only loaded
 summaries and makes no per-row detail requests; the recent-10 fold, selected
 older run, exact evidence links, and **Load more** scope are unchanged.
 
+**Unreleased — calmer evidence workspace:** The detail heading reuses the safe
+title from a loaded summary and keeps the full run ID underneath; a run outside
+the loaded summaries still uses its ID. The request starts collapsed, with a
+160-character Unicode preview and the complete sanitized text available on
+expansion. Process and verification lead a single summary strip. Narrow screens
+keep the run list scrollable and reflow search, tabs, and the inspector without
+hiding evidence. Dark and light system themes remain supported; recordings,
+CLI/API contracts, and exact evidence links are unchanged.
+
 **v0.13.0 — focused run list:** Choose an exact project name to narrow the
 sidebar together with the existing `q`, `exit`, `verification`, and `failures`
 filters. The project choice is reflected in the `project` URL parameter and
