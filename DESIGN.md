@@ -135,3 +135,13 @@ Measured on the local store: across 17 Claude runs, 5,656 of 6,439 provider even
 - Folding never crosses a `PostToolUse` group, a lone row, a page boundary or a session change; chronology is preserved exactly. Original objects, indexes and byte cursors remain the same; All events is unchanged.
 - A group is not an interpretation: it does not say the hooks succeeded, ran in order, or belong to a given tool call.
 - Acceptance: on the real run `20260728T114417.388867000Z-45057bb7` the summary's top-level entry count falls from 224 with the hook rows folded into groups; a `system` `init` record between two runs of hook records keeps them apart; a hook record on the next loaded page starts a new group; the full-view count and every existing event test pass unchanged; the summary line is localized in EN/KO/JA/ZH.
+
+## 17. Codex patch rows name their files
+
+Measured on the local store: every one of the 65 codex `file.edit` actions carries its edit as an `apply_patch` document in `input.command`, and the row detail shows its first 180 characters — `*** Begin Patch *** Update File: /Users/…` — so the timeline reads `*** Begin Patch` sixty-five times and the file is visible only when the absolute path fits in what remains. Six of those patches touch more than one file. Claude's edits carry `file_path` and already read as a path.
+
+- When an action's detail would come from a `command` string that begins with `*** Begin Patch`, the row summary instead lists the file headers found in it — the verbs and paths verbatim (`Update File: internal/cli/app.js`), in document order, joined with ` · ` — so one patch that touches four files names all four. The path is shown as recorded; no normalization, no basename-only display.
+- When the document carries no recognizable `*** Add|Update|Delete File:` header the row keeps the current first-180-characters detail. Nothing is parsed beyond those header lines; hunks stay in the inspector.
+- Search still matches the whole command text, as before. The inspector, the Changes tab, canonical stored records and the CLI are untouched.
+- This is a reading aid, not a claim that the patch applied: status, exit and the Changes tab remain the evidence.
+- Acceptance: a fixture patch with two `Update File` headers and one `Add File` header renders those three headers in order as the row summary; a `command` that does not begin with `*** Begin Patch` is unchanged; on the real store, every codex `file.edit` row names at least one file.

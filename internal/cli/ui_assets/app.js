@@ -71,6 +71,7 @@
       '{n} tool records': '도구 기록 {n}개',
       '{n} tool names · loaded page': '도구 이름 {n}종 · 로드된 페이지',
       '{n} hook lifecycle records': '훅 수명주기 기록 {n}건',
+      '+{n} files': '+{n}개 파일',
       'loaded page': '로드된 페이지',
       'Session started': '세션 시작',
       'User request': '사용자 요청',
@@ -410,6 +411,7 @@
       '{n} tool records': 'ツール記録{n}件',
       '{n} tool names · loaded page': 'ツール名{n}種類 · 読み込み済みページ',
       '{n} hook lifecycle records': 'フック ライフサイクル記録{n}件',
+      '+{n} files': '+{n}ファイル',
       'loaded page': '読み込み済みページ',
       'Session started': 'セッション開始',
       'User request': 'ユーザーリクエスト',
@@ -749,6 +751,7 @@
       '{n} tool records': '{n} 条工具记录',
       '{n} tool names · loaded page': '{n} 种工具名称 · 已加载页面',
       '{n} hook lifecycle records': '{n} 条钩子生命周期记录',
+      '+{n} files': '+{n} 个文件',
       'loaded page': '已加载页面',
       'Session started': '会话开始',
       'User request': '用户请求',
@@ -1690,12 +1693,40 @@ function shortID(id) {
 
   function firstDetail(value) {
     if (!value || typeof value !== 'object') return '';
+    const headers = patchFileHeaders(value.command);
+    if (headers) return headers;
     const keys = ['query', 'pattern', 'command', 'cmd', 'file_path', 'filePath', 'path', 'url', 'prompt', 'description', 'name', 'text'];
     for (const key of keys) {
       if (typeof value[key] === 'string' && value[key]) return value[key].replace(/\s+/g, ' ').slice(0, 180);
     }
     if (Array.isArray(value.command)) return value.command.join(' ').slice(0, 180);
     return '';
+  }
+
+  // Codex records an edit as an apply_patch document in `command`; its first
+  // 180 characters are the preamble, not the file. Name the file headers
+  // verbatim instead. Hunks stay in the inspector; no header, no change.
+  function patchFileHeaders(command) {
+    if (typeof command !== 'string' || !command.startsWith('*** Begin Patch')) return '';
+    const headers = [];
+    for (const line of command.split(/\r?\n/)) {
+      const m = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line);
+      if (m) headers.push(`${m[1]} File: ${m[2]}`);
+    }
+    // Whole headers only: a path cut in half names nothing. Say how many more.
+    // The first header is shown even if it alone exceeds the row, cut as any
+    // detail is; the count of the rest then fits inside the same 180.
+    const more = (n) => ` · ${t('+{n} files', { n })}`;
+    let out = '';
+    for (let i = 0; i < headers.length; i += 1) {
+      const rest = headers.length - i;
+      const next = out ? `${out} · ${headers[i]}` : headers[i];
+      if (out && next.length + (rest > 1 ? more(rest - 1).length : 0) > 180) {
+        return `${out.slice(0, 180 - more(rest).length)}${more(rest)}`;
+      }
+      out = next;
+    }
+    return out.slice(0, 180);
   }
 
   function actionFamily(type) {
