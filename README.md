@@ -233,6 +233,13 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — a compact summary strip:** The summary grid above the timeline
+had nine columns with three always empty, and two of its six cards repeated the
+action and event counts printed in the tab labels directly below. It now keeps
+four cards — process outcome, verification verdict, repository evidence,
+warnings — in four full columns; the counts stay in the tab labels. At 375 px
+the strip is 60 px shorter. Nothing is folded or hidden.
+
 **Unreleased — Codex patch rows name their files:** Every Codex edit is
 recorded as an `apply_patch` document in `input.command`, so the row detail
 began `*** Begin Patch *** Update File: /Users/…` sixty-five times in a local

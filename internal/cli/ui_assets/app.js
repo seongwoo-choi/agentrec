@@ -266,7 +266,6 @@
       'Process outcome': '프로세스 결과',
       'Verification verdict': '검증 판정',
       'Repository evidence': '저장소 증거',
-      'Normalized actions': '정규화된 액션',
       'Run {run} · Verify {verify}': '실행 {run} · 검증 {verify}',
       'Run': '실행',
       'Verify': '검증',
@@ -606,7 +605,6 @@
       'Process outcome': 'プロセス結果',
       'Verification verdict': '検証の判定',
       'Repository evidence': 'リポジトリ証跡',
-      'Normalized actions': '正規化されたアクション',
       'Run {run} · Verify {verify}': '実行 {run} · 検証 {verify}',
       'Run': '実行',
       'Verify': '検証',
@@ -946,7 +944,6 @@
       'Process outcome': '进程结果',
       'Verification verdict': '验证结论',
       'Repository evidence': '仓库证据',
-      'Normalized actions': '规范化操作',
       'Run {run} · Verify {verify}': '运行 {run} · 验证 {verify}',
       'Run': '运行',
       'Verify': '验证',
@@ -2975,8 +2972,7 @@ function shortID(id) {
       metric('Process outcome', process.value, process.detail, process.tone, true),
       metric('Verification verdict', verification.value, verification.detail, verification.tone, true),
       metric('Repository evidence', repository.value, repository.detail),
-      metric('Normalized actions', data.actionCount || 0),
-      metric('Provider events', data.eventCount || 0),
+      // Action and event counts live in the tab labels below; not repeated here.
       metric('Warnings', warnings, '', warnings > 0 ? 'warn' : '')
     );
     renderEvidence();
