@@ -2247,3 +2247,49 @@ func TestViewServesEmbeddedFavicon(t *testing.T) {
 		t.Errorf("index.html does not link the local favicon")
 	}
 }
+
+func TestViewRunSummaryCarriesDurationLikeTheDetailPage(t *testing.T) {
+	root := home(t)
+	startedAt := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	// Finished run: process result carries durationMillis 1500.
+	writeRun(t, root, "20260918T100000.000000000Z-aaaaaaaa", "claude", startedAt, "completed")
+	// Open run: no process result, no endedAt.
+	writeRun(t, root, "20260918T110000.000000000Z-bbbbbbbb", "claude", startedAt.Add(time.Hour), "")
+
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { _ = handler.Close() })
+
+	var page struct {
+		Runs []struct {
+			ID             string `json:"id"`
+			DurationMillis *int64 `json:"durationMillis"`
+		} `json:"runs"`
+	}
+	viewJSONRequest(t, handler, "/api/runs", &page)
+
+	byID := map[string]*int64{}
+	for _, run := range page.Runs {
+		byID[run.ID] = run.DurationMillis
+	}
+	finished, ok := byID["20260918T100000.000000000Z-aaaaaaaa"]
+	if !ok || finished == nil {
+		t.Fatalf("finished run has no durationMillis in summary: %+v", page.Runs)
+	}
+	if *finished != 1500 {
+		t.Errorf("durationMillis = %d, want 1500 (the process result value the detail page shows)", *finished)
+	}
+	if open, ok := byID["20260918T110000.000000000Z-bbbbbbbb"]; !ok {
+		t.Fatalf("open run missing from summary")
+	} else if open != nil {
+		t.Errorf("open run must omit durationMillis, got %d", *open)
+	}
+
+	// The CLI list contract is separate and unchanged.
+	raw, err := json.Marshal(listJSONRun{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "durationMillis") {
+		t.Errorf("agentrec list JSON schema gained durationMillis; it must stay unchanged: %s", raw)
+	}
+}

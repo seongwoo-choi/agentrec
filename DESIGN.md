@@ -95,3 +95,12 @@ A viewer started without `--allow-run` silently omits the **Verify now** control
 - Existing `--allow-run` behavior, the verify endpoint, its 403/409/422 handling, and the CLI are unchanged. No new endpoint or setting.
 - Localized in EN/KO/JA/ZH; the commands stay verbatim in code spans.
 - Acceptance: with `allowRun=false` the hint renders and **Verify now** does not; with `allowRun=true` the button renders and the hint does not; live runs show neither; a real viewer started without the flag shows the hint on a stored run.
+
+## 13. Duration on the run row
+
+Every stored run already carries a measured duration (35 of 35 in the local store), yet the run row shows only when it started; how long it ran is a click away. Duration is the fact a reader uses to tell a two-second probe from a two-hour session, and it belongs beside the relative time.
+
+- `/api/runs` summaries gain `durationMillis`, computed exactly as the detail page and `agentrec show` already do: the recorded process result first, else `endedAt − startedAt` from the manifest. Omitted when neither exists. No new file is read; the summary reader already opens both documents. The CLI `agentrec list` schema is unchanged.
+- The row shows the duration after the relative time as a compact, localized `2s` / `14m` / `1h` / `1h 12m` token; the title carries the recorded value to the millisecond in Go's duration spelling. The detail page keeps its finer-grained string; the two agree to the millisecond. Live and duration-less runs show nothing rather than `0s` or a dash.
+- Duration is a measurement of the recorded process window, not effort, cost or quality; do not colour it, rank by it, or total it anywhere. It is not a filter.
+- Acceptance: summary JSON carries the same value the detail `Duration` field shows for real runs; the row token matches; live runs and a manifest without `endedAt` show nothing; EN/KO/JA/ZH at 375px keep the row on its current lines.
