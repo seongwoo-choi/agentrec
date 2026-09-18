@@ -4179,3 +4179,70 @@ test('hook lifecycle group summary is localized', async (t) => {
   assert.equal(summary.querySelector('.action-group-kinds').textContent, '훅 수명주기 기록 2건');
   assert.match(summary.querySelector('.action-group-meta').textContent, /^hook_started 1 · hook_response 1 · /, 'subtype tokens stay verbatim');
 });
+
+// --- Codex patch rows name their files (DESIGN.md section 17) ---
+
+test('a codex apply_patch row lists its file headers instead of the patch preamble', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const patch = [
+    '*** Begin Patch',
+    '*** Update File: internal/cli/ui_assets/app.js',
+    '@@',
+    '-old',
+    '+new',
+    '*** Add File: internal/cli/ui_assets/new.css',
+    '+body {}',
+    '*** Update File: README.md',
+    '@@',
+    '-a',
+    '+b',
+    '*** End Patch',
+  ].join('\n');
+  data.actions = [
+    { id: 'p1', type: 'file.edit', provider: 'codex', status: 'completed', startedAt: '2026-09-03T00:00:01Z', input: { command: patch } },
+    { id: 'p2', type: 'file.edit', provider: 'codex', status: 'completed', startedAt: '2026-09-03T00:00:02Z', input: { command: '*** Begin Patch\n*** End Patch' } },
+    { id: 's1', type: 'shell.exec', provider: 'codex', status: 'completed', startedAt: '2026-09-03T00:00:03Z', input: { command: 'go test ./...' } },
+  ];
+  data.details.actionCount = 3;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  d.querySelector('#all-actions-toggle')?.click();
+  await settle();
+  const summary = (index) => d.querySelector(`.action-row[data-index="${index}"] .action-summary`).textContent;
+  assert.equal(summary(0), 'Update File: internal/cli/ui_assets/app.js · Add File: internal/cli/ui_assets/new.css · Update File: README.md');
+  assert.equal(summary(1), '*** Begin Patch *** End Patch', 'a patch without file headers keeps the plain detail');
+  assert.equal(summary(2), 'go test ./...', 'other commands are unchanged');
+  // Long absolute paths must not cut a header in half: whole headers, then a count of the rest.
+  const long = (n) => `*** Update File: /Users/someone/code/project-${n}/internal/cli/ui_assets/app.test.js`;
+  data.actions = [{ id: 'p3', type: 'file.edit', provider: 'codex', status: 'completed', startedAt: '2026-09-03T00:00:04Z', input: { command: ['*** Begin Patch', long(1), '@@', long(2), '@@', long(3), '@@', long(4), '@@', '*** End Patch'].join('\n') } }];
+  data.details.actionCount = 1;
+  const again = await renderFixture(data);
+  t.after(() => again.window.close());
+  again.window.document.querySelector('#all-actions-toggle').click();
+  await settle();
+  const cut = again.window.document.querySelector('.action-row[data-index="0"] .action-summary').textContent;
+  assert.match(cut, /^Update File: \/Users\/someone\/code\/project-1\/internal\/cli\/ui_assets\/app\.test\.js · Update File: \/Users\/someone\/code\/project-2\/internal\/cli\/ui_assets\/app\.test\.js · \+2 files$/);
+  assert.ok(cut.length <= 180);
+  // Review findings: an oversized first header still keeps the count inside the row; CRLF documents do not leak '\r'.
+  const huge = `*** Update File: /${'x'.repeat(190)}`;
+  data.actions = [
+    { id: 'p4', type: 'file.edit', provider: 'codex', status: 'completed', startedAt: '2026-09-03T00:00:05Z', input: { command: ['*** Begin Patch', huge, long(2), long(3), '*** End Patch'].join('\n') } },
+    { id: 'p5', type: 'file.edit', provider: 'codex', status: 'completed', startedAt: '2026-09-03T00:00:06Z', input: { command: '*** Begin Patch\r\n*** Update File: a.txt\r\n*** End Patch\r\n' } },
+  ];
+  data.details.actionCount = 2;
+  const third = await renderFixture(data);
+  t.after(() => third.window.close());
+  third.window.document.querySelector('#all-actions-toggle').click();
+  await settle();
+  const oversized = third.window.document.querySelector('.action-row[data-index="0"] .action-summary').textContent;
+  assert.equal(oversized.length, 180);
+  assert.match(oversized, / · \+2 files$/);
+  assert.equal(third.window.document.querySelector('.action-row[data-index="1"] .action-summary').textContent, 'Update File: a.txt');
+  // Search still covers the hunk text, not only the headers.
+  d.querySelector('#timeline-search').value = '+new';
+  d.querySelector('#timeline-search').dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 250)); // past the 180 ms debounce
+  await settle();
+  assert.deepEqual([...d.querySelectorAll('.action-row')].map((row) => row.dataset.index), ['0']);
+});

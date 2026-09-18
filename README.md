@@ -233,6 +233,17 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — Codex patch rows name their files:** Every Codex edit is
+recorded as an `apply_patch` document in `input.command`, so the row detail
+began `*** Begin Patch *** Update File: /Users/…` sixty-five times in a local
+store and the file was visible only when the absolute path fit. Such a row now
+lists the patch's `Add`/`Update`/`Delete File:` headers verbatim in document
+order; when they do not fit in the row, whole headers are kept and the rest
+are counted (`· +2 files`). A patch without file headers keeps the old detail.
+Search still covers the whole command; the inspector, the Changes tab and the
+stored record are untouched. Naming the file is a reading aid, not a claim the
+patch applied.
+
 **Unreleased — hook lifecycle records fold in the Event summary:** Across the
 17 Claude runs in a local store, 87% of provider events were `system` records
 with subtype `hook_started`, `hook_response`, `hook_progress` or
