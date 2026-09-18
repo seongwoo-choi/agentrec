@@ -114,3 +114,14 @@ Measured from a fresh load: the first run row is the ninth Tab stop, behind glob
 - Nothing else about tab order, disclosures, focus restoration or the existing sidebar controls changes; the disclosures stay reachable in place.
 - Localized in EN/KO/JA/ZH.
 - Acceptance: from a fresh load, Tab then Enter lands focus inside the run list and the next Tab reaches the first run row; the second link reaches the run view; the links are not visible before focus; all existing keyboard tests pass unchanged.
+
+## 15. The agent's last message beside the request
+
+The request card shows what was asked; nothing shows what the agent said last. In the local store 17 of 35 runs record `agent.message` actions and in 16 of them the last one is the final action — the agent's closing report — yet a reader must scroll to the end of the timeline to find it. Put it beside the request, with the same disclosure shape.
+
+- The run detail carries `lastAgentMessage`: the `text` of the last recorded `agent.message` action, the action's `id`, and its 1-based position among recorded actions. It is found in the pass that already counts actions, so no new file is read. Absent when the run has no such action or the text is empty; a message that is not the final action still qualifies, and its position says so.
+- Bounded: the server truncates the text at 64 KiB of UTF-8 and marks `truncated: true`; the card previews the first 160 characters like the request and shows the full stored text when opened.
+- It is the provider's own last message, verbatim, with the run's existing redaction already applied to the action stream. It is not a summary, not a verdict, and not proof the work happened; the card's label says whose words they are. Do not read anything from it into status.
+- The card links to the action so the reader can inspect the original record and what came after it; the position is shown so a message followed by more actions is not mistaken for a closing report.
+- Live runs do not show it; the timeline is the live surface.
+- Acceptance: for the real store, the card text equals the last `agent.message` `input.text` in the action stream and its position matches; runs without one show no card; the link opens the same action the timeline shows; EN/KO/JA/ZH; source tests and rendered captures reviewed.

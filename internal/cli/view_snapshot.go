@@ -864,7 +864,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	if snapshot.actions == nil {
 		return fail(fmt.Errorf("cli: open %s: %w", actionsFile, os.ErrNotExist))
 	}
-	actionCount, err := countViewActionsContext(ctx, snapshot.actions, snapshot.actionSize)
+	actionCount, lastMessage, err := scanViewActionsContext(ctx, snapshot.actions, snapshot.actionSize)
 	if err != nil {
 		return fail(err)
 	}
@@ -902,10 +902,11 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	exitReason := viewExitReason(manifest)
 	statusClass, statusLabel := viewRunStatus(exitReason, evidence.verificationStatus, evidence.verificationWarnings)
 	return viewRunResponse{
-		SchemaVersion: 1,
-		SnapshotID:    snapshot.id,
-		ActionCount:   actionCount,
-		EventCount:    eventCount,
+		SchemaVersion:    1,
+		SnapshotID:       snapshot.id,
+		ActionCount:      actionCount,
+		EventCount:       eventCount,
+		LastAgentMessage: lastMessage,
 		Run: viewRunInfo{
 			ID: runID, Provider: manifest.Provider, ProviderVersion: manifest.ProviderVersion,
 			Project: projectName(manifest.CWD), CWD: manifest.CWD, Prompt: prompt,
@@ -1189,29 +1190,75 @@ func countViewActions(file *os.File, size int64) (int, error) {
 }
 
 func countViewActionsContext(ctx context.Context, file *os.File, size int64) (int, error) {
+	count, _, err := scanViewActionsContext(ctx, file, size)
+	return count, err
+}
+
+// viewLastMessageMaxBytes bounds what the run detail carries for the last
+// agent message; the full record stays in the action stream.
+const viewLastMessageMaxBytes = 64 * 1024
+
+// scanViewActionsContext counts the recorded actions and, in the same pass,
+// keeps the last agent.message so the run detail can show it without a second
+// read. A message with empty text is not a message.
+func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (int, *viewLastAgentMessage, error) {
 	scanner := bufio.NewScanner(viewContextReader{ctx: ctx, reader: io.NewSectionReader(file, 0, size)})
 	scanner.Buffer(nil, maxActionBytes)
 	count := 0
+	var last *viewLastAgentMessage
+	// Track each line's start the way readViewActionPage does, so the offset is
+	// a cursor the page endpoint accepts.
+	position := int64(0)
 	for line := 1; scanner.Scan(); line++ {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return 0, nil, err
+		}
+		lineStart := position
+		position += int64(len(scanner.Bytes()))
+		if position < size {
+			position++
 		}
 		if len(strings.TrimSpace(scanner.Text())) == 0 {
 			continue
 		}
 		if count == maxActions {
-			return 0, fmt.Errorf("cli: %s holds more than %d actions", actionsFile, maxActions)
+			return 0, nil, fmt.Errorf("cli: %s holds more than %d actions", actionsFile, maxActions)
 		}
 		var item action.Action
 		if err := json.Unmarshal(scanner.Bytes(), &item); err != nil {
-			return 0, fmt.Errorf("cli: %s line %d is not a recorded action: %w", actionsFile, line, err)
+			return 0, nil, fmt.Errorf("cli: %s line %d is not a recorded action: %w", actionsFile, line, err)
 		}
 		count++
+		if item.Type == action.TypeAgentMessage {
+			var input struct {
+				Text string `json:"text"`
+			}
+			// A later agent.message whose input cannot be read must not let an
+			// earlier one pose as the last: it clears the candidate instead.
+			if json.Unmarshal(item.Input, &input) != nil || input.Text == "" {
+				last = nil
+			} else {
+				text, truncated := boundUTF8(input.Text, viewLastMessageMaxBytes)
+				last = &viewLastAgentMessage{ActionID: item.ID, Position: count, Offset: lineStart, Text: text, Truncated: truncated}
+			}
+		}
 	}
 	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("cli: read %s: %w", actionsFile, err)
+		return 0, nil, fmt.Errorf("cli: read %s: %w", actionsFile, err)
 	}
-	return count, nil
+	return count, last, nil
+}
+
+// boundUTF8 cuts s to at most limit bytes on a rune boundary.
+func boundUTF8(s string, limit int) (string, bool) {
+	if limit <= 0 || len(s) <= limit {
+		return s, false
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut], true
 }
 
 func countViewEvents(file *os.File, size int64) (int, error) {
