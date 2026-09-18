@@ -6,6 +6,7 @@
   const SEARCH_MS = 400;
   const RECENT_RUN_LIMIT = 10;
   let earlierRunsExpanded = false;
+  let requestRunId = '';
   const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
@@ -36,6 +37,9 @@
       'Recorded runs': '기록된 실행',
       'Find a title, run, or project': '제목, 실행 또는 프로젝트 검색',
       Request: '요청',
+      'Show request': '요청 보기',
+      'Hide request': '요청 접기',
+      'Loaded-run scope': '로드된 실행 범위',
       'No recorded request.': '기록된 요청이 없습니다.',
       Actions: '액션',
       Changes: '변경',
@@ -325,6 +329,9 @@
       'Recorded runs': '記録された実行',
       'Find a title, run, or project': 'タイトル、実行、プロジェクトを検索',
       Request: 'リクエスト',
+      'Show request': 'リクエストを表示',
+      'Hide request': 'リクエストを隠す',
+      'Loaded-run scope': '読み込み済みの範囲',
       'No recorded request.': '記録されたリクエストはありません。',
       Actions: 'アクション',
       Changes: '変更',
@@ -614,6 +621,9 @@
       'Recorded runs': '已记录的运行',
       'Find a title, run, or project': '搜索标题、运行或项目',
       Request: '请求',
+      'Show request': '显示请求',
+      'Hide request': '隐藏请求',
+      'Loaded-run scope': '已加载运行范围',
       'No recorded request.': '没有记录的请求。',
       Actions: '操作',
       Changes: '变更',
@@ -2169,11 +2179,31 @@ function shortID(id) {
   }
 
   // tone is one of '', 'pass', 'fail', 'warn'; NOT RUN and RUNNING stay neutral on purpose.
-  function metric(label, value, detail = '', tone = '') {
-    const card = node('div', `metric${tone ? ` ${tone}` : ''}`);
+  function metric(label, value, detail = '', tone = '', primary = false) {
+    const card = node('div', `metric${primary ? ' metric-primary' : ''}${tone ? ` ${tone}` : ''}`);
     card.append(node('div', 'metric-label', t(label)), statusNode('div', 'metric-value', String(value)));
     if (detail) card.append(node('div', 'metric-detail', detail));
     return card;
+  }
+
+  function renderRunIdentity() {
+    if (!state.run) return;
+    const run = state.run.run;
+    const summary = state.runs.find((candidate) => candidate.id === run.id);
+    $('run-title').textContent = summary && summary.title || run.id;
+    $('run-id').textContent = run.id;
+    $('run-context').textContent = `${run.cwd || t('unknown cwd')} · ${new Date(run.startedAt).toLocaleString(state.lang)}`;
+  }
+
+  function renderRequest() {
+    const run = state.run.run;
+    const disclosure = $('request-disclosure');
+    if (requestRunId !== run.id) disclosure.open = false;
+    requestRunId = run.id;
+    const prompt = run.prompt || t('No recorded request.');
+    const preview = Array.from(prompt.replace(/\s+/g, ' ').trim());
+    $('request-preview').textContent = preview.slice(0, 160).join('') + (preview.length > 160 ? '…' : '');
+    $('run-prompt').textContent = prompt;
   }
 
   // renderRunHeader draws everything above the timeline from state.run; a live tick redraws it without touching the timeline.
@@ -2182,9 +2212,8 @@ function shortID(id) {
     const run = data.run;
     $('run-provider').textContent = run.provider || t('unknown');
     $('run-project').textContent = run.project || t('unknown');
-    $('run-title').textContent = run.id;
-    $('run-subtitle').textContent = `${run.cwd || t('unknown cwd')} · ${new Date(run.startedAt).toLocaleString(state.lang)}`;
-    $('run-prompt').textContent = run.prompt || t('No recorded request.');
+    renderRunIdentity();
+    renderRequest();
     $('action-count').textContent = String(data.actionCount || 0);
     // A language switch re-renders the run without refetching its streams:
     // a change count already loaded is kept, not zeroed.
@@ -2218,8 +2247,8 @@ function shortID(id) {
     const warnings = Number(run.warningCount) || 0;
     const metrics = $('metrics');
     metrics.replaceChildren(
-      metric('Process outcome', process.value, process.detail, process.tone),
-      metric('Verification verdict', verification.value, verification.detail, verification.tone),
+      metric('Process outcome', process.value, process.detail, process.tone, true),
+      metric('Verification verdict', verification.value, verification.detail, verification.tone, true),
       metric('Repository evidence', repository.value, repository.detail),
       metric('Normalized actions', data.actionCount || 0),
       metric('Provider events', data.eventCount || 0),
@@ -3334,6 +3363,7 @@ function shortID(id) {
     const changed = signature !== state.runsSignature;
     state.runsSignature = signature;
     state.runs = runs;
+    renderRunIdentity();
     state.runTotal = list.total || runs.length;
     state.initialRunId = list.initialRunId || state.initialRunId;
     state.runNextCursor = runs.length >= state.runTotal ? '' : (append || !sameGeneration || previousRuns.length <= incoming.length ? (list.nextCursor || '') : previousCursor);
