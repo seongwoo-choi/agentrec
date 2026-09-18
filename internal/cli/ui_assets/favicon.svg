@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="agentrec">
+  <style>
+    .bar { fill: #4353d9; }
+    @media (prefers-color-scheme: dark) { .bar { fill: #8f98ff; } }
+  </style>
+  <g class="bar">
+    <path d="M4 5.6 L10 3.4 V28.6 L4 26.4 Z"/>
+    <path d="M13 4.5 L19 2.3 V29.7 L13 27.5 Z"/>
+    <path d="M22 3.4 L28 1.2 V30.8 L22 28.6 Z"/>
+  </g>
+</svg>

@@ -40,7 +40,7 @@ const (
 	viewTitleMaxRunes = 120
 )
 
-//go:embed ui_assets/index.html ui_assets/app.css ui_assets/app.js
+//go:embed ui_assets/index.html ui_assets/app.css ui_assets/app.js ui_assets/favicon.svg
 var viewAssets embed.FS
 
 type viewField struct {
@@ -732,6 +732,9 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 	})
 	mux.HandleFunc("GET /assets/app.js", func(w http.ResponseWriter, _ *http.Request) {
 		serveViewAsset(w, "ui_assets/app.js", "text/javascript; charset=utf-8")
+	})
+	mux.HandleFunc("GET /assets/favicon.svg", func(w http.ResponseWriter, _ *http.Request) {
+		serveViewAsset(w, "ui_assets/favicon.svg", "image/svg+xml")
 	})
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		cursor := r.URL.Query().Get("cursor")
