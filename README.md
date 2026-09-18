@@ -233,6 +233,14 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — discoverable later verification:** A viewer started without
+`--allow-run` used to omit **Verify now** silently, so a reader never learned a
+run could be verified again. The Verification block now says how, in one quiet
+sentence with the exact commands: `agentrec start --allow-run` to enable it from
+the page, or `agentrec verify <run-id>` without restarting. It appears only
+where the button would have, never for live runs, and says nothing about the
+run's own verdict. No endpoint, permission or CLI behavior changes.
+
 **Unreleased — loaded-run overview:** The run list gains a collapsed **Loaded
 runs at a glance** panel that counts the runs the page has already loaded,
 grouped by provider, verification result and project. It is arithmetic over
