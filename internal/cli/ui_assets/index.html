@@ -110,7 +110,14 @@
               </div>
               <label class="timeline-search"><input id="timeline-search" type="search" placeholder="Filter timeline" aria-label="Filter timeline" data-i18n-placeholder="Filter timeline"></label>
             </div>
-            <div class="filter-row" id="type-filters"></div>
+            <div class="filter-row">
+              <div id="action-view-controls" class="action-view-controls">
+                <span id="action-view-label">Reading view</span>
+                <span id="action-view-count" class="action-view-count" role="status" aria-live="polite"></span>
+                <label class="action-view-toggle"><input id="all-actions-toggle" type="checkbox"> <span data-i18n="All actions">All actions</span></label>
+              </div>
+              <div id="type-filters" class="type-filters"></div>
+            </div>
             <div id="timeline" class="timeline" role="tabpanel" aria-labelledby="timeline-tab-actions" aria-live="polite"></div>
           </section>
 

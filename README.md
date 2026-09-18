@@ -207,6 +207,20 @@ keep the run list scrollable and reflow search, tabs, and the inspector without
 hiding evidence. Dark and light system themes remain supported; recordings,
 CLI/API contracts, and exact evidence links are unchanged.
 
+**Unreleased — reading-first action timeline:** Actions now open in **Reading
+view**, which uses native disclosure groups only for consecutive, completed
+known tool records on the same loaded byte page and under the same parent.
+Runner recognition uses bounded invocation signatures, not words in filenames or search patterns. Group kinds are localized, and counts describe top-level entries, excluding expanded children.
+Prompts, replies, file mutations, verification-like commands, nonzero exits,
+structured errors, warnings, unfinished or unknown records stay visible as
+individual rows; a provider's completed status is not presented as independent
+verification. **All actions** restores every chronological row. Timeline search
+and type filters expose matching actions directly, while exact action links open
+the containing group and retain the original action ID, object, index, byte
+cursor, inspector, selection, and browser-history behavior. This is loaded-snapshot
+presentation only: it adds no summary model, endpoint, request per row, storage
+change, or persistence.
+
 **v0.13.0 — focused run list:** Choose an exact project name to narrow the
 sidebar together with the existing `q`, `exit`, `verification`, and `failures`
 filters. The project choice is reflected in the `project` URL parameter and

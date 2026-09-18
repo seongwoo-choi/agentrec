@@ -1562,6 +1562,32 @@ func TestViewChangesUIUsesSnapshotBackedChangeAndPatchViews(t *testing.T) {
 	}
 }
 
+func TestViewReadingTimelineUsesLoadedSnapshotActions(t *testing.T) {
+	checks := map[string][]string{
+		"ui_assets/index.html": {`id="all-actions-toggle" type="checkbox"`, `id="action-view-count"`},
+		"ui_assets/app.js": {
+			"READING_ACTION_TYPES",
+			"hasStructuredFailure",
+			"state.streams.actions.pageCursors",
+			"node('details', 'action-group')",
+			"revealActionRow(row)",
+			"{n} completed provider records · loaded page",
+		},
+		"ui_assets/app.css": {".action-group-summary", ".action-view-toggle"},
+	}
+	for name, markers := range checks {
+		raw, err := viewAssets.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, marker := range markers {
+			if !strings.Contains(string(raw), marker) {
+				t.Errorf("%s does not contain %q", name, marker)
+			}
+		}
+	}
+}
+
 func TestViewRunListPreservesExplicitInitialRunBeyondFirstPage(t *testing.T) {
 	root := home(t)
 	var oldest string
