@@ -233,6 +233,13 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — the evidence-link caption moves under the button:** After
+selecting any action, a two-line caption explaining that the copy link is
+local sat between the button and the payload on every selection. It is now the
+button's tooltip and accessible description, in the same wording and the same
+four languages; the `Copied` / clipboard-denied status and the fallback URL
+field stay where they were. The first payload rises 43 px on a measured run.
+
 **Unreleased — the run heading stops at its first sentence:** In a local
 store 22 of 35 titles were cut at the 120-rune cap mid-phrase and 27 of 35
 headings wrapped to two lines, while in most of them the first sentence ended

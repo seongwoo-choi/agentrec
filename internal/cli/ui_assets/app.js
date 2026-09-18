@@ -2667,7 +2667,12 @@ function shortID(id) {
         if (stillCurrent()) button.disabled = false;
       }
     });
-    controls.append(button, node('p', 'evidence-link-caption', t('Local link: requires the same Viewer and recorded data. Not a public share.')), status);
+    // The caption is the same sentence on every selection; it lives on the
+    // button as tooltip and accessible description rather than a paragraph.
+    const caption = t('Local link: requires the same Viewer and recorded data. Not a public share.');
+    button.title = caption;
+    button.setAttribute('aria-description', caption);
+    controls.append(button, status);
     selected.evidenceLink = { url, controls };
     holder.append(controls);
   }

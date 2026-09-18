@@ -305,7 +305,7 @@ html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
 .copy-evidence-link { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font-size: 12px; }
 .copy-evidence-link:hover { background: var(--surface-hover); }
 .copy-evidence-link:disabled { cursor: wait; opacity: .7; }
-.evidence-link-caption, .evidence-link-status { margin: 6px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.evidence-link-status { margin: 6px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .evidence-link-status:empty { margin: 0; }
 .evidence-link-url { width: 100%; min-width: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; font: 12px/1.5 var(--mono); }
 .inspector-panel { padding: 14px 16px; overflow: auto; }

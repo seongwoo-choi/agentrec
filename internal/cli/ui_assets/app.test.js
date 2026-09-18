@@ -119,7 +119,7 @@ test('copy evidence link uses selected action and page bytes, not address-bar fi
   resolve();
   await settle();
   assert.equal(w.document.querySelector('.evidence-link-status').textContent, 'Copied');
-  assert.match(w.document.querySelector('.evidence-link').textContent, /same Viewer and recorded data/);
+  assert.match(w.document.querySelector('.copy-evidence-link').title, /same Viewer and recorded data/);
 });
 
 test('copy evidence link preserves other supported loopback origins', async (t) => {
@@ -197,7 +197,9 @@ for (const [lang, copy, copied, label, failure, caption] of [
   w.document.querySelector('.action-row').click();
   const button = w.document.querySelector('.copy-evidence-link');
   assert.equal(button.textContent, copy);
-  assert.equal(w.document.querySelector('.evidence-link-caption').textContent, caption);
+  assert.equal(w.document.querySelector('.evidence-link-caption'), null, 'the caption is no longer a visible paragraph');
+  assert.equal(button.title, caption);
+  assert.equal(button.getAttribute('aria-description'), caption);
   button.click();
   await settle();
   assert.equal(w.document.querySelector('.evidence-link-status').textContent, copied);
