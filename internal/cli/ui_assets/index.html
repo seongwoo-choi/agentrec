@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
+  <a class="skip-link" href="#run-list" data-i18n="Skip to run list">Skip to run list</a>
+  <a class="skip-link" href="#run-view" data-i18n="Skip to run evidence">Skip to run evidence</a>
   <header class="topbar">
     <div class="brand"><span class="mark" aria-hidden="true"></span><strong>agentrec</strong><span class="product" data-i18n="Action Timeline">Action Timeline</span></div>
     <div class="global-search" id="global-search">
@@ -69,7 +71,7 @@
       </details>
       <p id="run-list-empty" class="list-empty hidden"></p>
       <span id="run-list-status" class="sr-only" role="status" aria-live="polite"></span>
-      <nav id="run-list" class="run-list" aria-label="Recorded runs"></nav>
+      <nav id="run-list" class="run-list" aria-label="Recorded runs" tabindex="-1"></nav>
       <button id="run-earlier-toggle" class="load-more hidden" type="button" aria-expanded="false" aria-controls="run-list">Show earlier runs</button>
       <button id="run-load-more" class="load-more hidden" type="button">Load more</button>
       <div id="unreadable-warning" class="warning hidden"></div>
@@ -82,7 +84,7 @@
       </div>
 
 
-      <div id="run-view" class="run-view hidden">
+      <div id="run-view" class="run-view hidden" tabindex="-1">
         <section class="run-header">
           <div>
             <div class="run-kicker"><span id="provider-dot" class="status-dot"></span><span id="run-provider">—</span><span class="separator">/</span><span id="run-project">—</span></div>

@@ -233,6 +233,12 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — skip links:** From a fresh load the first run row was the
+ninth Tab stop. Two skip links now come first, visible only while focused:
+**Skip to run list** and **Skip to run evidence**. Activating one moves focus
+to its target so the next Tab continues from there. Nothing else about the tab
+order, the disclosures or focus restoration changes.
+
 **Unreleased — duration on the run row:** Each loaded run row now shows how
 long the recorded process ran, beside when it started, as a compact `6s` /
 `14m` / `1h 12m` token with the exact value on hover. It is the same

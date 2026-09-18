@@ -90,6 +90,8 @@
       'No runs recorded yet': '기록된 실행이 없습니다',
       'No run selected': '선택된 실행이 없습니다',
       'Loaded runs at a glance': '불러온 실행 한눈에 보기',
+      'Skip to run list': '실행 목록으로 건너뛰기',
+      'Skip to run evidence': '실행 증거로 건너뛰기',
       'Provider': '프로바이더',
       'Verification result': '검증 결과',
       'Project': '프로젝트',
@@ -417,6 +419,8 @@
       'No runs recorded yet': '記録された実行はありません',
       'No run selected': '実行が選択されていません',
       'Loaded runs at a glance': '読み込んだ実行の概要',
+      'Skip to run list': 'run 一覧へ移動',
+      'Skip to run evidence': '実行の証拠へ移動',
       'Provider': 'プロバイダー',
       'Verification result': '検証結果',
       'Project': 'プロジェクト',
@@ -744,6 +748,8 @@
       'No runs recorded yet': '尚未记录任何运行',
       'No run selected': '未选择运行',
       'Loaded runs at a glance': '已加载运行一览',
+      'Skip to run list': '跳到运行列表',
+      'Skip to run evidence': '跳到运行证据',
       'Provider': '提供方',
       'Verification result': '验证结果',
       'Project': '项目',
@@ -4205,6 +4211,16 @@ function shortID(id) {
     }
   });
   $('run-search').addEventListener('input', changeRunFilters);
+  // Skip links: the browser scrolls to the fragment, but focus must move too so
+  // the next Tab continues from the target rather than from the top.
+  for (const link of document.querySelectorAll('a.skip-link')) {
+    link.addEventListener('click', (event) => {
+      const target = document.getElementById(link.getAttribute('href').slice(1));
+      if (!target) return;
+      event.preventDefault();
+      target.focus({ preventScroll: false });
+    });
+  }
   $('run-project-filter').addEventListener('change', () => {
     try { localStorage.setItem('agentrec.project', $('run-project-filter').value); } catch (_) { /* storage may be blocked */ }
     changeRunFilters();
