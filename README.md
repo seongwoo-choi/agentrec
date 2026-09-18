@@ -233,6 +233,20 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — hook lifecycle records fold in the Event summary:** Across the
+17 Claude runs in a local store, 87% of provider events were `system` records
+with subtype `hook_started`, `hook_response`, `hook_progress` or
+`thinking_tokens` — the lifecycle of agentrec's own hooks and token-count
+ticks. The Event summary folded only `PostToolUse`, so on the largest run it
+still showed 224 top-level rows. Consecutive records of that family now fold
+under the same rules: same loaded page, same session token, no error field, no
+dropped stub; any other `system` subtype stays its own row, and a group never
+crosses a `PostToolUse` group or a page boundary. The closed group names a
+neutral count and the subtypes it holds verbatim; hook names stay in the
+expanded records and the inspector. On that run the summary drops to 45
+top-level entries with all 224 loaded records still in the page. All events
+is unchanged. A group is a fold, not a claim that the hooks succeeded.
+
 **Unreleased — the agent's last message beside the request:** The request
 card showed what was asked; nothing showed what the agent said last. A second
 card, **Last message from <provider>**, now sits under the request with the
