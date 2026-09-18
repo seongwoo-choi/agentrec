@@ -233,6 +233,18 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — loaded-run overview:** The run list gains a collapsed **Loaded
+runs at a glance** panel that counts the runs the page has already loaded,
+grouped by provider, verification result and project. It is arithmetic over
+loaded summaries: it never projects unloaded runs, and it says how many of the
+recorded runs are loaded whenever more remain behind **Load more**. Recorded
+values stay verbatim, including `PENDING`, `NOT RUN`, `TAINTED` and values a
+newer recorder may introduce. A verification result is evidence recorded for
+that run, not independent proof the task succeeded, so no rate, score or trend
+is shown. Choosing a verification or project group applies the run list's
+existing filter and URL parameter rather than opening a separate view. No API,
+stored record or retention behavior changes.
+
 **v0.13.0 — focused run list:** Choose an exact project name to narrow the
 sidebar together with the existing `q`, `exit`, `verification`, and `failures`
 filters. The project choice is reflected in the `project` URL parameter and

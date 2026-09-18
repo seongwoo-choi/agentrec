@@ -72,3 +72,16 @@ These tabs have different jobs. Changes is a file-oriented view of observed repo
 - Verify folder/full view, event summary/full view, original record recovery, unknown/error/drop visibility, selected group expansion, page boundaries, live changes, exact file-link round trips, filters, keyboard/focus and EN/KO/JA/ZH at1440/768/375. Capture actual saved runs plus clearly labeled synthetic edge cases. Row reduction supports readability but is not a score that justifies concealing evidence.
 
 No automated WCAG certification or performance score is claimed without measurement. Existing raw provider evidence remains potentially verbose; it must stay inspectable rather than being rewritten. Unrelated backend/storage/release changes are out of scope. Visual changes require current rendered evidence; passing source tests alone is not visual verification.
+
+## 11. Loaded-run Overview
+
+The run list answers "which run", never "what is in the store". Once dozens of runs accumulate, the only way to see their shape is to open them one at a time. Give the sidebar a deterministic count of the runs the page has already loaded, grouped by the facts the list already carries. This is arithmetic over loaded summary fields, not a new API, a stored aggregate, a trend, a score, or a quality judgement.
+
+- The viewer auto-selects a run on load, so an empty workspace is not a reachable resting state; the overview lives in the sidebar beside the run list it describes. Keep it a collapsed native disclosure so it costs one row until asked for, and keep the run view untouched.
+- Count only runs currently loaded in the page. Never project unloaded runs, and never present a loaded count as a store total. When the store holds more than the page has loaded, say so explicitly and keep the existing Load more control as the only way to widen the scope.
+- Group by the recorded facts the run list already carries: provider, verification result, and project. Preserve each recorded value verbatim, including `PENDING`, `NOT RUN`, `TAINTED` and any unrecognized value; do not merge them into a residual bucket, re-rank them by desirability, or translate recorded status values.
+- A verification value is verification-observed evidence for that run; a provider exit is a process record. Neither is independent proof that the task succeeded. Label groups neutrally and keep existing attribution wording; do not introduce success rates, health scores, pass percentages or trend claims.
+- Selecting a group applies the matching existing run-list filter rather than navigating or creating a new view, so the overview and the list can never disagree. The filter, its URL parameter, the advanced-filter applied count and the loaded-scope note keep their current meaning.
+- A facet with no recorded values is hidden rather than shown empty, and an empty store hides the overview entirely instead of displaying zeroes. Provider has no run-list filter of its own, so it counts without pretending to be actionable.
+- Keep it keyboard reachable and legible at 1440/768/375 in EN/KO/JA/ZH with the current tokens; it is a short summary, not a second dashboard.
+- Acceptance: counts match the loaded summaries for real saved runs, partial-load wording appears whenever more runs remain, group selection drives the existing filters, and rendered screenshots are reviewed.

@@ -89,6 +89,13 @@
       '{shown} of {loaded} loaded': '로드된 {loaded}개 중 {shown}개',
       'No runs recorded yet': '기록된 실행이 없습니다',
       'No run selected': '선택된 실행이 없습니다',
+      'Loaded runs at a glance': '불러온 실행 한눈에 보기',
+      'Provider': '프로바이더',
+      'Verification result': '검증 결과',
+      'Project': '프로젝트',
+      '{loaded} loaded run(s)': '불러온 실행 {loaded}개',
+      '{loaded} loaded of {total} recorded — load more to widen this count': '기록된 {total}개 중 {loaded}개를 불러왔습니다. 더 보기로 이 집계 범위를 넓히세요',
+      'Counts cover loaded runs only. A verification result is evidence recorded for that run, not independent proof the task succeeded.': '집계는 불러온 실행만 포함합니다. 검증 결과는 해당 실행에 기록된 증거이며, 작업이 성공했다는 독립적인 증명은 아닙니다.',
       'Copy evidence link': '증거 링크 복사',
       'Copied': '복사됨',
       'Local evidence URL': '로컬 증거 URL',
@@ -404,6 +411,13 @@
       '{shown} of {loaded} loaded': '読込済み {loaded} 件中 {shown} 件',
       'No runs recorded yet': '記録された実行はありません',
       'No run selected': '実行が選択されていません',
+      'Loaded runs at a glance': '読み込んだ実行の概要',
+      'Provider': 'プロバイダー',
+      'Verification result': '検証結果',
+      'Project': 'プロジェクト',
+      '{loaded} loaded run(s)': '読み込み済み{loaded}件',
+      '{loaded} loaded of {total} recorded — load more to widen this count': '記録{total}件のうち{loaded}件を読み込み済みです。さらに読み込むと集計範囲が広がります',
+      'Counts cover loaded runs only. A verification result is evidence recorded for that run, not independent proof the task succeeded.': '集計は読み込んだ実行のみが対象です。検証結果はその実行について記録された証拠であり、タスクの成功を独立して証明するものではありません。',
       'Copy evidence link': '証拠リンクをコピー',
       'Copied': 'コピーしました',
       'Local evidence URL': 'ローカル証拠URL',
@@ -719,6 +733,13 @@
       '{shown} of {loaded} loaded': '已加载 {loaded} 条中的 {shown} 条',
       'No runs recorded yet': '尚未记录任何运行',
       'No run selected': '未选择运行',
+      'Loaded runs at a glance': '已加载运行一览',
+      'Provider': '提供方',
+      'Verification result': '验证结果',
+      'Project': '项目',
+      '{loaded} loaded run(s)': '已加载{loaded}个运行',
+      '{loaded} loaded of {total} recorded — load more to widen this count': '已记录{total}个，已加载{loaded}个。加载更多可扩大统计范围',
+      'Counts cover loaded runs only. A verification result is evidence recorded for that run, not independent proof the task succeeded.': '统计仅涵盖已加载的运行。验证结果是该运行记录的证据，并非任务成功的独立证明。',
       'Copy evidence link': '复制证据链接',
       'Copied': '已复制',
       'Local evidence URL': '本地证据URL',
@@ -1465,6 +1486,7 @@ function shortID(id) {
     toggle.textContent = earlierRunsExpanded ? t('Hide earlier runs') : t('Show {n} earlier runs', { n: folded });
     // Polling can fold the focused cutoff row; keep navigation at its reveal control.
     if (focused && matching.some((run) => run.id === focused) && !displayed.some((run) => run.id === focused)) toggle.focus({ preventScroll: true });
+    renderRunOverview();
     renderRunListPaging();
   }
 
@@ -1522,6 +1544,75 @@ function shortID(id) {
     $('workspace-empty-title').textContent = t(noRuns ? 'No runs recorded yet' : 'No run selected');
     $('workspace-empty-body').textContent = t(noRuns ? 'Start a Claude Code or Codex session; it appears here when it ends.' : 'Pick a run from the list to inspect its recorded evidence.');
     $('top-meta').textContent = noRuns ? t('No recorded runs') : t('{n} recorded run(s)', { n: state.runs.length });
+  }
+
+  // A deterministic count of the summaries already loaded — never a store total,
+  // a trend, or a quality score. Recorded values stay verbatim so an unknown
+  // verification token is visible rather than folded into a residual bucket.
+  function overviewCounts(runs, field) {
+    const counts = new Map();
+    for (const run of runs) {
+      const value = run[field];
+      if (typeof value !== 'string' || !value) continue;
+      counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    return [...counts].sort(([a], [b]) => a.localeCompare(b, 'en'));
+  }
+
+  // Only facets backed by an existing run-list filter are actionable; provider has
+  // no filter of its own, so it counts without pretending to drive the list.
+  const OVERVIEW_FACETS = [
+    { kind: 'provider', field: 'provider', filter: '' },
+    { kind: 'verification', field: 'verification', filter: 'run-verification-filter' },
+    { kind: 'project', field: 'project', filter: 'run-project-filter' },
+  ];
+
+  function renderRunOverview() {
+    const overview = $('run-overview');
+    if (!overview) return;
+    // Nothing loaded is not a shape worth summarizing; the empty-store guidance
+    // in the list already says so.
+    overview.classList.toggle('hidden', state.runs.length === 0);
+    if (state.runs.length === 0) return;
+
+    const loaded = state.runs.length;
+    const total = Math.max(state.runTotal || 0, loaded);
+    const partial = total > loaded || Boolean(state.runNextCursor);
+    $('run-overview-scope').textContent = partial
+      ? t('{loaded} loaded of {total} recorded — load more to widen this count', { loaded, total })
+      : t('{loaded} loaded run(s)', { loaded });
+
+    for (const { kind, field, filter } of OVERVIEW_FACETS) {
+      const facet = overview.querySelector(`[data-overview-kind="${kind}"]`);
+      const list = facet.querySelector('.overview-group-list');
+      list.replaceChildren();
+      const groups = overviewCounts(state.runs, field);
+      for (const [value, count] of groups) {
+        const group = node(filter ? 'button' : 'div', 'overview-group');
+        group.append(node('span', 'overview-group-name', value), node('span', 'overview-group-count', String(count)));
+        if (filter) {
+          group.type = 'button';
+          group.addEventListener('click', () => selectOverviewGroup(filter, value, kind));
+        }
+        list.append(group);
+      }
+      facet.classList.toggle('hidden', groups.length === 0);
+    }
+  }
+
+  // Selecting a group drives the run list's own filters, so the two surfaces
+  // cannot disagree and the loaded-scope note keeps its meaning.
+  function selectOverviewGroup(filter, value, kind) {
+    setRunFilterValue(filter, value);
+    // Same side effect as choosing the project in the select: the preference is remembered.
+    if (filter === 'run-project-filter') {
+      try { localStorage.setItem('agentrec.project', value); } catch (_) { /* storage may be blocked */ }
+    }
+    changeRunFilters();
+    // changeRunFilters re-renders the group buttons; put the keyboard back on the same one.
+    const again = [...$('run-overview').querySelectorAll(`[data-overview-kind="${kind}"] .overview-group`)]
+      .find((group) => group.querySelector('.overview-group-name').textContent === value);
+    if (again) again.focus({ preventScroll: true });
   }
 
   function firstDetail(value) {
@@ -2920,6 +3011,8 @@ function shortID(id) {
     const index = state.runs.findIndex((run) => run.id === id);
     const summary = state.runs[index];
     state.runs = state.runs.filter((run) => run.id !== id);
+    // The store shrank with the page; a stale total would invent an unloaded run.
+    if (index >= 0 && state.runTotal > 0) state.runTotal -= 1;
     const next = state.runs[Math.min(Math.max(index, 0), state.runs.length - 1)];
     if (state.run && state.run.run.id === id) {
       state.run = null;
@@ -2944,7 +3037,10 @@ function shortID(id) {
       showError(t('Cannot restore: {error}', { error: error instanceof Error ? error.message : String(error) }));
       return;
     }
-    if (summary && !state.runs.some((run) => run.id === id)) state.runs.splice(Math.min(Math.max(index, 0), state.runs.length), 0, summary);
+    if (summary && !state.runs.some((run) => run.id === id)) {
+      state.runs.splice(Math.min(Math.max(index, 0), state.runs.length), 0, summary);
+      state.runTotal += 1;
+    }
     renderRunList();
     navigateRun(id);
   }
@@ -3878,7 +3974,10 @@ function shortID(id) {
         const run = byID.get(button.dataset.runId);
         if (run) button.querySelector('.run-time').textContent = relativeTime(run.startedAt);
       });
-      if (previousCursor !== state.runNextCursor || previousTotal !== state.runTotal) renderRunListPaging();
+      if (previousCursor !== state.runNextCursor || previousTotal !== state.runTotal) {
+        renderRunListPaging();
+        renderRunOverview();
+      }
     }
     renderWorkspaceState();
   }

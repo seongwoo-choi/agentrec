@@ -48,6 +48,25 @@
         <summary data-i18n="Loaded-run scope">Loaded-run scope</summary>
         <p id="run-list-scope" class="run-list-scope" data-i18n="Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.">Filters and project choices cover loaded runs only. By default, newest 10 matches shown; selected older match stays visible.</p>
       </details>
+      <details id="run-overview" class="run-overview hidden">
+        <summary data-i18n="Loaded runs at a glance">Loaded runs at a glance</summary>
+        <p id="run-overview-scope" class="run-overview-scope"></p>
+        <div class="run-overview-groups">
+          <div class="overview-facet" data-overview-kind="provider">
+            <h3 data-i18n="Provider">Provider</h3>
+            <div class="overview-group-list"></div>
+          </div>
+          <div class="overview-facet" data-overview-kind="verification">
+            <h3 data-i18n="Verification result">Verification result</h3>
+            <div class="overview-group-list"></div>
+          </div>
+          <div class="overview-facet" data-overview-kind="project">
+            <h3 data-i18n="Project">Project</h3>
+            <div class="overview-group-list"></div>
+          </div>
+        </div>
+        <p class="run-overview-note" data-i18n="Counts cover loaded runs only. A verification result is evidence recorded for that run, not independent proof the task succeeded.">Counts cover loaded runs only. A verification result is evidence recorded for that run, not independent proof the task succeeded.</p>
+      </details>
       <p id="run-list-empty" class="list-empty hidden"></p>
       <span id="run-list-status" class="sr-only" role="status" aria-live="polite"></span>
       <nav id="run-list" class="run-list" aria-label="Recorded runs"></nav>
@@ -61,6 +80,7 @@
         <h2 id="workspace-empty-title">Loading recorded evidence…</h2>
         <p id="workspace-empty-body"></p>
       </div>
+
 
       <div id="run-view" class="run-view hidden">
         <section class="run-header">
