@@ -3980,3 +3980,41 @@ test('run row duration is localized without changing the exact title', async (t)
   assert.match(el.textContent, /1분/);
   assert.equal(el.title, '1m30s');
 });
+
+// --- Skip links (DESIGN.md section 14) ---
+
+test('skip links are the first tab stops and hand focus to the run list and run view', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+
+  const links = [...d.querySelectorAll('a.skip-link')];
+  assert.equal(links.length, 2, 'two skip links');
+  assert.equal(links[0].getAttribute('href'), '#run-list');
+  assert.equal(links[1].getAttribute('href'), '#run-view');
+  // They must precede every other focusable element in document order.
+  const firstFocusable = d.querySelector('a[href], button, input, select, summary, [tabindex]:not([tabindex="-1"])');
+  assert.equal(firstFocusable, links[0], 'skip link is the first focusable element');
+
+  // Activating the first link puts focus inside the run list so the next Tab is a run row.
+  links[0].click();
+  await settle();
+  assert.equal(d.activeElement.id, 'run-list', `focus landed on ${d.activeElement.id || d.activeElement.tagName}`);
+  assert.equal(d.querySelector('#run-list').getAttribute('tabindex'), '-1', 'target is programmatically focusable only');
+
+  links[1].click();
+  await settle();
+  assert.equal(d.activeElement.id, 'run-view');
+});
+
+test('skip links are localized', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.configure = (w) => w.localStorage.setItem('agentrec.lang', 'ko');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const [a, b] = [...dom.window.document.querySelectorAll('a.skip-link')].map((n) => n.textContent);
+  assert.match(a, /[가-힣]/);
+  assert.match(b, /[가-힣]/);
+  assert.notEqual(a, b);
+});

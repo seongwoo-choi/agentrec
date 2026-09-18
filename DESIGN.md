@@ -104,3 +104,13 @@ Every stored run already carries a measured duration (35 of 35 in the local stor
 - The row shows the duration after the relative time as a compact, localized `2s` / `14m` / `1h` / `1h 12m` token; the title carries the recorded value to the millisecond in Go's duration spelling. The detail page keeps its finer-grained string; the two agree to the millisecond. Live and duration-less runs show nothing rather than `0s` or a dash.
 - Duration is a measurement of the recorded process window, not effort, cost or quality; do not colour it, rank by it, or total it anywhere. It is not a filter.
 - Acceptance: summary JSON carries the same value the detail `Duration` field shows for real runs; the row token matches; live runs and a manifest without `endedAt` show nothing; EN/KO/JA/ZH at 375px keep the row on its current lines.
+
+## 14. Skip links
+
+Measured from a fresh load: the first run row is the ninth Tab stop, behind global search, compare, language, list search, project select and three collapsed disclosures. Every keyboard reader pays that on every visit. The fix is the standard one: two skip links, visible only while focused, as the first stops on the page.
+
+- The first Tab stop is **Skip to run list**, the second **Skip to run evidence**. Both are ordinary anchors so the browser handles them; the targets receive programmatic focus so the next Tab continues from there rather than from the top.
+- The links are visually hidden until focused, then appear at the top-left in the current tokens. They never take space from the header and never appear on pointer use.
+- Nothing else about tab order, disclosures, focus restoration or the existing sidebar controls changes; the disclosures stay reachable in place.
+- Localized in EN/KO/JA/ZH.
+- Acceptance: from a fresh load, Tab then Enter lands focus inside the run list and the next Tab reaches the first run row; the second link reaches the run view; the links are not visible before focus; all existing keyboard tests pass unchanged.
