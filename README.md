@@ -233,6 +233,16 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — duration on the run row:** Each loaded run row now shows how
+long the recorded process ran, beside when it started, as a compact `6s` /
+`14m` / `1h 12m` token with the exact value on hover. It is the same
+measurement the run page's `Duration` field shows: the recorded process result
+first, else the manifest's end minus start. Runs that are still open or have
+no recorded end show nothing rather than zero. `/api/runs` summaries carry
+`durationMillis` for it; the `agentrec list` schema is unchanged. Duration is
+a measurement of the recorded window, not effort or quality; it is not a
+filter and is never totalled.
+
 **Unreleased — discoverable later verification:** A viewer started without
 `--allow-run` used to omit **Verify now** silently, so a reader never learned a
 run could be verified again. The Verification block now says how, in one quiet

@@ -115,6 +115,10 @@
       '{n} unreadable run(s) were excluded.': '읽을 수 없는 실행 {n}개를 제외했습니다.',
       '{n}s ago': '{n}초 전',
       '{n}m ago': '{n}분 전',
+      '{n}s': '{n}초',
+      '{n}m': '{n}분',
+      '{h}h {m}m': '{h}시간 {m}분',
+      '{n}h': '{n}시간',
       '{n}h ago': '{n}시간 전',
       '{n}d ago': '{n}일 전',
       'No checks were run for this session. Record with --verify (agentrec setup --verify) to run the checks pinned in .agentrec.yaml.': '이 세션에서는 검증 체크를 실행하지 않았습니다. --verify 로 기록하면(agentrec setup --verify) .agentrec.yaml 에 고정된 체크를 실행합니다.',
@@ -438,6 +442,10 @@
       '{n} unreadable run(s) were excluded.': '読み取れない実行 {n} 件を除外しました。',
       '{n}s ago': '{n}秒前',
       '{n}m ago': '{n}分前',
+      '{n}s': '{n}秒',
+      '{n}m': '{n}分',
+      '{h}h {m}m': '{h}時間{m}分',
+      '{n}h': '{n}時間',
       '{n}h ago': '{n}時間前',
       '{n}d ago': '{n}日前',
       'No checks were run for this session. Record with --verify (agentrec setup --verify) to run the checks pinned in .agentrec.yaml.': 'このセッションでは検証チェックを実行していません。--verify を付けて記録すると（agentrec setup --verify）、.agentrec.yaml に固定されたチェックを実行します。',
@@ -761,6 +769,10 @@
       '{n} unreadable run(s) were excluded.': '已排除 {n} 个无法读取的运行。',
       '{n}s ago': '{n}秒前',
       '{n}m ago': '{n}分钟前',
+      '{n}s': '{n}秒',
+      '{n}m': '{n}分钟',
+      '{h}h {m}m': '{h}小时{m}分',
+      '{n}h': '{n}小时',
       '{n}h ago': '{n}小时前',
       '{n}d ago': '{n}天前',
       'No checks were run for this session. Record with --verify (agentrec setup --verify) to run the checks pinned in .agentrec.yaml.': '此会话未运行任何检查。使用 --verify 记录（agentrec setup --verify）即可运行 .agentrec.yaml 中固定的检查。',
@@ -1127,6 +1139,22 @@ function shortID(id) {
     return t('{n}d ago', { n: Math.round(seconds / 86400) });
   }
 
+  // compactDuration renders a recorded process window as one short token for
+  // the run row; the exact Go-style value lives in the title. Absent or
+  // non-numeric input yields nothing rather than a zero.
+  function compactDuration(millis) {
+    if (typeof millis !== 'number' || !Number.isFinite(millis) || millis < 0) return null;
+    const total = Math.round(millis / 1000);
+    const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+    // The title is the recorded value to the millisecond, spelled like Go's
+    // Duration; the token is what fits on the row.
+    const eh = Math.floor(millis / 3600000), em = Math.floor((millis % 3600000) / 60000);
+    const es = ((millis % 60000) / 1000).toFixed(3).replace(/\.?0+$/, '');
+    const exact = eh ? `${eh}h${em}m${es}s` : em ? `${em}m${es}s` : `${es}s`;
+    const short = h ? (m ? t('{h}h {m}m', { h, m }) : t('{n}h', { n: h })) : m ? t('{n}m', { n: m }) : t('{n}s', { n: s });
+    return { short, exact };
+  }
+
   function clock(value) {
     if (!value || value.startsWith('0001-')) return '—';
     const date = new Date(value);
@@ -1286,6 +1314,12 @@ function shortID(id) {
       node('span', 'run-meta-separator', '·'),
       node('span', 'run-time', relativeTime(run.startedAt)),
     );
+    const duration = compactDuration(run.durationMillis);
+    if (duration) {
+      const el = node('span', 'run-duration', duration.short);
+      el.title = duration.exact;
+      meta.append(node('span', 'run-meta-separator', '·'), el);
+    }
     const verdicts = node('span', 'run-verdicts');
     const process = outcome(run.exit, new Map());
     const verification = verdictWord(String(run.verification || 'NOT RUN').toUpperCase());

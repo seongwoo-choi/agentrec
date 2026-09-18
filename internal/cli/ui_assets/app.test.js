@@ -3930,3 +3930,53 @@ test('later-verification hint never pastes a shell-unsafe run id', async (t) => 
   assert.deepEqual(codes, ['agentrec start --allow-run', 'agentrec verify <run-id>']);
   assert.doesNotMatch(d.querySelector('#verify-later-hint').textContent, /run~x|\{restart\}|\{cli\}/);
 });
+
+// --- Duration on the run row (DESIGN.md section 13) ---
+
+test('run row shows a compact duration beside the relative time, never for open runs', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const base = data.list.runs[0];
+  data.list.runs = [
+    { ...base, id: 'run-short', durationMillis: 6192 },
+    { ...base, id: 'run-minutes', durationMillis: 14 * 60 * 1000 + 3000 },
+    { ...base, id: 'run-hours', durationMillis: 72 * 60 * 1000 + 15 * 1000 },
+    { ...base, id: 'run-whole-hour', durationMillis: 3600 * 1000 },
+    { ...base, id: 'run-fraction', durationMillis: 20 * 60 * 1000 + 9616 },
+    { ...base, id: 'run-open', exit: 'running', exitReason: 'running', statusClass: 'running', statusLabel: 'running' },
+    { ...base, id: 'run-unknown' },
+  ];
+  data.list.total = data.list.runs.length;
+  data.details = (id) => ({ ...data.details, run: { ...data.details.run, id } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  const durationOf = (id) => {
+    const el = d.querySelector(`.run-item[data-run-id="${id}"] .run-duration`);
+    return el ? [el.textContent, el.title] : null;
+  };
+  assert.deepEqual(durationOf('run-short'), ['6s', '6.192s']);
+  assert.deepEqual(durationOf('run-minutes'), ['14m', '14m3s']);
+  assert.deepEqual(durationOf('run-hours'), ['1h 12m', '1h12m15s']);
+  assert.deepEqual(durationOf('run-whole-hour'), ['1h', '1h0m0s']);
+  // The token rounds to what fits; the title keeps every recorded millisecond.
+  assert.deepEqual(durationOf('run-fraction'), ['20m', '20m9.616s']);
+  // Open and duration-less runs show nothing: no 0s, no dash.
+  assert.equal(durationOf('run-open'), null);
+  assert.equal(durationOf('run-unknown'), null);
+  // Placement: after the relative time inside the meta line.
+  const meta = d.querySelector('.run-item[data-run-id="run-short"] .run-item-meta');
+  const kids = [...meta.children].map((n) => n.className);
+  assert.ok(kids.indexOf('run-duration') > kids.indexOf('run-time'));
+});
+
+test('run row duration is localized without changing the exact title', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs[0].durationMillis = 90 * 1000;
+  data.configure = (w) => w.localStorage.setItem('agentrec.lang', 'ko');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const el = dom.window.document.querySelector('.run-item .run-duration');
+  assert.ok(el);
+  assert.match(el.textContent, /1분/);
+  assert.equal(el.title, '1m30s');
+});

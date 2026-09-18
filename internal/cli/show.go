@@ -1089,6 +1089,21 @@ func runDuration(m storage.Manifest, result *processResult) string {
 	return unknownValue
 }
 
+// summaryDurationMillis mirrors runDuration's precedence for the list summary:
+// the process result is the measurement, the manifest window is the fallback,
+// and an open run yields nil rather than a misleading zero.
+func summaryDurationMillis(m storage.Manifest, result *processResult) *int64 {
+	if result != nil {
+		millis := result.DurationMillis
+		return &millis
+	}
+	if m.EndedAt != nil && !m.EndedAt.Before(m.StartedAt) {
+		millis := m.EndedAt.Sub(m.StartedAt).Milliseconds()
+		return &millis
+	}
+	return nil
+}
+
 // validateRunID accepts exactly one clean, printable path component. A run ID
 // comes off the command line and is reported back on the terminal, so anything
 // that could name a directory other than a run under the runs root, or that
