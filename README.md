@@ -233,6 +233,16 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — the timeline panel fits the screen it is on:** The timeline
+and inspector panels were sized by a fixed guess (`100vh − 340px`) while the
+context above them measured 565–583 px, so on every desktop size the panel's
+bottom edge sat 225–383 px below the viewport and one list needed two
+scrollbars. On desktop layouts the panels now flex to the height left below the
+run context, with a 320 px floor. At 1920×1080 the page no longer scrolls at
+all on a normal run; on a 900 px-tall window the panel sits on its floor — that
+is the honest limit of the space the context leaves. Narrow layouts are
+unchanged.
+
 **Unreleased — a compact summary strip:** The summary grid above the timeline
 had nine columns with three always empty, and two of its six cards repeated the
 action and event counts printed in the tab labels directly below. It now keeps
