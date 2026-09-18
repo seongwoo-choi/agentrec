@@ -2193,15 +2193,57 @@ func TestViewRejectsTraversalRunID(t *testing.T) {
 }
 
 func TestViewAssetsDoNotDependOnExternalResources(t *testing.T) {
-	for _, name := range []string{"ui_assets/index.html", "ui_assets/app.css", "ui_assets/app.js"} {
+	for _, name := range []string{"ui_assets/index.html", "ui_assets/app.css", "ui_assets/app.js", "ui_assets/favicon.svg"} {
 		raw, err := os.ReadFile(filepath.Join(name))
 		if err != nil {
 			// RED until the embedded UI exists.
 			t.Fatal(err)
 		}
 		text := string(raw)
+		// A standalone SVG asset must declare the SVG namespace; it is an identifier, not a fetched resource.
+		if strings.HasSuffix(name, ".svg") {
+			const svgNamespace = `xmlns="http://www.w3.org/2000/svg"`
+			if !strings.Contains(text, svgNamespace) {
+				t.Errorf("%s does not declare the SVG namespace", name)
+			}
+			text = strings.ReplaceAll(text, svgNamespace, "")
+		}
 		if strings.Contains(text, "https://") || strings.Contains(text, "http://") {
 			t.Errorf("%s depends on an external resource", name)
 		}
+	}
+}
+
+func TestViewServesEmbeddedFavicon(t *testing.T) {
+	root := home(t)
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { _ = handler.Close() })
+
+	embedded, err := viewAssets.ReadFile("ui_assets/favicon.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/assets/favicon.svg", nil)
+	request.Host = "127.0.0.1"
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	if got := response.Header().Get("Content-Type"); got != "image/svg+xml" {
+		t.Errorf("content type = %q, want image/svg+xml", got)
+	}
+	if got := response.Body.Bytes(); !bytes.Equal(got, embedded) {
+		t.Errorf("served favicon differs from the embedded asset")
+	}
+
+	index, err := viewAssets.ReadFile("ui_assets/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">`) {
+		t.Errorf("index.html does not link the local favicon")
 	}
 }
