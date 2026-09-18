@@ -5,9 +5,10 @@
   const LIVE_MS = 3000;
   const SEARCH_MS = 400;
   const RECENT_RUN_LIMIT = 10;
+  const MAX_EXPANDED_ACTION_GROUPS = 250;
   let earlierRunsExpanded = false;
   let requestRunId = '';
-  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, mode: 'actions', query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, mode: 'actions', actionView: 'reading', expandedActionGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -42,6 +43,11 @@
       'Loaded-run scope': '로드된 실행 범위',
       'No recorded request.': '기록된 요청이 없습니다.',
       Actions: '액션',
+      'Reading view': '읽기 보기',
+      'commands': '명령', 'tool calls': '도구 호출', 'file reading': '파일 읽기', 'searches': '검색', 'MCP calls': 'MCP 호출', 'web fetching': '웹 가져오기',
+      'All actions': '모든 액션',
+      '{rows} top-level entries from {loaded} loaded actions': '로드된 액션 {loaded}개에서 최상위 항목 {rows}개',
+      '{n} completed provider records · loaded page': '완료로 보고된 기록 {n}개 · 로드된 페이지',
       Changes: '변경',
       'Provider events': '프로바이더 이벤트',
       'Filter timeline': '타임라인 필터',
@@ -334,6 +340,11 @@
       'Loaded-run scope': '読み込み済みの範囲',
       'No recorded request.': '記録されたリクエストはありません。',
       Actions: 'アクション',
+      'Reading view': '読みやすい表示',
+      'commands': 'コマンド', 'tool calls': 'ツール呼び出し', 'file reading': 'ファイル読み取り', 'searches': '検索', 'MCP calls': 'MCP 呼び出し', 'web fetching': 'ウェブ取得',
+      'All actions': 'すべてのアクション',
+      '{rows} top-level entries from {loaded} loaded actions': '読み込み済みアクション{loaded}件から最上位項目{rows}件',
+      '{n} completed provider records · loaded page': '完了と報告された記録{n}件 · 読み込み済みページ',
       Changes: '変更',
       'Provider events': 'プロバイダーイベント',
       'Filter timeline': 'タイムラインを絞り込む',
@@ -626,6 +637,11 @@
       'Loaded-run scope': '已加载运行范围',
       'No recorded request.': '没有记录的请求。',
       Actions: '操作',
+      'Reading view': '阅读视图',
+      'commands': '命令', 'tool calls': '工具调用', 'file reading': '文件读取', 'searches': '搜索', 'MCP calls': 'MCP 调用', 'web fetching': '网页获取',
+      'All actions': '所有操作',
+      '{rows} top-level entries from {loaded} loaded actions': '已加载 {loaded} 个操作，显示为 {rows} 个顶层条目',
+      '{n} completed provider records · loaded page': '{n} 条报告为已完成的记录 · 已加载页面',
       Changes: '变更',
       'Provider events': '提供方事件',
       'Filter timeline': '筛选时间线',
@@ -1105,6 +1121,7 @@ function shortID(id) {
   const verdictWord = (value) => (value === 'UNAVAILABLE' ? 'NOT RUN' : value);
   const repositoryWord = (value) => (value === 'UNAVAILABLE' ? 'NOT RECORDED' : value);
   const EMPTY_WORD = { Verification: 'NOT RUN', 'Repository delta': 'NOT RECORDED' };
+  const GROUP_KIND_LABELS = { 'shell.exec': 'commands', 'tool.call': 'tool calls', 'file.read': 'file reading', search: 'searches', 'mcp.call': 'MCP calls', 'web.fetch': 'web fetching' };
   const TYPE_LABELS = { 'user.prompt': 'prompt', 'agent.message': 'reply' };
 
   function humanAttribution(raw, provider) {
@@ -1282,6 +1299,7 @@ function shortID(id) {
         const index = state.streams.actions.items.findIndex((item) => item.id === action.id);
         const row = $('timeline').querySelector(`.action-row[data-index="${index}"]`);
         if (row) {
+          revealActionRow(row);
           selectItem(row, { kind: 'action', value: state.streams.actions.items[index] });
           row.scrollIntoView({ block: 'center' });
           row.focus({ preventScroll: true });
@@ -1501,6 +1519,143 @@ function shortID(id) {
     return depth;
   }
 
+  const READING_ACTION_TYPES = new Set(['shell.exec', 'tool.call', 'mcp.call', 'file.read', 'search', 'web.fetch']);
+  const READING_ACTION_STATUSES = new Set(['completed', 'success']);
+  const FAILURE_STATUSES = new Set(['failed', 'failure', 'error', 'warning', 'warn', 'cancelled', 'canceled', 'timeout', 'timed_out', 'interrupted']);
+  // Deliberately bounded runner signatures, not a shell parser or a verdict.
+  const VERIFICATION_RUNNER = /^(?:go\s+(?:test|vet|build)(?=\s|$)|node\s+--test(?:\s|=|$)|(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|check|build|lint|typecheck)(?=[:\s]|$)|(?:pytest|py\.test)(?:\s|$)|python[\d.]*\s+-m\s+pytest(?:\s|$)|cargo\s+(?:test|check|build|clippy)(?=\s|$)|(?:\.\/)?gradlew?\s+(?:test|check|build)(?=\s|$)|(?:\.\/)?mvnw?\s+(?:test|verify|package|compile)(?=\s|$))/;
+
+  // Reading-only budget: at most 64 object/array levels and 4096 fields per result.
+  // true = explicit failure, false = inspected without failure, null = uncertain.
+  // Uncertain records stay individual; these are not API limits or failure verdicts.
+  // Only structured fields are inspected: stdout strings are never parsed.
+  const READING_RESULT_MAX_DEPTH = 64;
+  const READING_RESULT_MAX_FIELDS = 4096;
+  function hasStructuredFailure(value) {
+    if (value == null) return false;
+    if (typeof value !== 'object') return null;
+    // Lazy frames avoid recursive calls and copying every wide object's values.
+    function* fields(object) {
+      for (const key in object) {
+        if (Object.prototype.hasOwnProperty.call(object, key)) yield key;
+      }
+    }
+    const stack = [{ value, keys: fields(value) }];
+    let visited = 0;
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      const next = frame.keys.next();
+      if (next.done) { stack.pop(); continue; }
+      if (++visited > READING_RESULT_MAX_FIELDS) return null;
+      const field = frame.value[next.value];
+      const name = next.value.toLowerCase();
+      if (name === 'exitcode' || name === 'exit_code') {
+        // Preserve known zero scalars, never invoke object/array coercion hooks.
+        if (field !== null && field !== false && field !== '') {
+          if (typeof field !== 'number' && typeof field !== 'string') return null;
+          const code = typeof field === 'number' ? field : Number(field);
+          if (!Number.isFinite(code)) return null;
+          if (code !== 0) return true;
+        }
+      }
+      if (['error', 'iserror', 'is_error', 'warning', 'warnings'].includes(name)) {
+        if (field !== null && typeof field === 'object') return null;
+        if (field !== null && field !== false && field !== '' && field !== 0) return true;
+      }
+      if (name === 'failed' || name === 'success' || name === 'ok') {
+        if (typeof field !== 'boolean' && field !== null) return null;
+        if (name === 'failed' ? field === true : field === false) return true;
+      }
+      if (name === 'status') {
+        if (field !== null && typeof field !== 'string') return null;
+        if (typeof field === 'string' && FAILURE_STATUSES.has(field.toLowerCase())) return true;
+      }
+      if (field !== null && typeof field === 'object') {
+        if (stack.length >= READING_RESULT_MAX_DEPTH) return null;
+        stack.push({ value: field, keys: fields(field) });
+      }
+    }
+    return false;
+  }
+
+  function verificationLike(action) {
+    const input = action.input || {};
+    const command = input.command || input.cmd || '';
+    if (Array.isArray(command)) {
+      // An argv is one invocation; separators inside arguments are not shell syntax.
+      return command.length <= 256 && command.every((arg) => typeof arg === 'string')
+        && VERIFICATION_RUNNER.test(command.slice(0, 4).join(' '));
+    }
+    if (typeof command !== 'string' || command.length > 16384) return false;
+    // Hide quoted arguments before checking explicit command boundaries. No evaluation,
+    // substitutions, wrappers or general shell grammar are inferred.
+    const unquoted = command.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, ' ARG ');
+    return unquoted.split(/&&|\|\||[;\n|]/).some((part) => VERIFICATION_RUNNER.test(part.trim()));
+  }
+
+  function readingEligible(action, index) {
+    const cursor = state.streams.actions.pageCursors?.[index];
+    return Boolean(action.id)
+      && READING_ACTION_TYPES.has(action.type)
+      && READING_ACTION_STATUSES.has(String(action.status || '').toLowerCase())
+      && Number.isSafeInteger(cursor)
+      && cursor >= 0
+      && !verificationLike(action)
+      && hasStructuredFailure(action.result) === false;
+  }
+
+  function actionGroupID(indexes) {
+    const first = indexes[0];
+    const items = state.streams.actions.items;
+    return JSON.stringify([state.streams.actions.pageCursors[first], items[first].parentId || '', items[first].id]);
+  }
+
+  function sameReadingScope(left, right) {
+    const items = state.streams.actions.items;
+    return (items[left].parentId || '') === (items[right].parentId || '')
+      && state.streams.actions.pageCursors[left] === state.streams.actions.pageCursors[right];
+  }
+
+  function rememberActionGroup(id, open) {
+    if (!open) {
+      state.expandedActionGroups.delete(id);
+      return;
+    }
+    state.expandedActionGroups.add(id);
+    // ponytail: one run can remember at most the loaded page-size worth of deliberate expansions.
+    while (state.expandedActionGroups.size > MAX_EXPANDED_ACTION_GROUPS) state.expandedActionGroups.delete(state.expandedActionGroups.values().next().value);
+  }
+
+  function actionGroup(indexes, byID) {
+    const id = actionGroupID(indexes);
+    const details = node('details', 'action-group');
+    details.dataset.groupId = id;
+    details.open = state.expandedActionGroups.has(id);
+    const summary = node('summary', 'action-group-summary');
+    summary.dataset.groupId = id;
+    summary.tabIndex = 0;
+    const counts = new Map();
+    for (const index of indexes) {
+      const type = state.streams.actions.items[index].type;
+      counts.set(type, (counts.get(type) || 0) + 1);
+    }
+    summary.append(
+      node('span', 'action-group-kinds', [...counts].map(([type, count]) => `${t(GROUP_KIND_LABELS[type] || type)} × ${count}`).join(' · ')),
+      node('span', 'action-group-meta', t('{n} completed provider records · loaded page', { n: indexes.length }))
+    );
+    details.append(summary);
+    for (const index of indexes) details.append(actionRow(state.streams.actions.items[index], index, byID));
+    details.addEventListener('toggle', () => { if (details.isConnected) rememberActionGroup(id, details.open); });
+    return details;
+  }
+
+  function revealActionRow(row) {
+    const group = row && row.closest('details.action-group');
+    if (!group || group.open) return;
+    group.open = true;
+    rememberActionGroup(group.dataset.groupId, true);
+  }
+
   function renderTypeFilters(items, typeOf) {
     const holder = $('type-filters');
     // Chips are rebuilt whenever a page lands; the focused chip stays focused.
@@ -1594,12 +1749,56 @@ function shortID(id) {
     if (message) timeline.append(node('div', 'timeline-empty', t(message)));
   }
 
-  // renderRows appends the rows for items[from…] that pass the filter and returns the first one.
+  function renderActionViewStatus() {
+    const controls = $('action-view-controls');
+    const actions = state.mode === 'actions';
+    controls.classList.toggle('hidden', !actions);
+    if (!actions) return;
+    $('all-actions-toggle').checked = state.actionView === 'all';
+    $('action-view-label').textContent = t(state.actionView === 'all' ? 'All actions' : 'Reading view');
+    $('action-view-count').textContent = t('{rows} top-level entries from {loaded} loaded actions', { rows: state.streams.actions.shown, loaded: state.streams.actions.items.length });
+  }
+
+  // renderRows appends the rows for items[from…] that pass the filter and returns the first focusable row.
   function renderRows(timeline, streamName, from) {
     const mode = MODES[streamName];
     const stream = state.streams[streamName];
     const context = mode.context ? mode.context(stream.items) : null;
     let first = null;
+    if (streamName === 'actions' && state.actionView === 'reading' && !state.query && state.activeTypes.size === 0) {
+      for (let index = from; index < stream.items.length;) {
+        if (!readingEligible(stream.items[index], index)) {
+          const row = actionRow(stream.items[index], index, context);
+          if (row) {
+            stream.shown += 1;
+            timeline.append(row);
+            first = first || row;
+          }
+          index += 1;
+          continue;
+        }
+        const indexes = [index];
+        while (index + indexes.length < stream.items.length) {
+          const next = index + indexes.length;
+          if (!readingEligible(stream.items[next], next) || !sameReadingScope(indexes[indexes.length - 1], next)) break;
+          indexes.push(next);
+        }
+        if (indexes.length < 2) {
+          const row = actionRow(stream.items[index], index, context);
+          stream.shown += 1;
+          timeline.append(row);
+          first = first || row;
+        } else {
+          const group = actionGroup(indexes, context);
+          stream.shown += 1;
+          timeline.append(group);
+          first = first || group.querySelector('summary');
+        }
+        index += indexes.length;
+      }
+      renderActionViewStatus();
+      return first;
+    }
     for (let index = from; index < stream.items.length; index += 1) {
       const row = mode.row(stream.items[index], index, context);
       if (!row) continue;
@@ -1607,6 +1806,7 @@ function shortID(id) {
       timeline.append(row);
       first = first || row;
     }
+    renderActionViewStatus();
     return first;
   }
 
@@ -1852,12 +2052,21 @@ function shortID(id) {
   function renderTimeline() {
     if (!state.run) return;
     const timeline = $('timeline');
-    timeline.replaceChildren();
-    timeline.scrollTop = 0;
-    state.selected = null;
-    renderInspector();
     const streamName = state.mode;
+    const runID = state.run.run.id;
+    const sameStream = timeline.dataset.stream === streamName && timeline.dataset.runId === runID;
+    const focusedIndex = sameStream && document.activeElement?.classList.contains('action-row') ? document.activeElement.dataset.index : undefined;
+    const focusedGroup = sameStream && document.activeElement?.classList.contains('action-group-summary') ? document.activeElement.dataset.groupId : undefined;
+    const selected = sameStream && state.selected?.kind === 'action' && streamName === 'actions' ? state.selected : null;
+    const selectedIndex = selected ? state.streams.actions.items.indexOf(selected.value) : -1;
+    const scrollTop = sameStream ? timeline.scrollTop : 0;
+    timeline.replaceChildren();
+    timeline.dataset.stream = streamName;
+    timeline.dataset.runId = runID;
+    if (!selected) state.selected = null;
     if (streamName === 'changes' && isLive()) {
+      renderActionViewStatus();
+      renderInspector();
       renderLiveChanges();
       return;
     }
@@ -1877,6 +2086,27 @@ function shortID(id) {
     renderRows(timeline, streamName, 0);
     renderEmpty(timeline, streamName);
     renderTail(streamName);
+    let selectedRow = null;
+    if (selectedIndex >= 0) selectedRow = timeline.querySelector(`.action-row[data-index="${selectedIndex}"]`);
+    if (selectedRow) {
+      revealActionRow(selectedRow);
+      selectedRow.classList.add('selected');
+      state.selected = selected;
+    } else {
+      state.selected = null;
+    }
+    renderInspector();
+    if (focusedIndex !== undefined) {
+      const row = timeline.querySelector(`.action-row[data-index="${focusedIndex}"]`);
+      if (row) {
+        revealActionRow(row);
+        row.focus({ preventScroll: true });
+      }
+    } else if (focusedGroup !== undefined) {
+      const summary = [...timeline.querySelectorAll('.action-group-summary')].find((item) => item.dataset.groupId === focusedGroup);
+      if (summary) summary.focus({ preventScroll: true });
+    }
+    timeline.scrollTop = scrollTop;
   }
 
   function selectItem(row, selected) {
@@ -3270,6 +3500,7 @@ function shortID(id) {
   // cursor starts the first actions page at a byte offset, for a search hit: the page there begins with the hit's action.
   async function loadRun(id, quiet = false, cursor = 0, linked = false) {
     stopLive();
+    const previousRunID = state.run?.run.id;
     if (state.runAbortController) state.runAbortController.abort();
     const controller = new AbortController();
     state.runAbortController = controller;
@@ -3278,6 +3509,7 @@ function shortID(id) {
       const run = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`, controller.signal);
       if (generation !== state.loadGeneration) return;
       state.run = run;
+      if (previousRunID !== run.run.id) state.expandedActionGroups.clear();
       state.runError = null;
       state.confirmDelete = false;
       // The comparison sheet may already be open on the run that was showing:
@@ -3603,6 +3835,10 @@ function shortID(id) {
       state.query = event.target.value.trim().toLowerCase();
       renderTimeline();
     }, 180);
+  });
+  $('all-actions-toggle').addEventListener('change', (event) => {
+    state.actionView = event.target.checked ? 'all' : 'reading';
+    renderTimeline();
   });
   const tabs = Array.from(document.querySelectorAll('.tab'));
   tabs.forEach((tab, index) => {

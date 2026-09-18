@@ -2558,6 +2558,383 @@ test('action hierarchy and type filters render behaviorally', async (t) => {
   assert.equal(document.querySelectorAll('.action-row').length, 1);
 });
 
+test('verification runner invocations stay visible but file inspection words do not', async (t) => {
+  const negative = ['wc -l app.test.js', "sed -n '1,80p' app.test.js", "rg 'test|check|build' app.test.js", 'cat app.test.js', 'git status && test -d .codegraph', 'go test.txt', 'cargo test-data', "printf '%s' 'go test ./...'", "rg 'x; go test' app.js"];
+  const positive = ['go test ./...', 'go vet ./...', 'go build ./...', 'node --test app.test.js', 'npm test', 'npm run test:ui', 'npm run check', 'npm run build', 'pytest -q', 'python -m pytest', 'cargo test', './gradlew check', 'gradle test', 'mvn verify', './mvnw test', 'cd repo && go test ./...', 'git status; npm run check', 'git status\nnode --test', ['go', 'test', './...']];
+  for (const [commands, grouped] of [[negative, true], [positive, false]]) {
+    for (const command of commands) {
+      const data = fixture('completed', 'pass', 'PASS');
+      data.actions = [0, 1].map((i) => ({ id: `runner-${i}`, type: 'shell.exec', status: 'completed', input: { command } }));
+      data.details.actionCount = 2;
+      const dom = await renderFixture(data);
+      t.after(() => dom.window.close());
+      assert.equal(dom.window.document.querySelectorAll('details.action-group').length, grouped ? 1 : 0, JSON.stringify(command));
+    }
+  }
+});
+
+test('live same-page group extension preserves expanded state and focused summary', async (t) => {
+  const data = fixture('running', '', 'RUNNING');
+  let poll;
+  let actions = [0, 1].map((i) => ({ id: `live-${i}`, parentId: 'turn', type: 'file.read', status: 'completed' }));
+  const details = data.details;
+  data.details = () => ({ ...details, actionCount: actions.length });
+  let reads = 0;
+  data.actions = (cursor) => {
+    assert.equal(cursor, 0, 'refresh retains the exact byte-page anchor');
+    return { items: reads++ ? actions.slice(2) : actions, nextCursor: null };
+  };
+  data.configure = (w) => {
+    const timeout = w.setTimeout.bind(w);
+    w.setTimeout = (callback, delay, ...args) => {
+      if (delay === 3000) { poll = callback; return 987654; }
+      return timeout(callback, delay, ...args);
+    };
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const group = d.querySelector('details.action-group');
+  group.open = true;
+  group.dispatchEvent(new w.Event('toggle'));
+  group.querySelector('summary').focus();
+  const anchor = group.dataset.groupId;
+  actions = [...actions, { id: 'live-2', parentId: 'turn', type: 'file.read', status: 'completed' }];
+  await poll();
+  await settle();
+  assert.equal(d.querySelectorAll('.action-row').length, 3, 'the live tick appended a record');
+  // A locale redraw regroups the loaded same-page tail without changing scope.
+  d.querySelector('#lang').value = 'en';
+  d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+  const refreshed = d.querySelector('details.action-group');
+  assert.equal(refreshed.querySelectorAll('.action-row').length, 3, 'a real poll grew the loaded group');
+  assert.equal(refreshed.open, true);
+  assert.equal(refreshed.dataset.groupId, anchor);
+  assert.equal(d.activeElement, refreshed.querySelector('summary'));
+  assert.deepEqual([...refreshed.querySelectorAll('.action-row')].map((row) => row.dataset.index), ['0', '1', '2']);
+});
+
+test('group kind names and top-level entry counts are localized without success claims', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = ['shell.exec', 'tool.call', 'file.read', 'search', 'mcp.call', 'web.fetch'].map((type, i) => ({ id: `kind-${i}`, type, status: 'completed' }));
+  data.details.actionCount = 6;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  for (const [language, kinds, count] of [
+    ['en', ['commands', 'tool calls', 'file reading', 'searches', 'MCP calls', 'web fetching'], '1 top-level entries from 6 loaded actions'],
+    ['ko', ['명령', '도구 호출', '파일 읽기', '검색', 'MCP 호출', '웹 가져오기'], '로드된 액션 6개에서 최상위 항목 1개'],
+    ['ja', ['コマンド', 'ツール呼び出し', 'ファイル読み取り', '検索', 'MCP 呼び出し', 'ウェブ取得'], '読み込み済みアクション6件から最上位項目1件'],
+    ['zh-CN', ['命令', '工具调用', '文件读取', '搜索', 'MCP 调用', '网页获取'], '已加载 6 个操作，显示为 1 个顶层条目'],
+  ]) {
+    d.querySelector('#lang').value = language;
+    d.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    const group = d.querySelector('details.action-group');
+    for (const kind of kinds) assert.ok(group.querySelector('.action-group-kinds').textContent.includes(`${kind} × 1`), `${language}: ${kind}`);
+    group.open = true;
+    assert.equal(d.querySelector('#action-view-count').textContent, count);
+    assert.doesNotMatch(group.querySelector('summary').textContent, /success|passed|verified/i);
+  }
+});
+
+function readingActions() {
+  return [
+    { id: 'prompt', type: 'user.prompt', status: 'completed', input: { prompt: 'inspect the run' } },
+    { id: 'read-1', parentId: 'turn-1', type: 'file.read', provider: 'claude', status: 'completed', input: { path: 'one.go', query: 'needle' } },
+    { id: 'search-1', parentId: 'turn-1', type: 'search', provider: 'claude', status: 'success', input: { pattern: 'TODO' } },
+    { id: 'write-1', parentId: 'turn-1', type: 'file.write', provider: 'claude', status: 'completed', input: { path: 'one.go' } },
+    { id: 'verify-1', parentId: 'turn-1', type: 'shell.exec', provider: 'claude', status: 'completed', input: { command: 'go test ./...' }, result: { exitCode: 0 } },
+    { id: 'error-1', parentId: 'turn-1', type: 'tool.call', provider: 'claude', status: 'completed', result: { error: 'structured failure' } },
+    { id: 'exit-1', parentId: 'turn-1', type: 'shell.exec', provider: 'claude', status: 'completed', input: { command: 'false' }, result: { exitCode: 1, aggregatedOutput: 'ignored for classification' } },
+    { id: 'mcp-1', parentId: 'turn-1', type: 'mcp.call', provider: 'codex', status: 'completed', result: { error: null } },
+    { id: 'fetch-1', parentId: 'turn-1', type: 'web.fetch', provider: 'codex', status: 'completed', input: { url: 'https://example.test' } },
+    { id: 'warning-1', parentId: 'turn-1', type: 'tool.call', provider: 'codex', status: 'warning' },
+    { id: 'running-1', parentId: 'turn-1', type: 'tool.call', provider: 'codex', status: 'in_progress' },
+    { id: 'unknown-1', parentId: 'turn-1', type: 'future.tool', provider: 'codex', status: 'completed' },
+    { id: 'pending-1', parentId: 'turn-1', type: 'tool.call', provider: 'codex', status: 'pending' },
+    { id: 'unknown-status-1', parentId: 'turn-1', type: 'tool.call', provider: 'codex' },
+    { id: 'stdout-error-1', parentId: 'turn-2', type: 'tool.call', provider: 'codex', status: 'completed', result: { aggregatedOutput: 'error: words alone are not structured failure evidence' } },
+    { id: 'stdout-peer-1', parentId: 'turn-2', type: 'search', provider: 'codex', status: 'completed' },
+  ];
+}
+
+// JSON.parse matches the external result boundary; no executable coercion hooks.
+const deepReadingResult = (depth) => JSON.parse('{"x":'.repeat(depth) + '0' + '}'.repeat(depth));
+for (const [name, result] of [
+  ['deep4500', deepReadingResult(4500)],
+  ['hostile exitCode', JSON.parse('{"exitCode":{"toString":null,"valueOf":null}}')],
+  ['hostile status', JSON.parse('{"status":{"toString":null}}')],
+  ['depth budget', deepReadingResult(65)],
+  ['work budget', { values: Array(4097).fill(0) }],
+  ['uncertain error object', { error: { toString: null } }],
+  ['uncertain exit array', { exitCode: [] }],
+]) test(`Reading robustness keeps ${name} visible and following actions reachable`, async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const errors = [];
+  data.configure = (w) => {
+    w.addEventListener('error', (event) => errors.push(event.message));
+    w.addEventListener('unhandledrejection', (event) => errors.push(event.reason));
+  };
+  data.actions = [
+    { id: 'uncertain', type: 'tool.call', status: 'completed', result },
+    { id: 'normal-a', type: 'file.read', status: 'completed', input: { path: 'one.go' } },
+    { id: 'normal-b', type: 'search', status: 'completed', input: { pattern: 'TODO' } },
+  ];
+  data.details.actionCount = data.actions.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const rows = d.querySelectorAll('#timeline .action-row');
+  t.diagnostic(`${name}: currentrows=${rows.length}; streamError=${d.querySelector('.stream-error')?.textContent || 'none'}`);
+  assert.equal(rows.length, 3, 'no record disappears when result inspection is unsafe');
+  assert.ok(d.querySelector('#timeline > .action-row[data-index="0"]'), 'uncertain is individually visible, not folded');
+  const group = d.querySelector('#timeline > details.action-group');
+  assert.ok(group, 'normal following pair still folds');
+  assert.deepEqual([...group.querySelectorAll('.action-row')].map((row) => row.dataset.index), ['1', '2']);
+  group.open = true;
+  for (const index of [0, 1, 2]) {
+    const row = d.querySelector(`.action-row[data-index="${index}"]`);
+    row.click();
+    row.focus();
+    assert.match(row.className, /\bselected\b/);
+    assert.equal(d.activeElement, row);
+  }
+  assert.equal(data.actions[0].result, result, 'canonical result is not replaced');
+  assert.equal(data.actions[0].status, 'completed', 'uncertainty is not a failure verdict');
+  assert.equal(d.querySelector('.stream-error'), null, 'no swallowed render exception');
+  assert.ok(d.querySelector('#workspace-empty').classList.contains('hidden'), 'no swallowed global run-load error');
+  assert.ok(!d.querySelector('#run-view').classList.contains('hidden'));
+  assert.deepEqual(errors, [], 'no global error or unhandled rejection');
+});
+
+test('Reading robustness preserves scalar evidence and inclusive inspection budgets', async (t) => {
+  const benign = [
+    {}, { exitCode: 0 }, { exit_code: '0' }, { exitCode: null }, { exitCode: false }, { exitCode: '' },
+    { error: null, warning: false, warnings: '', isError: 0, failed: false, success: true, ok: true },
+    { status: 'completed' }, { nested: [{ exitCode: '0', status: 'success' }] },
+    { stdout: '{"error":true,"exitCode":1}', aggregatedOutput: 'ERROR FAILED warning' },
+    deepReadingResult(64), { values: Array(4095).fill(0) },
+  ];
+  const individual = [
+    { error: true }, { error: 'oops' }, { warning: true }, { failed: true }, { success: false }, { ok: false },
+    { exitCode: 1 }, { exit_code: '-1' }, { status: 'FaIlEd' }, { nested: [{ status: 'timeout' }] },
+    { exitCode: 'unknown' }, { status: [] }, { failed: {} }, { success: 'true' },
+  ];
+  const data = fixture('completed', 'pass', 'PASS');
+  const cases = [...benign.map((result) => ({ result, fold: true })), ...individual.map((result) => ({ result, fold: false }))];
+  data.actions = cases.flatMap(({ result }, i) => [
+    { id: `case-${i}`, parentId: `scope-${i}`, type: 'tool.call', status: 'completed', result },
+    { id: `peer-${i}`, parentId: `scope-${i}`, type: 'search', status: 'completed' },
+  ]);
+  data.details.actionCount = data.actions.length;
+  const before = JSON.stringify(data.actions);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.equal(d.querySelectorAll('#timeline .action-row').length, data.actions.length);
+  for (const [i, { fold }] of cases.entries()) {
+    const row = d.querySelector(`.action-row[data-index="${i * 2}"]`);
+    assert.equal(Boolean(row.closest('.action-group')), fold, `case ${i}: ${JSON.stringify(cases[i].result).slice(0, 120)}`);
+  }
+  assert.equal(JSON.stringify(data.actions), before, 'inspection does not alter canonical evidence');
+});
+
+test('Reading view groups only consecutive eligible completed provider records', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = readingActions();
+  data.details.actionCount = data.actions.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  assert.equal(d.querySelector('#all-actions-toggle').checked, false);
+  assert.equal(d.querySelector('#action-view-label').textContent, 'Reading view');
+  const groups = d.querySelectorAll('#timeline > details.action-group');
+  assert.equal(groups.length, 3, 'only eligible completed runs fold');
+  assert.deepEqual([...groups].map((group) => [...group.querySelectorAll('.action-row')].map((row) => row.dataset.index)), [['1', '2'], ['7', '8'], ['14', '15']]);
+  assert.match(groups[0].querySelector('summary').textContent, /file reading × 1/);
+  assert.match(groups[0].querySelector('summary').textContent, /searches × 1/);
+  assert.match(groups[0].querySelector('summary').textContent, /2 completed provider records · loaded page/);
+  assert.doesNotMatch(groups[0].querySelector('summary').textContent, /verified|passed|success/i);
+  assert.equal(d.querySelectorAll('#timeline > .action-row').length, 10, 'prompts, mutations, verification, failures and unsupported states stay top-level');
+  assert.match(d.querySelector('#action-view-count').textContent, /13 top-level entries from 16 loaded actions/);
+  assert.equal(groups[0].open, false);
+  assert.equal(groups[0].querySelector('summary').tabIndex, 0);
+  for (const [language, view, all, scope] of [
+    ['en', 'Reading view', 'All actions', '2 completed provider records · loaded page'],
+    ['ko', '읽기 보기', '모든 액션', '완료로 보고된 기록 2개 · 로드된 페이지'],
+    ['ja', '読みやすい表示', 'すべてのアクション', '完了と報告された記録2件 · 読み込み済みページ'],
+    ['zh-CN', '阅读视图', '所有操作', '2 条报告为已完成的记录 · 已加载页面'],
+  ]) {
+    d.querySelector('#lang').value = language;
+    d.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.equal(d.querySelector('#action-view-label').textContent, view);
+    assert.equal(d.querySelector('.action-view-toggle span').textContent, all);
+    assert.ok(d.querySelector('.action-group-summary').textContent.includes(scope));
+  }
+});
+
+test('Reading view never joins parent or byte-page boundaries and preserves original cursors', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const actions = [
+    { id: 'same-page-a', parentId: 'parent-a', type: 'file.read', status: 'completed' },
+    { id: 'same-page-b', parentId: 'parent-a', type: 'search', status: 'completed' },
+    { id: 'different-parent', parentId: 'parent-b', type: 'tool.call', status: 'completed' },
+    { id: 'last-first-page', parentId: 'parent-c', type: 'tool.call', status: 'completed' },
+    { id: 'first-second-page', parentId: 'parent-c', type: 'tool.call', status: 'completed' },
+    { id: 'second-second-page', parentId: 'parent-c', type: 'mcp.call', status: 'completed' },
+  ];
+  data.details.actionCount = actions.length;
+  data.actions = (cursor) => cursor === 0
+    ? { items: actions.slice(0, 4), nextCursor: 731, endCursor: 731 }
+    : { items: actions.slice(4), nextCursor: null, endCursor: 1199 };
+  const writes = [];
+  let append;
+  data.configure = (w) => {
+    w.IntersectionObserver = class {
+      constructor(callback) { append = callback; }
+      observe() {}
+      disconnect() {}
+    };
+    Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+
+  const retainedGroup = d.querySelector('#timeline > details.action-group');
+  retainedGroup.open = true;
+  retainedGroup.dispatchEvent(new w.Event('toggle'));
+  const retainedRow = retainedGroup.querySelector('.action-row[data-index="1"]');
+  retainedRow.click();
+  retainedRow.focus();
+  assert.deepEqual([...d.querySelectorAll('#timeline > details.action-group')].map((group) => group.querySelectorAll('.action-row').length), [2]);
+  append([{ isIntersecting: true, target: d.querySelector('.stream-sentinel') }]);
+  await settle();
+  const groups = d.querySelectorAll('#timeline > details.action-group');
+  assert.deepEqual([...groups].map((group) => [...group.querySelectorAll('.action-row')].map((row) => row.dataset.index)), [['0', '1'], ['4', '5']]);
+  assert.equal(groups[0], retainedGroup);
+  assert.equal(groups[0].open, true);
+  assert.match(retainedRow.className, /\bselected\b/);
+  assert.equal(d.activeElement, retainedRow);
+  assert.ok(d.querySelector('#timeline > .action-row[data-index="3"]'), 'the first page tail remains outside the second page group');
+  groups[1].open = true;
+  d.querySelector('.action-row[data-index="5"]').click();
+  d.querySelector('.copy-evidence-link').click();
+  await settle();
+  assert.match(writes[0], /action=second-second-page&actionCursor=731$/);
+});
+
+test('timeline search and active type filters expose matching actions outside groups', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = readingActions().slice(1, 4);
+  data.details.actionCount = data.actions.length;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d, Event } = dom.window;
+
+  assert.equal(d.querySelectorAll('#timeline > details.action-group').length, 1);
+  const search = d.querySelector('#timeline-search');
+  search.value = 'needle';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  assert.equal(d.querySelectorAll('#timeline > details.action-group').length, 0);
+  assert.deepEqual([...d.querySelectorAll('#timeline > .action-row')].map((row) => row.dataset.index), ['0']);
+
+  search.value = '';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  const editFilter = [...d.querySelectorAll('#type-filters button')].find((button) => button.dataset.type === 'file.write');
+  editFilter.click();
+  assert.equal(d.querySelectorAll('#timeline > details.action-group').length, 0);
+  assert.deepEqual([...d.querySelectorAll('#timeline > .action-row')].map((row) => row.dataset.index), ['0', '1']);
+});
+
+test('expanded group, selected action and focus survive locale and All-actions toggles', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = readingActions().slice(1, 3);
+  data.details.actionCount = data.actions.length;
+  data.details.evidence.verification = [{ name: 'Status', value: 'PENDING' }];
+  const firstDetails = data.details;
+  const secondRun = { ...firstDetails.run, id: 'second-reading-run' };
+  data.list.runs.push({ ...secondRun, verification: 'PENDING' });
+  data.list.total = 2;
+  data.details = (id) => ({ ...firstDetails, run: id === secondRun.id ? secondRun : firstDetails.run });
+  let poll;
+  data.configure = (w) => {
+    w.setInterval = (callback, delay) => { if (delay === 5000) poll = callback; return delay; };
+    w.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  let group = d.querySelector('details.action-group');
+  group.open = true;
+  group.dispatchEvent(new w.Event('toggle'));
+  let selected = d.querySelector('.action-row[data-index="1"]');
+  selected.click();
+  selected.focus();
+
+  await poll();
+  assert.equal(d.querySelector('details.action-group'), group);
+  assert.equal(group.open, true);
+  assert.match(selected.className, /\bselected\b/);
+  assert.equal(d.activeElement, selected);
+
+  d.querySelector('#lang').value = 'ko';
+  d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+  group = d.querySelector('details.action-group');
+  selected = d.querySelector('.action-row[data-index="1"]');
+  assert.equal(group.open, true);
+  assert.match(selected.className, /\bselected\b/);
+  assert.equal(d.activeElement, selected);
+  assert.match(d.querySelector('.inspector-title').textContent, /search/);
+
+  const toggle = d.querySelector('#all-actions-toggle');
+  toggle.checked = true;
+  toggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+  selected = d.querySelector('.action-row[data-index="1"]');
+  assert.equal(d.querySelector('details.action-group'), null);
+  assert.deepEqual([...d.querySelectorAll('#timeline > .action-row')].map((row) => row.dataset.index), ['0', '1']);
+  assert.match(selected.className, /\bselected\b/);
+  assert.equal(d.activeElement, selected);
+  assert.equal(d.querySelector('#action-view-label').textContent, '모든 액션');
+
+  toggle.checked = false;
+  toggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+  assert.equal(d.querySelector('details.action-group').open, true);
+  assert.match(d.querySelector('.action-row[data-index="1"]').className, /\bselected\b/);
+  assert.equal(d.activeElement, d.querySelector('.action-row[data-index="1"]'));
+
+  d.querySelector(`[data-run-id="${secondRun.id}"]`).click();
+  await settle();
+  assert.equal(d.querySelector('details.action-group').open, false, 'group expansion does not cross run boundaries');
+  assert.equal(d.querySelector('.action-row.selected'), null);
+});
+
+test('exact action search and history open a beyond-first-page containing group', async (t) => {
+  const data = actionLinkFixture();
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  await openActionHit(w, 1);
+  let selected = d.querySelector('.action-row[data-index="0"]');
+  assert.equal(selected.dataset.index, '0', 'the exact byte page starts a fresh local index');
+  assert.equal(selected.closest('details.action-group').open, true);
+  assert.match(selected.className, /\bselected\b/);
+  assert.equal(d.activeElement, selected);
+  assert.equal(new URLSearchParams(w.location.search).get('actionCursor'), '99234');
+
+  w.history.back();
+  await settle();
+  w.history.forward();
+  await settle();
+  selected = d.querySelector('.action-row[data-index="0"]');
+  assert.equal(selected.closest('details.action-group').open, true);
+  assert.match(selected.className, /\bselected\b/);
+  assert.equal(d.activeElement, selected);
+});
+
 test('a delayed A response cannot overwrite the selected B run', async (t) => {
   const a = fixture('completed', 'pass', 'PASS').details;
   const b = fixture('completed', 'pass', 'PASS').details;
