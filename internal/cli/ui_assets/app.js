@@ -70,6 +70,8 @@
       '{rows} top-level entries from {loaded} loaded events': '로드된 이벤트 {loaded}개에서 최상위 항목 {rows}개',
       '{n} tool records': '도구 기록 {n}개',
       '{n} tool names · loaded page': '도구 이름 {n}종 · 로드된 페이지',
+      '{n} hook lifecycle records': '훅 수명주기 기록 {n}건',
+      'loaded page': '로드된 페이지',
       'Session started': '세션 시작',
       'User request': '사용자 요청',
       'Tool record': '도구 기록',
@@ -407,6 +409,8 @@
       '{rows} top-level entries from {loaded} loaded events': '読み込み済みイベント{loaded}件から最上位項目{rows}件',
       '{n} tool records': 'ツール記録{n}件',
       '{n} tool names · loaded page': 'ツール名{n}種類 · 読み込み済みページ',
+      '{n} hook lifecycle records': 'フック ライフサイクル記録{n}件',
+      'loaded page': '読み込み済みページ',
       'Session started': 'セッション開始',
       'User request': 'ユーザーリクエスト',
       'Tool record': 'ツール記録',
@@ -744,6 +748,8 @@
       '{rows} top-level entries from {loaded} loaded events': '已加载 {loaded} 个事件，显示为 {rows} 个顶层条目',
       '{n} tool records': '{n} 条工具记录',
       '{n} tool names · loaded page': '{n} 种工具名称 · 已加载页面',
+      '{n} hook lifecycle records': '{n} 条钩子生命周期记录',
+      'loaded page': '已加载页面',
       'Session started': '会话开始',
       'User request': '用户请求',
       'Tool record': '工具记录',
@@ -1924,19 +1930,29 @@ function shortID(id) {
     return field ? text(event[field]) : '';
   }
 
-  function eventSummaryEligible(event, index) {
+  // Claude's stream-json emits the lifecycle of agentrec's own hooks and
+  // token-count ticks as `system` records; in the local store they are 87% of
+  // all Claude events. They fold under the same discipline as PostToolUse.
+  const HOOK_LIFECYCLE_SUBTYPES = new Set(['hook_started', 'hook_response', 'hook_progress', 'thinking_tokens']);
+
+  // Returns the fold family a record belongs to, or null when it must stay a
+  // row of its own: 'tool' for PostToolUse spans, 'hook' for hook lifecycle.
+  function eventSummaryFamily(event, index) {
     const cursor = state.streams.events.pageCursors?.[index];
-    return event.hook_event_name === 'PostToolUse'
+    if (!Number.isSafeInteger(cursor) || cursor < 0) return null;
+    if (typeof event.session_id !== 'string' || event.session_id.length === 0) return null;
+    if (event.agentrec_dropped) return null;
+    if (hasStructuredFailure(event) !== false) return null;
+    if (event.hook_event_name === 'PostToolUse'
       && eventType(event) === 'PostToolUse'
       && (!Object.hasOwn(event, 'type') || event.type === 'PostToolUse')
       && typeof event.tool_name === 'string'
-      && event.tool_name.length > 0
-      && typeof event.session_id === 'string'
-      && event.session_id.length > 0
-      && !event.agentrec_dropped
-      && Number.isSafeInteger(cursor)
-      && cursor >= 0
-      && hasStructuredFailure(event) === false;
+      && event.tool_name.length > 0) return 'tool';
+    if (event.type === 'system'
+      && !Object.hasOwn(event, 'hook_event_name')
+      && typeof event.subtype === 'string'
+      && HOOK_LIFECYCLE_SUBTYPES.has(event.subtype)) return 'hook';
+    return null;
   }
 
   function sameEventScope(left, right) {
@@ -1945,24 +1961,34 @@ function shortID(id) {
       && state.streams.events.pageCursors[left] === state.streams.events.pageCursors[right];
   }
 
-  function eventGroup(indexes) {
+  function eventGroup(indexes, family) {
     const first = indexes[0];
     const event = state.streams.events.items[first];
     const id = JSON.stringify([state.streams.events.pageCursors[first], event.session_id || '', first]);
-    const details = node('details', 'action-group event-group');
+    const details = node('details', `action-group event-group${family === 'hook' ? ' hook-group' : ''}`);
     details.dataset.groupId = id;
     details.open = state.expandedEventGroups.has(id);
     const summary = node('summary', 'action-group-summary event-group-summary');
     summary.dataset.groupId = id;
     const counts = new Map();
     for (const index of indexes) {
-      const tool = state.streams.events.items[index].tool_name;
-      counts.set(tool, (counts.get(tool) || 0) + 1);
+      const item = state.streams.events.items[index];
+      const key = family === 'hook' ? item.subtype : item.tool_name;
+      counts.set(key, (counts.get(key) || 0) + 1);
     }
-    summary.append(
-      node('span', 'action-group-kinds', t('{n} tool records', { n: indexes.length })),
-      node('span', 'action-group-meta', t('{n} tool names · loaded page', { n: counts.size }))
-    );
+    if (family === 'hook') {
+      // Subtype tokens verbatim, in order of first appearance; hook names stay in the records.
+      const parts = [...counts].map(([subtype, n]) => `${subtype} ${n}`);
+      summary.append(
+        node('span', 'action-group-kinds', t('{n} hook lifecycle records', { n: indexes.length })),
+        node('span', 'action-group-meta', `${parts.join(' · ')} · ${t('loaded page')}`)
+      );
+    } else {
+      summary.append(
+        node('span', 'action-group-kinds', t('{n} tool records', { n: indexes.length })),
+        node('span', 'action-group-meta', t('{n} tool names · loaded page', { n: counts.size }))
+      );
+    }
     details.append(summary);
     for (const index of indexes) details.append(eventRow(state.streams.events.items[index], index));
     details.addEventListener('toggle', () => { if (details.isConnected) rememberGroup(state.expandedEventGroups, id, details.open); });
@@ -2102,7 +2128,8 @@ function shortID(id) {
     }
     if (streamName === 'events' && state.eventView === 'summary' && !state.query && state.activeTypes.size === 0) {
       for (let index = from; index < stream.items.length;) {
-        if (!eventSummaryEligible(stream.items[index], index)) {
+        const family = eventSummaryFamily(stream.items[index], index);
+        if (!family) {
           const row = eventRow(stream.items[index], index);
           if (row) {
             stream.shown += 1;
@@ -2115,7 +2142,7 @@ function shortID(id) {
         const indexes = [index];
         while (index + indexes.length < stream.items.length) {
           const next = index + indexes.length;
-          if (!eventSummaryEligible(stream.items[next], next) || !sameEventScope(indexes[indexes.length - 1], next)) break;
+          if (eventSummaryFamily(stream.items[next], next) !== family || !sameEventScope(indexes[indexes.length - 1], next)) break;
           indexes.push(next);
         }
         if (indexes.length < 2) {
@@ -2124,7 +2151,7 @@ function shortID(id) {
           timeline.append(row);
           first = first || row;
         } else {
-          const group = eventGroup(indexes);
+          const group = eventGroup(indexes, family);
           stream.shown += 1;
           timeline.append(group);
           first = first || group.querySelector('summary');

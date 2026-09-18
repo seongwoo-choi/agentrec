@@ -125,3 +125,13 @@ The request card shows what was asked; nothing shows what the agent said last. I
 - The card links to the action so the reader can inspect the original record and what came after it; the position is shown so a message followed by more actions is not mistaken for a closing report.
 - Live runs do not show it; the timeline is the live surface.
 - Acceptance: for the real store, the card text equals the last `agent.message` `input.text` in the action stream and its position matches; runs without one show no card; the link opens the same action the timeline shows; EN/KO/JA/ZH; source tests and rendered captures reviewed.
+
+## 16. Folding hook lifecycle records in the event summary
+
+Measured on the local store: across 17 Claude runs, 5,656 of 6,439 provider events (87%) are `system` records with subtype `hook_started`, `hook_response`, `hook_progress` or `thinking_tokens` — the lifecycle of agentrec's own hooks and token-count ticks. In 13 of the 17 runs they are at least half of the stream; the largest run shows 1,691 events of which 1,523 are these. The Event summary of section 10 folds only `PostToolUse`, so on such a run it renders 224 top-level rows, 199 of them this noise, and the reader scrolls past hook bookkeeping to find the conversation.
+
+- The Event summary folds a second family under the same discipline as section 10: consecutive records whose `type` is exactly `system` and whose `subtype` is one of `hook_started`, `hook_response`, `hook_progress`, `thinking_tokens`, within the same loaded page and exact session token. Any other `system` subtype (`init`, `task_started`, `task_notification`, unknown), any record with an explicit error/failure field, and any dropped or incomplete stub stays a separate row, as does everything else.
+- A closed group leads with a neutral count and the subtypes it holds (`412 hook lifecycle records · hook_started 175 · hook_response 175 · …`) in chronological order of first appearance; the `hook_name` values stay in the expanded records and the inspector.
+- Folding never crosses a `PostToolUse` group, a lone row, a page boundary or a session change; chronology is preserved exactly. Original objects, indexes and byte cursors remain the same; All events is unchanged.
+- A group is not an interpretation: it does not say the hooks succeeded, ran in order, or belong to a given tool call.
+- Acceptance: on the real run `20260728T114417.388867000Z-45057bb7` the summary's top-level entry count falls from 224 with the hook rows folded into groups; a `system` `init` record between two runs of hook records keeps them apart; a hook record on the next loaded page starts a new group; the full-view count and every existing event test pass unchanged; the summary line is localized in EN/KO/JA/ZH.

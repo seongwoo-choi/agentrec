@@ -4089,3 +4089,93 @@ test('truncated last message says so and is localized', async (t) => {
   assert.ok(d.querySelector('#reply-truncated'), 'truncation is stated');
   assert.equal(d.querySelector('#reply-truncated').classList.contains('hidden'), false);
 });
+
+// --- Hook lifecycle folding in the event summary (DESIGN.md section 16) ---
+
+test('Event summary folds consecutive system hook lifecycle records and keeps everything else apart', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const hook = (subtype, name, extra = {}) => ({ type: 'system', subtype, hook_name: name, session_id: 's1', ...extra });
+  const first = [
+    { type: 'system', subtype: 'init', session_id: 's1' },
+    hook('hook_started', 'SessionStart:startup'),
+    hook('hook_response', 'SessionStart:startup'),
+    hook('hook_started', 'PreToolUse:Bash'),
+    hook('hook_progress', 'PreToolUse:Bash'),
+    hook('hook_response', 'PreToolUse:Bash'),
+    { type: 'system', subtype: 'thinking_tokens', session_id: 's1', count: 12 },
+    { type: 'assistant', session_id: 's1', message: { content: [{ type: 'text', text: 'working' }] } },
+    hook('hook_started', 'PostToolUse:Bash'),
+    hook('hook_response', 'PostToolUse:Bash', { error: 'hook failed' }),
+    hook('hook_started', 'Stop'),
+    { type: 'system', subtype: 'task_notification', session_id: 's1' },
+    hook('hook_started', 'SessionEnd'),
+  ];
+  const second = [
+    hook('hook_response', 'SessionEnd'),
+    hook('hook_started', 'SessionEnd'),
+    { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Bash' },
+    { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Read' },
+    { type: 'system', subtype: 'hook_started', hook_name: 'Stop', session_id: 's2' },
+  ];
+  data.details.eventCount = first.length + second.length;
+  data.events = (cursor) => cursor === 0
+    ? { items: first, nextCursor: first.length }
+    : { items: second, nextCursor: null };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  d.querySelector('#timeline-tab-events').click();
+  await settle();
+
+  const groups = () => [...d.querySelectorAll('#timeline > details.event-group')];
+  const indexesOf = (group) => [...group.querySelectorAll('.event-row')].map((row) => row.dataset.index);
+  let hookGroups = groups().filter((g) => g.classList.contains('hook-group'));
+  assert.equal(hookGroups.length, 1, 'one hook lifecycle group on the first page');
+  assert.deepEqual(indexesOf(hookGroups[0]), ['1', '2', '3', '4', '5', '6'], 'init before and assistant after keep the span exact; thinking_tokens folds');
+  assert.equal(hookGroups[0].querySelector('.action-group-kinds').textContent, '6 hook lifecycle records');
+  assert.equal(hookGroups[0].querySelector('.action-group-meta').textContent, 'hook_started 2 · hook_response 2 · hook_progress 1 · thinking_tokens 1 · loaded page');
+  assert.doesNotMatch(hookGroups[0].querySelector('summary').textContent, /success|passed|completed|\bok\b/i);
+  assert.doesNotMatch(hookGroups[0].querySelector('summary').textContent, /PreToolUse|SessionStart/, 'hook names stay in the records, not the summary');
+  const lone = [...d.querySelectorAll('#timeline > .event-row')];
+  assert.ok(lone.some((row) => row.dataset.index === '0'), 'system init stays its own row');
+  assert.ok(lone.some((row) => row.dataset.index === '9'), 'a hook record with an error field stays its own row');
+  assert.ok(lone.some((row) => row.dataset.index === '10'), 'a single hook record after the error is not a group');
+  assert.ok(lone.some((row) => row.dataset.index === '11'), 'task_notification stays its own row');
+  assert.ok(lone.some((row) => row.dataset.index === '12'), 'the last record of the page does not fold with the next page');
+  assert.equal(d.querySelectorAll('#timeline .event-row').length, first.length, 'every loaded record is still in the DOM');
+
+  d.querySelector('.stream-tail .load-more').click();
+  await settle();
+  hookGroups = groups().filter((g) => g.classList.contains('hook-group'));
+  assert.equal(hookGroups.length, 2, 'the next page starts its own hook group');
+  assert.deepEqual(indexesOf(hookGroups[1]), ['13', '14'], 'session s2 record and the PostToolUse pair stay out');
+  const toolGroups = groups().filter((g) => !g.classList.contains('hook-group'));
+  assert.equal(toolGroups.length, 1);
+  assert.deepEqual(indexesOf(toolGroups[0]), ['15', '16'], 'PostToolUse folding is unchanged');
+  assert.equal(d.querySelectorAll('#timeline .event-row').length, first.length + second.length);
+
+  hookGroups[0].querySelector('.event-row[data-index="4"]').click();
+  assert.match(d.querySelector('#inspector').textContent, /event #5/);
+  assert.match(d.querySelector('#inspector').textContent, /"hook_name": "PreToolUse:Bash"/, 'the original record is one click away');
+
+  d.querySelector('#all-events-toggle').click();
+  await settle();
+  assert.equal(d.querySelector('details.event-group'), null, 'All events is untouched');
+  assert.equal(d.querySelectorAll('#timeline > .event-row').length, first.length + second.length);
+});
+
+test('hook lifecycle group summary is localized', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const hook = (subtype) => ({ type: 'system', subtype, hook_name: 'Stop', session_id: 's1' });
+  data.events = () => ({ items: [hook('hook_started'), hook('hook_response')], nextCursor: null });
+  data.details.eventCount = 2;
+  const dom = await renderFixture({ ...data, configure: (w) => w.localStorage.setItem('agentrec.lang', 'ko') });
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  d.querySelector('#timeline-tab-events').click();
+  await settle();
+  const summary = d.querySelector('#timeline > details.hook-group summary');
+  assert.ok(summary);
+  assert.equal(summary.querySelector('.action-group-kinds').textContent, '훅 수명주기 기록 2건');
+  assert.match(summary.querySelector('.action-group-meta').textContent, /^hook_started 1 · hook_response 1 · /, 'subtype tokens stay verbatim');
+});
