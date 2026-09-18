@@ -233,6 +233,16 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — the agent's last message beside the request:** The request
+card showed what was asked; nothing showed what the agent said last. A second
+card, **Last message from <provider>**, now sits under the request with the
+provider's own last recorded message, verbatim, collapsed by default. It names
+the message's position among the recorded actions so a message followed by
+more work is not mistaken for a closing report, links to the action in the
+timeline, and states when the stored text was cut at 64 KiB. It is a record,
+not a summary and not a verdict; live runs keep the timeline as their surface.
+Run details carry `lastAgentMessage` for it; no stored record changes.
+
 **Unreleased — skip links:** From a fresh load the first run row was the
 ninth Tab stop. Two skip links now come first, visible only while focused:
 **Skip to run list** and **Skip to run evidence**. Activating one moves focus

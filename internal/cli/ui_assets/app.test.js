@@ -4018,3 +4018,74 @@ test('skip links are localized', async (t) => {
   assert.match(b, /[가-힣]/);
   assert.notEqual(a, b);
 });
+
+// --- The agent's last message beside the request (DESIGN.md section 15) ---
+
+test('run detail shows the last agent message as a disclosure beside the request', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 4;
+  data.details.lastAgentMessage = { actionId: 'm2', position: 3, offset: 0, text: 'Closing report: done.\nSecond line.', truncated: false };
+  data.actions = [
+    { id: 'a1', type: 'file.read', status: 'completed', input: { file_path: 'x' } },
+    { id: 'm1', type: 'agent.message', status: 'completed', input: { text: 'first' } },
+    { id: 'm2', type: 'agent.message', status: 'completed', input: { text: 'Closing report: done.\nSecond line.' } },
+    { id: 'a4', type: 'file.read', status: 'completed', input: { file_path: 'y' } },
+  ];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+
+  const card = d.querySelector('#reply-disclosure');
+  assert.ok(card, 'a last-message disclosure exists');
+  assert.equal(card.tagName, 'DETAILS');
+  assert.equal(card.open, false, 'collapsed like the request card');
+  assert.equal(card.classList.contains('hidden'), false);
+  // Same shape and neighbour as the request card.
+  assert.equal(card.previousElementSibling.id, 'request-disclosure');
+  assert.match(d.querySelector('#reply-preview').textContent, /^Closing report: done\. Second line\./);
+  assert.equal(d.querySelector('#run-reply').textContent, 'Closing report: done.\nSecond line.');
+  // Whose words, and where they sit: not the final action here.
+  const label = d.querySelector('#reply-disclosure .section-label').textContent;
+  assert.match(label, /claude/i, 'label names the provider whose message it is');
+  assert.match(d.querySelector('#reply-position').textContent, /3 of 4/);
+
+  // The link opens the same action the timeline shows.
+  const link = d.querySelector('#reply-action-link');
+  assert.ok(link);
+  link.click();
+  await settle();
+  const selected = d.querySelector('.action-row.selected');
+  assert.ok(selected, 'the linked action is selected in the timeline');
+  assert.equal(selected.dataset.index, '2', 'm2 is the third loaded action');
+  // It went through the same deep-link path search hits use, so the URL is an evidence link.
+  const url = new w.URL(w.location.href);
+  assert.equal(url.searchParams.get('focus'), 'actions');
+  assert.equal(url.searchParams.get('action'), 'm2');
+  assert.equal(url.searchParams.get('actionCursor'), '0');
+});
+
+test('last-message card is absent without one and hidden for live runs', async (t) => {
+  const none = fixture('completed', 'pass', 'PASS');
+  const dom = await renderFixture(none);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('#reply-disclosure').classList.contains('hidden'), true);
+
+  const live = fixture('running', 'running', 'running');
+  live.details.lastAgentMessage = { actionId: 'm1', position: 1, text: 'working…', truncated: false };
+  const liveDom = await renderFixture(live);
+  t.after(() => liveDom.window.close());
+  assert.equal(liveDom.window.document.querySelector('#reply-disclosure').classList.contains('hidden'), true);
+});
+
+test('truncated last message says so and is localized', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 1;
+  data.details.lastAgentMessage = { actionId: 'm1', position: 1, text: 'cut', truncated: true };
+  data.configure = (w) => w.localStorage.setItem('agentrec.lang', 'ko');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.match(d.querySelector('#reply-disclosure .section-label').textContent, /[가-힣]/);
+  assert.ok(d.querySelector('#reply-truncated'), 'truncation is stated');
+  assert.equal(d.querySelector('#reply-truncated').classList.contains('hidden'), false);
+});

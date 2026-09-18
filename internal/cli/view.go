@@ -167,6 +167,18 @@ type viewRunResponse struct {
 	ProviderEvents viewProviderEvents `json:"providerEvents"`
 	Changes        viewChangeSummary  `json:"changes"`
 	Evidence       viewEvidence       `json:"evidence"`
+	// LastAgentMessage is the provider's own last recorded agent.message,
+	// verbatim and bounded; absent when the run has none. It is a record, not
+	// a summary or a verdict.
+	LastAgentMessage *viewLastAgentMessage `json:"lastAgentMessage,omitempty"`
+}
+
+type viewLastAgentMessage struct {
+	ActionID  string `json:"actionId"`
+	Position  int    `json:"position"` // 1-based among recorded actions
+	Offset    int64  `json:"offset"`   // byte offset of the action's line: the page cursor that loads it
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated"`
 }
 
 type viewRunListResponse struct {

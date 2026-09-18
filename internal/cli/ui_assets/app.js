@@ -38,6 +38,14 @@
       'Recorded runs': '기록된 실행',
       'Find a title, run, or project': '제목, 실행 또는 프로젝트 검색',
       Request: '요청',
+      'Last message from {provider}': '{provider}의 마지막 메시지',
+      'the agent': '에이전트',
+      'Show message': '메시지 보기',
+      'Hide message': '메시지 숨기기',
+      'Open in timeline': '타임라인에서 열기',
+      'Action {n} of {total} — the final recorded action': '액션 {n}/{total} — 기록된 마지막 액션',
+      'Action {n} of {total} — {after} recorded after it': '액션 {n}/{total} — 이후 {after}개 더 기록됨',
+      'Shown up to 64 KiB; the full message is in the action record.': '64 KiB까지만 표시됩니다. 전체 메시지는 액션 기록에 있습니다.',
       'Show request': '요청 보기',
       'Hide request': '요청 접기',
       'Loaded-run scope': '로드된 실행 범위',
@@ -367,6 +375,14 @@
       'Recorded runs': '記録された実行',
       'Find a title, run, or project': 'タイトル、実行、プロジェクトを検索',
       Request: 'リクエスト',
+      'Last message from {provider}': '{provider} の最後のメッセージ',
+      'the agent': 'エージェント',
+      'Show message': 'メッセージを表示',
+      'Hide message': 'メッセージを隠す',
+      'Open in timeline': 'タイムラインで開く',
+      'Action {n} of {total} — the final recorded action': 'アクション {n}/{total} — 記録された最後のアクション',
+      'Action {n} of {total} — {after} recorded after it': 'アクション {n}/{total} — この後さらに {after} 件を記録',
+      'Shown up to 64 KiB; the full message is in the action record.': '64 KiB まで表示しています。全文はアクションの記録にあります。',
       'Show request': 'リクエストを表示',
       'Hide request': 'リクエストを隠す',
       'Loaded-run scope': '読み込み済みの範囲',
@@ -696,6 +712,14 @@
       'Recorded runs': '已记录的运行',
       'Find a title, run, or project': '搜索标题、运行或项目',
       Request: '请求',
+      'Last message from {provider}': '{provider} 的最后一条消息',
+      'the agent': '代理',
+      'Show message': '显示消息',
+      'Hide message': '隐藏消息',
+      'Open in timeline': '在时间线中打开',
+      'Action {n} of {total} — the final recorded action': '操作 {n}/{total} — 记录的最后一个操作',
+      'Action {n} of {total} — {after} recorded after it': '操作 {n}/{total} — 之后还记录了 {after} 个',
+      'Shown up to 64 KiB; the full message is in the action record.': '最多显示 64 KiB；完整消息见操作记录。',
       'Show request': '显示请求',
       'Hide request': '隐藏请求',
       'Loaded-run scope': '已加载运行范围',
@@ -2820,6 +2844,34 @@ function shortID(id) {
     $('run-prompt').textContent = prompt;
   }
 
+  // renderReply shows the provider's own last agent.message beside the request:
+  // a verbatim record with its position, never a summary or a verdict. Live runs
+  // keep the timeline as their surface.
+  let replyRunId = '';
+  function renderReply() {
+    const data = state.run;
+    const card = $('reply-disclosure');
+    const message = data.lastAgentMessage;
+    const show = Boolean(message && message.text) && !isLive();
+    card.classList.toggle('hidden', !show);
+    if (!show) return;
+    if (replyRunId !== data.run.id) card.open = false;
+    replyRunId = data.run.id;
+    $('reply-label').textContent = t('Last message from {provider}', { provider: data.run.provider || t('the agent') });
+    const preview = Array.from(message.text.replace(/\s+/g, ' ').trim());
+    $('reply-preview').textContent = preview.slice(0, 160).join('') + (preview.length > 160 ? '…' : '');
+    $('run-reply').textContent = message.text;
+    const total = data.actionCount || 0;
+    $('reply-position').textContent = message.position === total
+      ? t('Action {n} of {total} — the final recorded action', { n: message.position, total })
+      : t('Action {n} of {total} — {after} recorded after it', { n: message.position, total, after: total - message.position });
+    $('reply-truncated').classList.toggle('hidden', !message.truncated);
+    const link = $('reply-action-link');
+    link.dataset.actionId = message.actionId;
+    link.dataset.offset = String(message.offset || 0);
+    link.href = `?run=${encodeURIComponent(data.run.id)}&focus=actions&action=${encodeURIComponent(message.actionId)}&actionCursor=${message.offset || 0}`;
+  }
+
   // renderRunHeader draws everything above the timeline from state.run; a live tick redraws it without touching the timeline.
   function renderRunHeader() {
     const data = state.run;
@@ -2828,6 +2880,7 @@ function shortID(id) {
     $('run-project').textContent = run.project || t('unknown');
     renderRunIdentity();
     renderRequest();
+    renderReply();
     $('action-count').textContent = String(data.actionCount || 0);
     // A language switch re-renders the run without refetching its streams:
     // a change count already loaded is kept, not zeroed.
@@ -4211,6 +4264,15 @@ function shortID(id) {
     }
   });
   $('run-search').addEventListener('input', changeRunFilters);
+  // The last-message card links to its action through the same deep-link path
+  // search hits use: the server's byte offset is the page cursor, so the action
+  // is reached even when it sits beyond the pages loaded so far.
+  $('reply-action-link').addEventListener('click', (event) => {
+    event.preventDefault();
+    const { actionId, offset } = event.currentTarget.dataset;
+    if (!actionId || !state.run) return;
+    navigateRun(state.run.run.id, Number(offset), 'push', '', actionId);
+  });
   // Skip links: the browser scrolls to the fragment, but focus must move too so
   // the next Tab continues from the target rather than from the top.
   for (const link of document.querySelectorAll('a.skip-link')) {

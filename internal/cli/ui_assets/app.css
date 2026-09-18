@@ -194,6 +194,11 @@ h1 { margin: 6px 0; font: 600 24px/1.35 var(--sans); letter-spacing: -.015em; ov
 .request-card[open] .request-expand { display: none; }
 .request-card[open] .request-collapse { display: inline; }
 .request-card pre { margin: 0; padding: 0 0 12px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.6 var(--sans); max-height: 240px; overflow: auto; }
+/* the agent's last message: same card as the request, a record not a verdict */
+.reply-card .section-label { white-space: nowrap; }
+.reply-meta { margin: 0 0 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.reply-meta a { color: var(--accent); }
+.reply-truncated { display: block; margin-top: 4px; color: var(--quiet); }
 
 /* one summary strip: process and verification lead; counts stay subordinate */
 .metrics { display: grid; grid-template-columns: repeat(9,minmax(0,1fr)); margin-bottom: 14px; border: 1px solid var(--border); background: var(--panel); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; }

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2291,5 +2292,151 @@ func TestViewRunSummaryCarriesDurationLikeTheDetailPage(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "durationMillis") {
 		t.Errorf("agentrec list JSON schema gained durationMillis; it must stay unchanged: %s", raw)
+	}
+}
+
+func TestViewRunDetailCarriesLastAgentMessage(t *testing.T) {
+	root := home(t)
+	startedAt := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	msg := func(id, text string, at time.Time) action.Action {
+		return action.Action{ID: id, Type: action.TypeAgentMessage, Provider: "claude", Assurance: action.AssuranceProviderReported,
+			StartedAt: at, Status: "completed", Input: json.RawMessage(`{"text":` + strconv.Quote(text) + `}`)}
+	}
+
+	// Run A: two messages, the last one followed by a further action.
+	a, err := storage.Create(root, "20260918T120000.000000000Z-aaaaaaaa", storage.Manifest{Provider: "claude", CWD: "/tmp", StartedAt: startedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, act := range []action.Action{readAction(startedAt), msg("m1", "first", startedAt.Add(2*time.Second)), msg("m2", "Closing report: done.", startedAt.Add(3*time.Second)), readAction(startedAt.Add(4 * time.Second))} {
+		if err := a.WriteAction(act); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.WriteProcessResult(processResultJSON(t, startedAt, "completed")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Finalize(storage.Finalization{EndedAt: startedAt.Add(5 * time.Second), ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	// Run B: no agent message at all.
+	writeRun(t, root, "20260918T130000.000000000Z-bbbbbbbb", "claude", startedAt.Add(time.Hour), "completed")
+
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { _ = handler.Close() })
+
+	var withMsg struct {
+		ActionCount      int `json:"actionCount"`
+		LastAgentMessage *struct {
+			ActionID  string `json:"actionId"`
+			Position  int    `json:"position"`
+			Offset    int64  `json:"offset"`
+			Text      string `json:"text"`
+			Truncated bool   `json:"truncated"`
+		} `json:"lastAgentMessage"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/20260918T120000.000000000Z-aaaaaaaa", &withMsg)
+	if withMsg.LastAgentMessage == nil {
+		t.Fatal("run with agent messages has no lastAgentMessage")
+	}
+	got := withMsg.LastAgentMessage
+	// The offset is a page cursor: the page it opens begins with the action.
+	var page struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	var snap struct {
+		SnapshotID string `json:"snapshotId"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/20260918T120000.000000000Z-aaaaaaaa", &snap)
+	viewJSONRequest(t, handler, fmt.Sprintf("/api/snapshots/%s/actions?cursor=%d", snap.SnapshotID, got.Offset), &page)
+	if len(page.Items) == 0 || page.Items[0].ID != "m2" {
+		t.Errorf("page at offset %d starts with %+v, want m2", got.Offset, page.Items)
+	}
+	if got.ActionID != "m2" || got.Text != "Closing report: done." || got.Truncated {
+		t.Errorf("lastAgentMessage = %+v, want the last agent.message verbatim", got)
+	}
+	// 1-based position among all recorded actions; here the 3rd of 4, so a reader
+	// can tell it was followed by more work.
+	if got.Position != 3 || withMsg.ActionCount != 4 {
+		t.Errorf("position = %d of %d, want 3 of 4", got.Position, withMsg.ActionCount)
+	}
+
+	var without struct {
+		LastAgentMessage *json.RawMessage `json:"lastAgentMessage"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/20260918T130000.000000000Z-bbbbbbbb", &without)
+	if without.LastAgentMessage != nil {
+		t.Errorf("run without agent messages must omit lastAgentMessage, got %s", *without.LastAgentMessage)
+	}
+}
+
+func TestViewLastAgentMessageIsClearedByAnUnreadableLaterOne(t *testing.T) {
+	root := home(t)
+	startedAt := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	b, err := storage.Create(root, "20260918T120000.000000000Z-dddddddd", storage.Manifest{Provider: "codex", CWD: "/tmp", StartedAt: startedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readable := action.Action{ID: "m1", Type: action.TypeAgentMessage, Provider: "codex", Assurance: action.AssuranceProviderReported, StartedAt: startedAt, Status: "completed", Input: json.RawMessage(`{"text":"earlier"}`)}
+	// A later agent.message whose input is null (as older codex recordings
+	// wrote) must not let the earlier one pose as the last message.
+	unreadable := action.Action{ID: "m2", Type: action.TypeAgentMessage, Provider: "codex", Assurance: action.AssuranceProviderReported, StartedAt: startedAt.Add(time.Second), Status: "completed", Input: json.RawMessage(`null`)}
+	for _, act := range []action.Action{readable, unreadable} {
+		if err := b.WriteAction(act); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: startedAt.Add(2 * time.Second), ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var out struct {
+		ActionCount      int              `json:"actionCount"`
+		LastAgentMessage *json.RawMessage `json:"lastAgentMessage"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/20260918T120000.000000000Z-dddddddd", &out)
+	if out.ActionCount != 2 {
+		t.Errorf("actionCount = %d, want 2: the unreadable message still counts as an action", out.ActionCount)
+	}
+	if out.LastAgentMessage != nil {
+		t.Errorf("lastAgentMessage must be absent when the last one is unreadable, got %s", *out.LastAgentMessage)
+	}
+}
+
+func TestViewLastAgentMessageIsBounded(t *testing.T) {
+	root := home(t)
+	startedAt := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	long := strings.Repeat("ん", 70*1024) // 3 bytes each: well over 64 KiB
+	b, err := storage.Create(root, "20260918T120000.000000000Z-cccccccc", storage.Manifest{Provider: "claude", CWD: "/tmp", StartedAt: startedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := action.Action{ID: "big", Type: action.TypeAgentMessage, Provider: "claude", Assurance: action.AssuranceProviderReported, StartedAt: startedAt, Status: "completed", Input: json.RawMessage(`{"text":` + strconv.Quote(long) + `}`)}
+	if err := b.WriteAction(act); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: startedAt.Add(time.Second), ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var out struct {
+		LastAgentMessage struct {
+			Text      string `json:"text"`
+			Truncated bool   `json:"truncated"`
+		} `json:"lastAgentMessage"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/20260918T120000.000000000Z-cccccccc", &out)
+	if !out.LastAgentMessage.Truncated {
+		t.Fatal("oversize message must be marked truncated")
+	}
+	if n := len(out.LastAgentMessage.Text); n > 64*1024 || n == 0 {
+		t.Errorf("truncated text is %d bytes, want 0 < n <= 64 KiB", n)
+	}
+	if !utf8.ValidString(out.LastAgentMessage.Text) {
+		t.Error("truncation split a UTF-8 sequence")
 	}
 }
