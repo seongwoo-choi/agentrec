@@ -42,6 +42,7 @@
       'Hide request': '요청 접기',
       'Loaded-run scope': '로드된 실행 범위',
       'No recorded request.': '기록된 요청이 없습니다.',
+      'Payload exceeds this browser’s formatting limits. Original recorded evidence is unchanged.': '이 브라우저의 표시 한도를 초과했습니다. 기록 원본은 변경되지 않았습니다.',
       Actions: '액션',
       'Reading view': '읽기 보기',
       'commands': '명령', 'tool calls': '도구 호출', 'file reading': '파일 읽기', 'searches': '검색', 'MCP calls': 'MCP 호출', 'web fetching': '웹 가져오기',
@@ -339,6 +340,7 @@
       'Hide request': 'リクエストを隠す',
       'Loaded-run scope': '読み込み済みの範囲',
       'No recorded request.': '記録されたリクエストはありません。',
+      'Payload exceeds this browser’s formatting limits. Original recorded evidence is unchanged.': 'このブラウザーでの表示上限を超えています。記録された元の証拠は変更されていません。',
       Actions: 'アクション',
       'Reading view': '読みやすい表示',
       'commands': 'コマンド', 'tool calls': 'ツール呼び出し', 'file reading': 'ファイル読み取り', 'searches': '検索', 'MCP calls': 'MCP 呼び出し', 'web fetching': 'ウェブ取得',
@@ -636,6 +638,7 @@
       'Hide request': '隐藏请求',
       'Loaded-run scope': '已加载运行范围',
       'No recorded request.': '没有记录的请求。',
+      'Payload exceeds this browser’s formatting limits. Original recorded evidence is unchanged.': '内容超出此浏览器的显示限制。原始证据记录未被修改。',
       Actions: '操作',
       'Reading view': '阅读视图',
       'commands': '命令', 'tool calls': '工具调用', 'file reading': '文件读取', 'searches': '搜索', 'MCP calls': 'MCP 调用', 'web fetching': '网页获取',
@@ -2125,7 +2128,16 @@ function shortID(id) {
   function addPayload(holder, label, value) {
     if (value === undefined || value === null || value === '') return;
     holder.append(node('div', 'payload-label', t(label)));
-    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    let text;
+    try {
+      text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      const warning = node('p', 'warning payload-format-warning', t('Payload exceeds this browser’s formatting limits. Original recorded evidence is unchanged.'));
+      warning.setAttribute('role', 'alert');
+      holder.append(warning);
+      return;
+    }
     holder.append(node('pre', 'payload', text));
   }
 

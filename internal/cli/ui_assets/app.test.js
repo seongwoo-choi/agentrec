@@ -2739,6 +2739,49 @@ test('Reading robustness preserves scalar evidence and inclusive inspection budg
   assert.equal(JSON.stringify(data.actions), before, 'inspection does not alter canonical evidence');
 });
 
+test('payload formatting limits are explicit and preserve subsequent evidence', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const payload = { answer: 42 }, errors = [];
+  data.actions = [{ id: 'limited', type: 'mcp.call', status: 'unknown', result: payload }, { id: 'after', type: 'file.read', status: 'completed', input: { path: 'after.md' } }];
+  data.details.actionCount = data.actions.length;
+  data.configure = (w) => {
+    w.addEventListener('error', (e) => { errors.push(e.message); e.preventDefault(); });
+    const original = w.JSON.stringify;
+    w.JSON.stringify = (value, ...args) => { if (value === payload) throw new w.RangeError('synthetic engine formatting limit'); return original(value, ...args); };
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  d.querySelector('.action-row[data-index="0"]').click();
+  for (const [lang, message] of [['en', 'Original recorded evidence is unchanged.'], ['ko', '기록 원본은 변경되지 않았습니다.'], ['ja', '記録された元の証拠は変更されていません。'], ['zh-CN', '原始证据记录未被修改。']]) {
+    d.querySelector('#lang').value = lang;
+    d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+    const warning = d.querySelector('.payload-format-warning');
+    assert.ok(warning, lang);
+    assert.equal(warning.getAttribute('role'), 'alert');
+    assert.ok(warning.textContent.includes(message), lang);
+  }
+  assert.deepEqual(errors, []);
+  assert.deepEqual(payload, { answer: 42 });
+  d.querySelector('.action-row[data-index="1"]').click();
+  assert.match(d.querySelector('#inspector').textContent, /after\.md/);
+  assert.equal(d.querySelector('.payload-format-warning'), null);
+});
+
+test('unexpected payload serialization errors are not disguised as formatting limits', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS'), payload = { answer: 42 }, errors = [];
+  data.actions = [{ id: 'unexpected', type: 'mcp.call', status: 'unknown', result: payload }];
+  data.configure = (w) => {
+    w.addEventListener('error', (e) => { errors.push(e.message); e.preventDefault(); });
+    const original = w.JSON.stringify;
+    w.JSON.stringify = (value, ...args) => { if (value === payload) throw new w.Error('synthetic unexpected serialization error'); return original(value, ...args); };
+  };
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  dom.window.document.querySelector('.action-row').click();
+  assert.deepEqual(errors, ['synthetic unexpected serialization error']);
+  assert.equal(dom.window.document.querySelector('.payload-format-warning'), null);
+});
+
 test('Reading view groups only consecutive eligible completed provider records', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.actions = readingActions();
