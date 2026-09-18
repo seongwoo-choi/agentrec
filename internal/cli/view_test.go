@@ -1541,7 +1541,7 @@ func TestViewChangesUIUsesSnapshotBackedChangeAndPatchViews(t *testing.T) {
 			"Could not load",
 			"event.preventDefault()",
 		},
-		"ui_assets/app.css": {".change-row", ".diff-patch", ".metric-detail", ".metric-primary", "repeat(9,minmax(0,1fr))", ".sr-only", "overflow-wrap:anywhere"},
+		"ui_assets/app.css": {".change-row", ".diff-patch", ".metric-detail", ".metric-primary", "repeat(4,minmax(0,1fr))", ".sr-only", "overflow-wrap:anywhere"},
 	}
 	for name, markers := range checks {
 		raw, err := viewAssets.ReadFile(name)

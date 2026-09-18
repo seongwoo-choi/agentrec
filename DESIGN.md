@@ -145,3 +145,13 @@ Measured on the local store: every one of the 65 codex `file.edit` actions carri
 - Search still matches the whole command text, as before. The inspector, the Changes tab, canonical stored records and the CLI are untouched.
 - This is a reading aid, not a claim that the patch applied: status, exit and the Changes tab remain the evidence.
 - Acceptance: a fixture patch with two `Update File` headers and one `Add File` header renders those three headers in order as the row summary; a `command` that does not begin with `*** Begin Patch` is unchanged; on the real store, every codex `file.edit` row names at least one file.
+
+## 18. A compact summary strip
+
+Measured at 1440×900 on the local store: the summary grid above the timeline is laid out in nine columns of which three are always empty, and two of its six cards — Normalized actions and Provider events — repeat the counts already printed in the tab labels directly below (`Actions 42 · Changes 6 · Provider events 44`). At 375 px the grid is 346 px tall and the first timeline row lands at y ≈ 2052, two and a half screens down.
+
+- The summary keeps four cards: Process outcome, Verification verdict, Repository evidence, Warnings. The two count cards are removed; their numbers remain in the tab labels, which stay the canonical place for them.
+- The strip lays the cards out in a four-column grid on desktop and two columns at 375 px, with the same border, tone classes and text. No card, label, tone or detail sentence changes; the failure triage, evidence sections and tests that read them are untouched.
+- Nothing is folded or hidden: this is a reduction of duplication and empty space, not a disclosure.
+- Measured effect, stated plainly: at 375 px the strip shrinks from 346 px to 286 px (two columns; the two dropped cards were one full row) and the first timeline row rises by those 60 px. At 1440 the strip was already a single row, so its height (103–137 px) and the first-row position do not change; the gain there is the three permanently empty columns and two duplicate numbers, not vertical space. The remaining desktop stack above the first row — top bar 52, header 111, failure triage 131 on failed runs, request 44, reply 44, strip 103, toolbar 51, filter row 69 — is a separate question for a later cycle.
+- Acceptance: the strip renders exactly the four cards with their current labels; the tab labels still carry the action, change and event counts; `Warnings` keeps its `warn` tone when the count is positive; the desktop grid has four columns with no empty tracks; at 375 the strip is two columns and 60 px shorter on the measured run.

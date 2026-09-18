@@ -1434,7 +1434,7 @@ test('polish layout keeps row contents uncompressed and request disclosure inlin
   assert.match(css, /\.run-list\s*\{[^}]*grid-auto-rows:\s*max-content/);
   assert.match(css, /\.request-card summary\s*\{[^}]*display:\s*flex/);
   assert.match(css, /#run-count\s*\{[^}]*word-break:\s*keep-all/);
-  assert.match(css, /\.metrics\s*\{[^}]*repeat\(9,minmax\(0,1fr\)\)/);
+  assert.match(css, /\.metrics\s*\{[^}]*repeat\(4,minmax\(0,1fr\)\)/);
 });
 
 // JSDOM has no layout engine or responsive media evaluation. Flatten only the
@@ -4245,4 +4245,24 @@ test('a codex apply_patch row lists its file headers instead of the patch preamb
   await new Promise((resolve) => setTimeout(resolve, 250)); // past the 180 ms debounce
   await settle();
   assert.deepEqual([...d.querySelectorAll('.action-row')].map((row) => row.dataset.index), ['0']);
+});
+
+// --- A compact summary strip (DESIGN.md section 18) ---
+
+test('the summary strip keeps four cards and leaves the counts to the tab labels', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 42;
+  data.details.eventCount = 44;
+  data.details.run.warningCount = 2;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  const labels = [...d.querySelectorAll('#metrics .metric .metric-label')].map((n) => n.textContent);
+  assert.deepEqual(labels, ['Process outcome', 'Verification verdict', 'Repository evidence', 'Warnings']);
+  assert.match(d.querySelector('#timeline-tab-actions').textContent, /Actions\s+42/);
+  assert.match(d.querySelector('#timeline-tab-events').textContent, /Provider events\s+44/);
+  const warnings = metricByLabel(d, 'Warnings');
+  assert.match(warnings.className, /\bwarn\b/);
+  assert.equal(warnings.querySelector('.metric-value').textContent, '2');
+  assert.match(css, /^\.metrics\s*\{[^}]*grid-template-columns:\s*repeat\(4,/m, 'four columns fill the strip on desktop');
 });
