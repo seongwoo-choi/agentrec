@@ -135,8 +135,11 @@ html:lang(zh-CN) :is(.run-kicker, .run-verdict-kind, .failure-triage-kind, .spea
 .warning { flex-shrink: 0; margin: 12px 4px 0; padding: 8px 10px; border: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn); border-radius: 8px; font-size: 12px; line-height: 1.45; }
 
 /* workspace */
-.workspace { min-width: 0; overflow: auto; padding: 24px 28px 48px; }
-.run-view { max-width: 1360px; margin: 0 auto; }
+.workspace { min-width: 0; overflow: auto; padding: 24px 28px 48px; display: flex; flex-direction: column; }
+.run-view { max-width: 1360px; margin: 0 auto; width: 100%; }
+/* The run view and its grid fill the workspace so the panels take the height left below the context, not a guessed 340px. */
+#run-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.workspace-empty, #run-overview { flex: none; }
 .workspace-empty { max-width: 520px; margin: 18vh auto 0; text-align: center; color: var(--muted); }
 .workspace-empty h2 { margin: 0 0 8px; color: var(--text); font-size: 18px; font-weight: 600; }
 .workspace-empty p { margin: 0; font-size: 14px; line-height: 1.55; }
@@ -212,8 +215,8 @@ h1 { margin: 6px 0; font: 600 24px/1.35 var(--sans); letter-spacing: -.015em; ov
 .metric-detail { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; word-break: keep-all; }
 
 /* timeline + inspector panels */
-.content-grid { display: grid; grid-template-columns: minmax(0,1.75fr) minmax(300px,.8fr); gap: 14px; }
-.timeline-panel, .inspector-panel { display: flex; flex-direction: column; min-height: 0; height: clamp(520px, calc(100vh - 340px), 900px); border: 1px solid var(--border); background: var(--panel); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; }
+.content-grid { display: grid; grid-template-columns: minmax(0,1.75fr) minmax(300px,.8fr); gap: 14px; flex: 1; min-height: 0; }
+.timeline-panel, .inspector-panel { display: flex; flex-direction: column; min-height: 320px; border: 1px solid var(--border); background: var(--panel); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; }
 .panel-toolbar { flex-shrink: 0; min-height: 50px; border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; }
 .tabs { display: flex; gap: 2px; height: 50px; }
 .tab { position: relative; border: 0; background: transparent; color: var(--muted); font-size: 13px; font-weight: 500; padding: 0 12px; }

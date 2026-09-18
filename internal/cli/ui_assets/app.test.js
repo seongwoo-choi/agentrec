@@ -4266,3 +4266,17 @@ test('the summary strip keeps four cards and leaves the counts to the tab labels
   assert.equal(warnings.querySelector('.metric-value').textContent, '2');
   assert.match(css, /^\.metrics\s*\{[^}]*grid-template-columns:\s*repeat\(4,/m, 'four columns fill the strip on desktop');
 });
+
+// --- The timeline panel fits the screen it is on (DESIGN.md section 19) ---
+
+test('desktop panels flex to the space left below the run context instead of guessing 340px', () => {
+  // JSDOM has no layout; the contract is pinned in the stylesheet and measured in Chrome (DESIGN.md section 19).
+  const desktop = css.slice(0, css.indexOf('@media (max-width: 1023px)'));
+  assert.match(desktop, /^\.workspace\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column/m, 'the workspace is a column flex container');
+  assert.match(desktop, /^#run-view\s*\{[^}]*flex:\s*1;[^}]*min-height:\s*0/m, 'the run view fills it');
+  assert.match(desktop, /^\.content-grid\s*\{[^}]*flex:\s*1;[^}]*min-height:\s*0/m, 'the content grid fills the run view');
+  assert.match(desktop, /^\.timeline-panel, \.inspector-panel\s*\{[^}]*min-height:\s*320px/m, 'a 320px floor');
+  assert.doesNotMatch(desktop, /clamp\(520px, calc\(100vh - 340px\)/, 'the fixed guess is gone');
+  const narrow = css.slice(css.indexOf('@media (max-width: 1023px)'));
+  assert.match(narrow, /\.timeline-panel, \.inspector-panel\s*\{\s*height:\s*min\(70vh, 640px\);?\s*\}/, 'narrow layouts keep their height');
+});
