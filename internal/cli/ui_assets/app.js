@@ -8,7 +8,7 @@
   const MAX_EXPANDED_ACTION_GROUPS = 250;
   let earlierRunsExpanded = false;
   let requestRunId = '';
-  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, mode: 'actions', actionView: 'reading', expandedActionGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -50,7 +50,24 @@
       '{rows} top-level entries from {loaded} loaded actions': '로드된 액션 {loaded}개에서 최상위 항목 {rows}개',
       '{n} completed provider records · loaded page': '완료로 보고된 기록 {n}개 · 로드된 페이지',
       Changes: '변경',
+      'Folder view': '폴더 보기',
+      'All files': '모든 파일',
+      'Repository root': '저장소 루트',
+      '{n} loaded files': '로드된 파일 {n}개',
+      '{folders} folders from {loaded} loaded changes': '로드된 변경 {loaded}개를 폴더 {folders}개로 표시',
+      '{loaded} loaded files': '로드된 파일 {loaded}개',
       'Provider events': '프로바이더 이벤트',
+      'Event summary': '이벤트 요약',
+      'All events': '모든 이벤트',
+      '{rows} top-level entries from {loaded} loaded events': '로드된 이벤트 {loaded}개에서 최상위 항목 {rows}개',
+      '{n} tool records': '도구 기록 {n}개',
+      '{n} tool names · loaded page': '도구 이름 {n}종 · 로드된 페이지',
+      'Session started': '세션 시작',
+      'User request': '사용자 요청',
+      'Tool record': '도구 기록',
+      'Tool failure': '도구 실패',
+      'Response stopped': '응답 중지',
+      'Session ended': '세션 종료',
       'Filter timeline': '타임라인 필터',
       'Evidence inspector': '증거 인스펙터',
       'Select an action, change, or provider event to inspect its sanitized evidence.': '액션, 변경, 프로바이더 이벤트를 선택하면 정제된 증거를 확인할 수 있습니다.',
@@ -348,7 +365,24 @@
       '{rows} top-level entries from {loaded} loaded actions': '読み込み済みアクション{loaded}件から最上位項目{rows}件',
       '{n} completed provider records · loaded page': '完了と報告された記録{n}件 · 読み込み済みページ',
       Changes: '変更',
+      'Folder view': 'フォルダー表示',
+      'All files': 'すべてのファイル',
+      'Repository root': 'リポジトリルート',
+      '{n} loaded files': '読み込み済みファイル{n}件',
+      '{folders} folders from {loaded} loaded changes': '読み込み済み変更{loaded}件を{folders}フォルダーで表示',
+      '{loaded} loaded files': '読み込み済みファイル{loaded}件',
       'Provider events': 'プロバイダーイベント',
+      'Event summary': 'イベント概要',
+      'All events': 'すべてのイベント',
+      '{rows} top-level entries from {loaded} loaded events': '読み込み済みイベント{loaded}件から最上位項目{rows}件',
+      '{n} tool records': 'ツール記録{n}件',
+      '{n} tool names · loaded page': 'ツール名{n}種類 · 読み込み済みページ',
+      'Session started': 'セッション開始',
+      'User request': 'ユーザーリクエスト',
+      'Tool record': 'ツール記録',
+      'Tool failure': 'ツール失敗',
+      'Response stopped': '応答停止',
+      'Session ended': 'セッション終了',
       'Filter timeline': 'タイムラインを絞り込む',
       'Evidence inspector': '証跡インスペクター',
       'Select an action, change, or provider event to inspect its sanitized evidence.': 'アクション、変更、プロバイダーイベントを選択すると、サニタイズ済みの証跡を確認できます。',
@@ -646,7 +680,24 @@
       '{rows} top-level entries from {loaded} loaded actions': '已加载 {loaded} 个操作，显示为 {rows} 个顶层条目',
       '{n} completed provider records · loaded page': '{n} 条报告为已完成的记录 · 已加载页面',
       Changes: '变更',
+      'Folder view': '文件夹视图',
+      'All files': '所有文件',
+      'Repository root': '仓库根目录',
+      '{n} loaded files': '已加载 {n} 个文件',
+      '{folders} folders from {loaded} loaded changes': '已加载 {loaded} 个变更，分为 {folders} 个文件夹',
+      '{loaded} loaded files': '已加载 {loaded} 个文件',
       'Provider events': '提供方事件',
+      'Event summary': '事件摘要',
+      'All events': '所有事件',
+      '{rows} top-level entries from {loaded} loaded events': '已加载 {loaded} 个事件，显示为 {rows} 个顶层条目',
+      '{n} tool records': '{n} 条工具记录',
+      '{n} tool names · loaded page': '{n} 种工具名称 · 已加载页面',
+      'Session started': '会话开始',
+      'User request': '用户请求',
+      'Tool record': '工具记录',
+      'Tool failure': '工具失败',
+      'Response stopped': '响应停止',
+      'Session ended': '会话结束',
       'Filter timeline': '筛选时间线',
       'Evidence inspector': '证据检视器',
       'Select an action, change, or provider event to inspect its sanitized evidence.': '选择一个操作、变更或提供方事件即可查看其脱敏后的证据。',
@@ -1126,6 +1177,7 @@ function shortID(id) {
   const EMPTY_WORD = { Verification: 'NOT RUN', 'Repository delta': 'NOT RECORDED' };
   const GROUP_KIND_LABELS = { 'shell.exec': 'commands', 'tool.call': 'tool calls', 'file.read': 'file reading', search: 'searches', 'mcp.call': 'MCP calls', 'web.fetch': 'web fetching' };
   const TYPE_LABELS = { 'user.prompt': 'prompt', 'agent.message': 'reply' };
+  const EVENT_TYPE_LABELS = { SessionStart: 'Session started', UserPromptSubmit: 'User request', PostToolUse: 'Tool record', PostToolUseFailure: 'Tool failure', Stop: 'Response stopped', SessionEnd: 'Session ended' };
 
   function humanAttribution(raw, provider) {
     const known = ATTRIBUTIONS[raw];
@@ -1311,6 +1363,7 @@ function shortID(id) {
       if (changedFile) {
         const row = Array.from(document.querySelectorAll('.change-row')).find((item) => item.dataset.path === changedFile.path);
         if (row) {
+          revealGroupedRow(row);
           row.click();
           row.scrollIntoView({ block: 'center' });
           row.focus({ preventScroll: true });
@@ -1629,6 +1682,11 @@ function shortID(id) {
     while (state.expandedActionGroups.size > MAX_EXPANDED_ACTION_GROUPS) state.expandedActionGroups.delete(state.expandedActionGroups.values().next().value);
   }
 
+  function rememberGroup(groups, id, open) {
+    if (open) groups.add(id); else groups.delete(id);
+    while (groups.size > MAX_EXPANDED_ACTION_GROUPS) groups.delete(groups.values().next().value);
+  }
+
   function actionGroup(indexes, byID) {
     const id = actionGroupID(indexes);
     const details = node('details', 'action-group');
@@ -1653,10 +1711,16 @@ function shortID(id) {
   }
 
   function revealActionRow(row) {
+    revealGroupedRow(row);
+  }
+
+  function revealGroupedRow(row) {
     const group = row && row.closest('details.action-group');
     if (!group || group.open) return;
     group.open = true;
-    rememberActionGroup(group.dataset.groupId, true);
+    if (group.classList.contains('change-folder-group')) rememberGroup(state.expandedChangeFolders, group.dataset.groupId, true);
+    else if (group.classList.contains('event-group')) rememberGroup(state.expandedEventGroups, group.dataset.groupId, true);
+    else rememberActionGroup(group.dataset.groupId, true);
   }
 
   function renderTypeFilters(items, typeOf) {
@@ -1702,6 +1766,51 @@ function shortID(id) {
     return field ? text(event[field]) : '';
   }
 
+  function eventSummaryEligible(event, index) {
+    const cursor = state.streams.events.pageCursors?.[index];
+    return event.hook_event_name === 'PostToolUse'
+      && eventType(event) === 'PostToolUse'
+      && (!Object.hasOwn(event, 'type') || event.type === 'PostToolUse')
+      && typeof event.tool_name === 'string'
+      && event.tool_name.length > 0
+      && typeof event.session_id === 'string'
+      && event.session_id.length > 0
+      && !event.agentrec_dropped
+      && Number.isSafeInteger(cursor)
+      && cursor >= 0
+      && hasStructuredFailure(event) === false;
+  }
+
+  function sameEventScope(left, right) {
+    const items = state.streams.events.items;
+    return (items[left].session_id || '') === (items[right].session_id || '')
+      && state.streams.events.pageCursors[left] === state.streams.events.pageCursors[right];
+  }
+
+  function eventGroup(indexes) {
+    const first = indexes[0];
+    const event = state.streams.events.items[first];
+    const id = JSON.stringify([state.streams.events.pageCursors[first], event.session_id || '', first]);
+    const details = node('details', 'action-group event-group');
+    details.dataset.groupId = id;
+    details.open = state.expandedEventGroups.has(id);
+    const summary = node('summary', 'action-group-summary event-group-summary');
+    summary.dataset.groupId = id;
+    const counts = new Map();
+    for (const index of indexes) {
+      const tool = state.streams.events.items[index].tool_name;
+      counts.set(tool, (counts.get(tool) || 0) + 1);
+    }
+    summary.append(
+      node('span', 'action-group-kinds', t('{n} tool records', { n: indexes.length })),
+      node('span', 'action-group-meta', t('{n} tool names · loaded page', { n: counts.size }))
+    );
+    details.append(summary);
+    for (const index of indexes) details.append(eventRow(state.streams.events.items[index], index));
+    details.addEventListener('toggle', () => { if (details.isConnected) rememberGroup(state.expandedEventGroups, id, details.open); });
+    return details;
+  }
+
   // ── Infinite scroll ───────────────────────────────────────────────────────
   // The tail of the timeline holds a sentinel; when it enters the scroll container the next page is appended.
   // ponytail: one observer for the one scroll container; every tail render re-observes a fresh sentinel, which also
@@ -1717,6 +1826,9 @@ function shortID(id) {
     loadStreamPage(streamName, stream.nextCursor, true, state.loadGeneration, manual);
   }
 
+  const groupedStream = (streamName) => (streamName === 'changes' && state.changeView === 'folders')
+    || (streamName === 'events' && state.eventView === 'summary');
+
   function renderTail(streamName) {
     const timeline = $('timeline');
     const stream = state.streams[streamName];
@@ -1727,20 +1839,24 @@ function shortID(id) {
     if (stream.loading) {
       tail.append(node('div', 'timeline-note', t('Loading…')));
     } else if (stream.nextCursor !== null) {
-      const sentinel = node('div', 'stream-sentinel');
-      sentinel.dataset.stream = streamName;
       const more = node('button', 'load-more', t('Load more'));
       more.type = 'button';
       more.addEventListener('click', () => loadMore(streamName, true));
-      // The button is the fallback: no IntersectionObserver, rows that do not overflow the container, or a failed page.
-      if (observer && !stream.error && timeline.scrollHeight > timeline.clientHeight) more.classList.add('hidden');
-      tail.append(sentinel, more);
+      if (groupedStream(streamName)) {
+        tail.append(more);
+      } else {
+        const sentinel = node('div', 'stream-sentinel');
+        sentinel.dataset.stream = streamName;
+        // The button is the fallback: no IntersectionObserver, rows that do not overflow the container, or a failed page.
+        if (observer && !stream.error && timeline.scrollHeight > timeline.clientHeight) more.classList.add('hidden');
+        tail.append(sentinel, more);
+      }
     }
     if (stream.items.length) tail.append(node('div', 'pager-label', t('Loaded {loaded} of {total}', { loaded: stream.items.length, total: MODES[streamName].total(stream) })));
     timeline.append(tail);
     const sentinel = tail.querySelector('.stream-sentinel');
     if (observer && sentinel) observer.observe(sentinel);
-    if (!observer && !stream.loading && !stream.error && stream.nextCursor !== null && timeline.scrollHeight <= timeline.clientHeight) loadMore(streamName);
+    if (!groupedStream(streamName) && !observer && !stream.loading && !stream.error && stream.nextCursor !== null && timeline.scrollHeight <= timeline.clientHeight) loadMore(streamName);
   }
 
   // renderEmpty explains an empty timeline once nothing more can arrive; while pages remain the tail speaks instead.
@@ -1752,14 +1868,26 @@ function shortID(id) {
     if (message) timeline.append(node('div', 'timeline-empty', t(message)));
   }
 
-  function renderActionViewStatus() {
-    const controls = $('action-view-controls');
-    const actions = state.mode === 'actions';
-    controls.classList.toggle('hidden', !actions);
-    if (!actions) return;
-    $('all-actions-toggle').checked = state.actionView === 'all';
-    $('action-view-label').textContent = t(state.actionView === 'all' ? 'All actions' : 'Reading view');
-    $('action-view-count').textContent = t('{rows} top-level entries from {loaded} loaded actions', { rows: state.streams.actions.shown, loaded: state.streams.actions.items.length });
+  function renderActionViewStatus(liveLoaded) {
+    for (const [mode, name] of [['actions', 'action'], ['changes', 'change'], ['events', 'event']]) $(`${name}-view-controls`).classList.toggle('hidden', state.mode !== mode);
+    if (state.mode === 'actions') {
+      $('all-actions-toggle').checked = state.actionView === 'all';
+      $('action-view-label').textContent = t(state.actionView === 'all' ? 'All actions' : 'Reading view');
+      $('action-view-count').textContent = t('{rows} top-level entries from {loaded} loaded actions', { rows: state.streams.actions.shown, loaded: state.streams.actions.items.length });
+    } else if (state.mode === 'changes') {
+      const stream = state.streams.changes;
+      const loaded = liveLoaded === undefined ? stream.items.length : liveLoaded;
+      $('all-changes-toggle').checked = state.changeView === 'all';
+      $('change-view-label').textContent = t(state.changeView === 'all' ? 'All files' : 'Folder view');
+      $('change-view-count').textContent = state.changeView === 'all'
+        ? t('{loaded} loaded files', { loaded })
+        : t('{folders} folders from {loaded} loaded changes', { folders: stream.groupCount || 0, loaded });
+    } else {
+      const stream = state.streams.events;
+      $('all-events-toggle').checked = state.eventView === 'all';
+      $('event-view-label').textContent = t(state.eventView === 'all' ? 'All events' : 'Event summary');
+      $('event-view-count').textContent = t('{rows} top-level entries from {loaded} loaded events', { rows: stream.shown, loaded: stream.items.length });
+    }
   }
 
   // renderRows appends the rows for items[from…] that pass the filter and returns the first focusable row.
@@ -1793,6 +1921,52 @@ function shortID(id) {
           first = first || row;
         } else {
           const group = actionGroup(indexes, context);
+          stream.shown += 1;
+          timeline.append(group);
+          first = first || group.querySelector('summary');
+        }
+        index += indexes.length;
+      }
+      renderActionViewStatus();
+      return first;
+    }
+    if (streamName === 'changes' && state.changeView === 'folders' && !state.query && state.activeTypes.size === 0) {
+      const folders = changeFolders(stream.items);
+      stream.groupCount = folders.size;
+      for (const [directory, indexes] of folders) {
+        const group = changeFolderGroup(directory, indexes, (index) => changeRow(stream.items[index], index));
+        stream.shown += 1;
+        timeline.append(group);
+        first = first || group.querySelector('summary');
+      }
+      renderActionViewStatus();
+      return first;
+    }
+    if (streamName === 'events' && state.eventView === 'summary' && !state.query && state.activeTypes.size === 0) {
+      for (let index = from; index < stream.items.length;) {
+        if (!eventSummaryEligible(stream.items[index], index)) {
+          const row = eventRow(stream.items[index], index);
+          if (row) {
+            stream.shown += 1;
+            timeline.append(row);
+            first = first || row;
+          }
+          index += 1;
+          continue;
+        }
+        const indexes = [index];
+        while (index + indexes.length < stream.items.length) {
+          const next = index + indexes.length;
+          if (!eventSummaryEligible(stream.items[next], next) || !sameEventScope(indexes[indexes.length - 1], next)) break;
+          indexes.push(next);
+        }
+        if (indexes.length < 2) {
+          const row = eventRow(stream.items[index], index);
+          stream.shown += 1;
+          timeline.append(row);
+          first = first || row;
+        } else {
+          const group = eventGroup(indexes);
           stream.shown += 1;
           timeline.append(group);
           first = first || group.querySelector('summary');
@@ -1935,12 +2109,18 @@ function shortID(id) {
       if (change.tracked) loadPatchPage(change.path, 0, false, state.loadGeneration);
     });
     row.dataset.path = change.path;
+    row.dataset.index = String(index);
     const marker = node('div', `change-marker ${type}`, change.tracked ? (change.binary ? 'B' : 'M') : '?');
     const rail = node('div', 'action-rail');
     rail.append(node('span', `action-dot ${type}`));
     const body = node('div', 'action-body');
     const head = node('div', 'action-head');
-    head.append(node('span', 'action-type', change.path));
+    const displayPath = state.changeView === 'folders' && !state.query && state.activeTypes.size === 0
+      ? change.path.slice(change.path.lastIndexOf('/') + 1) || change.path : change.path;
+    const path = node('span', 'action-type', displayPath);
+    path.title = change.path;
+    path.setAttribute('aria-label', change.path);
+    head.append(path);
     const meta = node('div', 'action-meta');
     meta.append(node('span', '', t(type)));
     if (counts) meta.append(node('span', 'change-counts', counts));
@@ -1950,22 +2130,54 @@ function shortID(id) {
   }
 
   // liveChangeRow is one working-tree entry of a running run: git's porcelain status code, no counts, no patch.
-  function liveChangeRow(file) {
+  function liveChangeRow(file, index) {
     const status = String(file.status || '').trim() || '?';
     if (!matches(file, status, `${status} ${file.path}`)) return null;
     const untracked = status.startsWith('?');
     const row = timelineRow('action-row change-row', () => selectItem(row, { kind: 'live', value: file }));
     row.dataset.path = file.path;
+    row.dataset.index = String(index);
     const rail = node('div', 'action-rail');
     rail.append(node('span', `action-dot ${untracked ? 'untracked' : 'tracked'}`));
     const body = node('div', 'action-body');
     const head = node('div', 'action-head');
-    head.append(node('span', 'action-type', file.path));
+    const displayPath = state.changeView === 'folders' && !state.query && state.activeTypes.size === 0
+      ? file.path.slice(file.path.lastIndexOf('/') + 1) || file.path : file.path;
+    const path = node('span', 'action-type', displayPath);
+    path.title = file.path;
+    path.setAttribute('aria-label', file.path);
+    head.append(path);
     const meta = node('div', 'action-meta');
     meta.append(node('span', '', t(untracked ? 'untracked' : 'tracked')), node('span', 'source-badge', t('Working tree')));
     body.append(head, meta);
     row.append(node('div', `change-marker${untracked ? ' untracked' : ''}`, status), rail, body);
     return row;
+  }
+
+  function changeFolders(items) {
+    const folders = new Map();
+    items.forEach((change, index) => {
+      const slash = change.path.lastIndexOf('/');
+      const directory = slash < 0 ? '' : change.path.slice(0, slash);
+      if (!folders.has(directory)) folders.set(directory, []);
+      folders.get(directory).push(index);
+    });
+    return folders;
+  }
+
+  function changeFolderGroup(directory, indexes, rowFor) {
+    const id = JSON.stringify(directory);
+    const details = node('details', 'action-group change-folder-group');
+    details.dataset.groupId = id;
+    details.open = state.expandedChangeFolders.has(id);
+    const summary = node('summary', 'action-group-summary change-folder-summary');
+    summary.dataset.groupId = id;
+    const name = labelled('span', 'action-group-kinds change-folder-name', directory || t('Repository root'), directory || '(root)');
+    summary.append(name, node('span', 'action-group-meta change-folder-meta', t('{n} loaded files', { n: indexes.length })));
+    details.append(summary);
+    for (const index of indexes) details.append(rowFor(index));
+    details.addEventListener('toggle', () => { if (details.isConnected) rememberGroup(state.expandedChangeFolders, id, details.open); });
+    return details;
   }
 
   // renderLiveChanges draws the working tree of a running run. A tick redraws it in place: selection, focus and scroll
@@ -1975,6 +2187,8 @@ function shortID(id) {
     const files = live.changes ? live.changes.files || [] : [];
     const selectedPath = state.selected && state.selected.kind === 'live' ? state.selected.value.path : '';
     const focusedPath = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.path : undefined;
+    const focusedGroup = timeline.contains(document.activeElement) && document.activeElement.matches('summary')
+      ? document.activeElement.dataset.groupId : undefined;
     const scrollTop = timeline.scrollTop;
     timeline.replaceChildren();
     renderTypeFilters(files, (file) => String(file.status || '').trim() || '?');
@@ -1985,23 +2199,41 @@ function shortID(id) {
     }
     timeline.append(labelled('div', 'timeline-note live-caption', t('Working tree now — measured at {time}, observed during the run, not proof the agent caused it', { time: clock(live.changes.measuredAt) }), live.changes.note));
     let shown = 0;
-    let found = false;
-    for (const file of files) {
-      const row = liveChangeRow(file);
-      if (!row) continue;
-      shown += 1;
-      if (file.path === selectedPath) {
-        row.classList.add('selected');
-        found = true;
+    if (state.changeView === 'folders' && !state.query && state.activeTypes.size === 0) {
+      for (const [directory, indexes] of changeFolders(files)) {
+        timeline.append(changeFolderGroup(directory, indexes, (index) => liveChangeRow(files[index], index)));
+        shown += 1;
       }
-      timeline.append(row);
-      if (file.path === focusedPath) row.focus({ preventScroll: true });
+    } else {
+      files.forEach((file, index) => {
+        const row = liveChangeRow(file, index);
+        if (!row) return;
+        shown += 1;
+        timeline.append(row);
+      });
     }
-    if (selectedPath && !found) {
+    const selectedFile = files.find((file) => file.path === selectedPath);
+    const selectedRow = selectedFile && [...timeline.querySelectorAll('.change-row')].find((row) => row.dataset.path === selectedPath);
+    if (selectedRow) {
+      state.selected.value = selectedFile;
+      revealGroupedRow(selectedRow);
+      selectedRow.classList.add('selected');
+    } else if (selectedPath) {
       state.selected = null;
-      renderInspector();
+    }
+    const focusedRow = focusedPath && [...timeline.querySelectorAll('.change-row')].find((row) => row.dataset.path === focusedPath);
+    if (focusedRow) {
+      revealGroupedRow(focusedRow);
+      focusedRow.focus({ preventScroll: true });
+    } else if (focusedGroup !== undefined) {
+      const summary = [...timeline.querySelectorAll('.change-folder-summary')].find((el) => el.dataset.groupId === focusedGroup);
+      (summary || $('timeline-tab-changes')).focus({ preventScroll: true });
     }
     if (shown === 0) timeline.append(node('div', 'timeline-empty', t(files.length ? 'No loaded changes match this filter.' : 'No repository changes were observed.')));
+    state.streams.changes.shown = shown;
+    state.streams.changes.groupCount = state.changeView === 'folders' ? changeFolders(files).size : 0;
+    renderActionViewStatus(files.length);
+    renderInspector();
     timeline.scrollTop = scrollTop;
   }
 
@@ -2009,15 +2241,18 @@ function shortID(id) {
     const type = eventType(event);
     const detail = eventDetail(event) || firstDetail(event) || firstDetail(event.message) || event.subtype || event.event || t('event {n}', { n: index + 1 });
     if (!matches(event, type, `${type} ${detail} ${JSON.stringify(event)}`)) return null;
-    const row = timelineRow('action-row event-row', () => selectItem(row, { kind: 'event', value: event, index }));
+    const absoluteIndex = (state.streams.events.startCursor || 0) + index;
+    const row = timelineRow('action-row event-row', () => selectItem(row, { kind: 'event', value: event, index: absoluteIndex }));
+    row.dataset.index = String(index);
+    row.title = type;
     const time = node('div', 'action-time', clock(event.timestamp || event.created_at || event.createdAt));
     const rail = node('div', 'action-rail');
     rail.append(node('span', `action-dot${event.hook_event_name === 'PostToolUseFailure' ? ' fail' : ''}`));
     const body = node('div', 'action-body');
     const head = node('div', 'action-head');
-    head.append(node('span', 'action-type', t(type)), node('span', 'action-summary', detail));
+    head.append(labelled('span', 'action-type', t(EVENT_TYPE_LABELS[type] || type), type), node('span', 'action-summary', detail));
     const meta = node('div', 'action-meta');
-    meta.append(node('span', 'source-badge', t('provider event')), node('span', '', `#${index + 1}`));
+    meta.append(node('span', 'source-badge', t('provider event')), node('span', '', `#${absoluteIndex + 1}`));
     body.append(head, meta);
     row.append(time, rail, body);
     return row;
@@ -2060,19 +2295,21 @@ function shortID(id) {
     const sameStream = timeline.dataset.stream === streamName && timeline.dataset.runId === runID;
     const focusedIndex = sameStream && document.activeElement?.classList.contains('action-row') ? document.activeElement.dataset.index : undefined;
     const focusedGroup = sameStream && document.activeElement?.classList.contains('action-group-summary') ? document.activeElement.dataset.groupId : undefined;
-    const selected = sameStream && state.selected?.kind === 'action' && streamName === 'actions' ? state.selected : null;
-    const selectedIndex = selected ? state.streams.actions.items.indexOf(selected.value) : -1;
+    const selectedKind = { actions: 'action', changes: 'change', events: 'event' }[streamName];
+    const selected = sameStream && state.selected?.kind === selectedKind ? state.selected : null;
+    const selectedIndex = selected ? state.streams[streamName].items.indexOf(selected.value) : -1;
     const scrollTop = sameStream ? timeline.scrollTop : 0;
+    if (streamName === 'changes' && isLive()) {
+      if (!sameStream || state.selected?.kind !== 'live') state.selected = null;
+      timeline.dataset.stream = streamName;
+      timeline.dataset.runId = runID;
+      renderLiveChanges();
+      return;
+    }
     timeline.replaceChildren();
     timeline.dataset.stream = streamName;
     timeline.dataset.runId = runID;
     if (!selected) state.selected = null;
-    if (streamName === 'changes' && isLive()) {
-      renderActionViewStatus();
-      renderInspector();
-      renderLiveChanges();
-      return;
-    }
     const stream = state.streams[streamName];
     stream.shown = 0;
     if (stream.error) timeline.append(node('div', 'timeline-empty stream-error', t(MODES[streamName].error, { error: stream.error })));
@@ -2092,7 +2329,7 @@ function shortID(id) {
     let selectedRow = null;
     if (selectedIndex >= 0) selectedRow = timeline.querySelector(`.action-row[data-index="${selectedIndex}"]`);
     if (selectedRow) {
-      revealActionRow(selectedRow);
+      revealGroupedRow(selectedRow);
       selectedRow.classList.add('selected');
       state.selected = selected;
     } else {
@@ -2102,7 +2339,7 @@ function shortID(id) {
     if (focusedIndex !== undefined) {
       const row = timeline.querySelector(`.action-row[data-index="${focusedIndex}"]`);
       if (row) {
-        revealActionRow(row);
+        revealGroupedRow(row);
         row.focus({ preventScroll: true });
       }
     } else if (focusedGroup !== undefined) {
@@ -2116,6 +2353,7 @@ function shortID(id) {
     document.querySelectorAll('.action-row.selected').forEach((el) => {
       el.classList.remove('selected');
     });
+    revealGroupedRow(row);
     row.classList.add('selected');
     selected.generation = state.loadGeneration;
     selected.runID = state.run?.run.id;
@@ -2546,6 +2784,7 @@ function shortID(id) {
     if (generation !== state.loadGeneration) return;
     const stream = state.streams && state.streams[streamName];
     if (!stream || stream.loading || cursor === null) return;
+    const ownsFocus = focusNew && streamName === state.mode && document.activeElement?.matches('.stream-tail .load-more');
     stream.loading = true;
     stream.currentCursor = cursor;
     const from = append ? stream.items.length : 0;
@@ -2555,7 +2794,7 @@ function shortID(id) {
       // A page for a cursor this stream no longer waits on is stale and dropped.
       if (generation !== state.loadGeneration || cursor !== stream.currentCursor) return;
       if (!append) stream.startCursor = cursor;
-      if (streamName === 'actions') {
+      if (streamName === 'actions' || streamName === 'events') {
         const cursors = (page.items || []).map(() => cursor);
         stream.pageCursors = append ? (stream.pageCursors || []).concat(cursors) : cursors;
       }
@@ -2580,12 +2819,19 @@ function shortID(id) {
     } finally {
       stream.loading = false;
       if (generation === state.loadGeneration && streamName === state.mode) {
-        if (append && from > 0) {
-          appendTimeline(streamName, from, focusNew);
+        // Removing the initiating button leaves BODY focused. A user's new focus wins.
+        const restoreManualFocus = ownsFocus && document.activeElement === document.body;
+        if (append && from > 0 && !groupedStream(streamName)) {
+          appendTimeline(streamName, from, false);
         } else {
           renderTimeline();
-          const first = focusNew ? $('timeline').querySelector('.action-row') : null;
-          if (first) first.focus();
+        }
+        if (restoreManualFocus) {
+          const timeline = $('timeline');
+          const first = stream.error ? null : timeline.querySelector(`.action-row[data-index="${from}"]`);
+          const target = first?.closest('details:not([open])')?.querySelector('summary') || first
+            || timeline.querySelector('.load-more:not(.hidden)') || $('timeline-tab-' + streamName);
+          target.focus({ preventScroll: true });
         }
       }
     }
@@ -3521,7 +3767,11 @@ function shortID(id) {
       const run = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`, controller.signal);
       if (generation !== state.loadGeneration) return;
       state.run = run;
-      if (previousRunID !== run.run.id) state.expandedActionGroups.clear();
+      if (previousRunID !== run.run.id) {
+        state.expandedActionGroups.clear();
+        state.expandedChangeFolders.clear();
+        state.expandedEventGroups.clear();
+      }
       state.runError = null;
       state.confirmDelete = false;
       // The comparison sheet may already be open on the run that was showing:
@@ -3850,6 +4100,14 @@ function shortID(id) {
   });
   $('all-actions-toggle').addEventListener('change', (event) => {
     state.actionView = event.target.checked ? 'all' : 'reading';
+    renderTimeline();
+  });
+  $('all-changes-toggle').addEventListener('change', (event) => {
+    state.changeView = event.target.checked ? 'all' : 'folders';
+    if (isLive()) renderLiveChanges(); else renderTimeline();
+  });
+  $('all-events-toggle').addEventListener('change', (event) => {
+    state.eventView = event.target.checked ? 'all' : 'summary';
     renderTimeline();
   });
   const tabs = Array.from(document.querySelectorAll('.tab'));

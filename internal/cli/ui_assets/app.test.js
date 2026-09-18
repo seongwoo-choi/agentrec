@@ -14,7 +14,7 @@ const response = (body) => Promise.resolve({
   json: async () => body,
 });
 
-async function renderFixture({ list, details, actions = [], changes = [], events = [], search = { hits: [], truncated: false }, configure = () => {} }) {
+async function renderFixture({ list, details, actions = [], changes = [], events = [], live = null, search = { hits: [], truncated: false }, configure = () => {} }) {
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
     url: 'http://localhost:42817/',
@@ -50,7 +50,14 @@ async function renderFixture({ list, details, actions = [], changes = [], events
       if (currentDetails && url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
     }
     if (url.pathname.includes('/actions')) return response(typeof actions === 'function' ? actions(Number(url.searchParams.get('cursor') || 0)) : { items: actions, nextCursor: null });
-    if (url.pathname.includes('/events')) return response({ items: events, nextCursor: null });
+    if (url.pathname.endsWith('/live') && live) return response(typeof live === 'function' ? live() : live);
+    if (url.pathname.includes('/events')) {
+      try {
+        return response(typeof events === 'function' ? events(Number(url.searchParams.get('cursor') || 0)) : { items: events, nextCursor: null });
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
     if (url.pathname.includes('/changes')) return response(typeof changes === 'function' ? changes(Number(url.searchParams.get('cursor') || 0)) : { items: changes, nextCursor: null, total: changes.length, status: 'available' });
     throw new Error(`unexpected fetch ${url}`);
   };
@@ -3122,6 +3129,487 @@ test('run pages append explicitly and unchanged polls retain DOM nodes', async (
   await poll();
   assert.equal(window.document.querySelectorAll('.run-item').length, 2);
   assert.equal(window.document.querySelector('#run-load-more').classList.contains('hidden'), true);
+});
+
+test('Folder view groups only loaded changes by exact immediate directory and keeps full paths accessible', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.changes = (cursor) => cursor === 0
+    ? {
+        items: [
+          { path: 'README.md', kind: 'modified', tracked: true, additions: 2, deletions: 1 },
+          { path: 'src/a/index.js', kind: 'added', tracked: false, additions: 4 },
+          { path: 'src/b/index.js', kind: 'modified', tracked: true, binary: true },
+          { path: 'src/a/util.js', kind: 'modified', tracked: true, additions: 1, deletions: 3 },
+        ],
+        nextCursor: 4,
+        total: 7,
+        status: 'available',
+        attribution: 'observed during run, not causal proof',
+      }
+    : { items: [], nextCursor: null, total: 7, status: 'available', attribution: 'observed during run, not causal proof' };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d, Event } = dom.window;
+  d.querySelector('#timeline-tab-changes').click();
+  await settle();
+
+  assert.equal(d.querySelector('#change-view-label').textContent, 'Folder view');
+  assert.equal(d.querySelector('#all-changes-toggle').checked, false);
+  const groups = [...d.querySelectorAll('#timeline > details.change-folder-group')];
+  assert.deepEqual(groups.map((group) => group.querySelector('.change-folder-name').textContent), ['Repository root', 'src/a', 'src/b']);
+  assert.deepEqual(groups.map((group) => group.querySelectorAll('.change-row').length), [1, 2, 1]);
+  assert.match(groups[1].querySelector('.change-folder-meta').textContent, /2 loaded files/);
+  assert.match(d.querySelector('#change-view-count').textContent, /3 folders from 4 loaded changes/);
+  assert.match(d.querySelector('.pager-label').textContent, /Loaded 4 of 7/);
+  assert.match(d.querySelector('.timeline-note').textContent, /not proof the agent caused it/);
+  const twins = [...d.querySelectorAll('.change-row')].filter((row) => row.querySelector('.action-type').textContent === 'index.js');
+  assert.deepEqual(twins.map((row) => row.dataset.path), ['src/a/index.js', 'src/b/index.js']);
+  assert.deepEqual(twins.map((row) => row.querySelector('.action-type').title), ['src/a/index.js', 'src/b/index.js']);
+  assert.deepEqual(twins.map((row) => row.querySelector('.action-type').getAttribute('aria-label')), ['src/a/index.js', 'src/b/index.js']);
+  assert.match(twins[1].textContent, /binary/);
+
+  const search = d.querySelector('#timeline-search');
+  search.value = 'src/b/index.js';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  assert.equal(d.querySelector('details.change-folder-group'), null, 'search hits are exposed as individual files');
+  assert.deepEqual([...d.querySelectorAll('#timeline > .change-row')].map((row) => row.dataset.path), ['src/b/index.js']);
+  assert.deepEqual([...d.querySelectorAll('#timeline > .change-row .action-type')].map((el) => el.textContent), ['src/b/index.js']);
+
+  search.value = '';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  const toggle = d.querySelector('#all-changes-toggle');
+  toggle.checked = true;
+  toggle.dispatchEvent(new Event('change', { bubbles: true }));
+  assert.equal(d.querySelector('details.change-folder-group'), null);
+  assert.equal(d.querySelectorAll('#timeline > .change-row').length, 4);
+  assert.deepEqual([...d.querySelectorAll('#timeline > .change-row .action-type')].map((el) => el.textContent), ['README.md', 'src/a/index.js', 'src/b/index.js', 'src/a/util.js']);
+  assert.equal(d.querySelector('#all-actions-toggle').checked, false, 'Actions keeps its independent reading setting');
+});
+
+test('exact later-page change opens its folder and retains canonical link and patch loading', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const path = 'deep/target/same.js';
+  data.details.run.changeCount = 251;
+  const pages = paginatedChanges(path);
+  data.changes = (cursor) => {
+    const page = pages(cursor);
+    return { ...page, items: page.items.map((change) => change.path === path ? { ...change, tracked: true } : change) };
+  };
+  const writes = [];
+  data.configure = (w) => {
+    w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=${encodeURIComponent(path)}&changeCursor=250`);
+    Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const originalFetch = w.fetch;
+  w.fetch = (input, init) => String(input).includes('/patch?')
+    ? response({ path, patch: '+exact patch', nextCursor: null, attribution: 'observed during run, not causal proof' })
+    : originalFetch(input, init);
+  const row = d.querySelector(`.change-row[data-path="${path}"]`);
+  assert.ok(row.closest('details.change-folder-group').open);
+  row.click();
+  await settle();
+  d.querySelector('.copy-evidence-link').click();
+  await settle();
+  assert.match(writes[0], /change=deep%2Ftarget%2Fsame.js&changeCursor=250$/);
+  assert.match(d.querySelector('.diff-patch').textContent, /exact patch/);
+});
+
+test('Korean attribution notes keep words intact without overflowing identifiers', (t) => {
+  const dom = responsiveFixture('<p class="timeline-note">원인이라는 증명은 아닙니다</p>', 375);
+  t.after(() => dom.window.close());
+  dom.window.document.documentElement.lang = 'ko';
+  const style = dom.window.getComputedStyle(dom.window.document.querySelector('.timeline-note'));
+  assert.equal(style.wordBreak, 'keep-all');
+  assert.equal(style.overflowWrap, 'anywhere');
+});
+
+test('event group summaries are concise while original tool names remain inspectable', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const opaque = 'mcp__very_long_diagnostic_tool_name';
+  data.events = ['Bash', opaque].map((tool_name) => ({ hook_event_name: 'PostToolUse', session_id: 's', tool_name, tool_response: {} }));
+  data.details.eventCount = data.events.length;
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  d.querySelector('#timeline-tab-events').click(); await settle();
+  for (const [lang, title, names] of [['en', '2 tool records', '2 tool names'], ['ko', '도구 기록 2개', '도구 이름 2종'], ['ja', 'ツール記録2件', 'ツール名2種類'], ['zh-CN', '2 条工具记录', '2 种工具名称']]) {
+    d.querySelector('#lang').value = lang; d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+    const group = d.querySelector('.event-group');
+    assert.equal(group.querySelector('.action-group-kinds').textContent, title);
+    assert.ok(group.querySelector('.action-group-meta').textContent.includes(names));
+    assert.ok(!group.querySelector('summary').textContent.includes(opaque));
+    assert.ok(group.querySelectorAll('.event-row')[1].textContent.includes(opaque));
+  }
+});
+
+test('Event summary rejects conflicting unknown and invalid primary types', async (t) => {
+  for (const type of ['error', 'future.provider.shape', 'SessionStart', '', null, 42, {}, []]) {
+    await t.test(`primary ${JSON.stringify(type)}`, async (t) => {
+      const data = fixture('completed', 'pass', 'PASS');
+      const hook = { hook_event_name: 'PostToolUse', session_id: 's', tool_name: 'Read' };
+      data.events = [hook, { ...hook, type }, hook, { ...hook, type: 'PostToolUse' }];
+      data.details.eventCount = data.events.length;
+      const dom = await renderFixture(data); t.after(() => dom.window.close());
+      const d = dom.window.document;
+      d.querySelector('#timeline-tab-events').click(); await settle();
+      assert.ok(d.querySelector('#timeline > .event-row[data-index="1"]'), 'ambiguous primary type stays individually visible');
+      const group = d.querySelector('.event-group');
+      assert.deepEqual([...group.querySelectorAll('.event-row')].map((row) => row.dataset.index), ['2', '3']);
+      assert.doesNotMatch(group.querySelector('summary').textContent, /success|passed|completed/i);
+    });
+  }
+});
+
+test('Event summary folds only safe same-page same-session PostToolUse spans', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const first = [
+    { hook_event_name: 'SessionStart', session_id: 's1', source: 'startup' },
+    { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Bash', tool_response: 'not interpreted' },
+    { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Read', tool_response: 'not interpreted' },
+    { hook_event_name: 'PostToolUseFailure', session_id: 's1', tool_name: 'Bash', error: 'failed' },
+    { type: 'future.provider.shape', session_id: 's1', payload: { value: 1 } },
+    { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Write', agentrec_dropped: 'payload too large' },
+    { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Bash' },
+  ];
+  const second = [
+    { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Read' },
+    { hook_event_name: 'UserPromptSubmit', session_id: 's1', prompt: 'next request' },
+    { hook_event_name: 'PostToolUse', session_id: 's2', tool_name: 'Bash' },
+    { hook_event_name: 'PostToolUse', session_id: 's3', tool_name: 'Read' },
+    { hook_event_name: 'PostToolUse', session_id: 's3', tool_name: 'Bash', tool_response: { exit_code: 2 } },
+    { hook_event_name: 'Stop', session_id: 's3', last_assistant_message: 'turn stopped' },
+    { hook_event_name: 'SessionEnd', session_id: 's3', reason: 'done' },
+  ];
+  data.details.eventCount = first.length + second.length;
+  data.events = (cursor) => cursor === 0
+    ? { items: first, nextCursor: first.length }
+    : { items: second, nextCursor: null };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d, Event } = dom.window;
+  d.querySelector('#timeline-tab-events').click();
+  await settle();
+
+  assert.equal(d.querySelector('#event-view-label').textContent, 'Event summary');
+  let groups = [...d.querySelectorAll('#timeline > details.event-group')];
+  assert.equal(groups.length, 1);
+  assert.deepEqual([...groups[0].querySelectorAll('.event-row')].map((row) => row.dataset.index), ['1', '2']);
+  assert.equal(groups[0].querySelector('.action-group-kinds').textContent, '2 tool records');
+  assert.match(groups[0].querySelector('.action-group-meta').textContent, /2 tool names · loaded page/);
+  for (const index of [1, 2]) assert.equal(groups[0].querySelector(`.event-row[data-index="${index}"] .action-summary`).textContent, first[index].tool_name);
+  assert.doesNotMatch(groups[0].querySelector('summary').textContent, /success|passed|completed/i);
+  groups[0].querySelector('.event-row[data-index="2"]').click();
+  assert.match(d.querySelector('#inspector').textContent, /event #3/);
+  assert.match(d.querySelector('#inspector').textContent, /"hook_event_name": "PostToolUse"/);
+  assert.equal(d.querySelector('.copy-evidence-link'), null, 'provider events do not gain invented permalinks');
+  for (const type of ['SessionStart', 'PostToolUseFailure', 'future.provider.shape']) {
+    assert.ok([...d.querySelectorAll('#timeline > .event-row')].some((row) => row.title === type), `${type} stays visible`);
+  }
+  assert.ok([...d.querySelectorAll('#timeline > .event-row')].some((row) => row.textContent.includes('payload too large')), 'dropped record stays visible');
+  assert.equal(d.querySelector('.stream-tail .load-more').classList.contains('hidden'), false, 'summary paging stays explicit');
+  d.querySelector('.stream-tail .load-more').click();
+  await settle();
+  groups = [...d.querySelectorAll('#timeline > details.event-group')];
+  assert.equal(groups.length, 1, 'records never merge across page or session boundaries');
+  assert.equal(d.querySelectorAll('#timeline .event-row').length, first.length + second.length);
+  for (const type of ['UserPromptSubmit', 'Stop', 'SessionEnd']) assert.ok([...d.querySelectorAll('#timeline > .event-row')].some((row) => row.title === type));
+  assert.equal([...d.querySelectorAll('#timeline > .event-row')].filter((row) => row.title === 'PostToolUse').length, 6, 'page/session/error barriers remain individual');
+
+  const otherTypes = [...d.querySelectorAll('#type-filters button')].map((button) => button.dataset.type).filter((type) => type !== 'PostToolUse');
+  for (const type of otherTypes) d.querySelector(`#type-filters button[data-type="${type}"]`).click();
+  assert.equal(d.querySelector('details.event-group'), null);
+  assert.equal(d.querySelectorAll('#timeline > .event-row').length, 8, 'filters expose every matching record');
+  const toggle = d.querySelector('#all-events-toggle');
+  toggle.checked = true;
+  toggle.dispatchEvent(new Event('change', { bubbles: true }));
+  assert.equal(d.querySelector('details.event-group'), null);
+  assert.equal(d.querySelector('#all-changes-toggle').checked, false, 'Changes keeps its independent folder setting');
+});
+
+test('folder and event disclosure state, selection and focus survive locale and view changes', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.changes = [
+    { path: 'src/a.js', kind: 'modified', tracked: true },
+    { path: 'src/b.js', kind: 'added', tracked: false },
+  ];
+  data.details.eventCount = 2;
+  data.events = [
+    { hook_event_name: 'PostToolUse', session_id: 's', tool_name: 'Read' },
+    { hook_event_name: 'PostToolUse', session_id: 's', tool_name: 'Bash' },
+  ];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  d.querySelector('#timeline-tab-changes').click();
+  await settle();
+  let group = d.querySelector('details.change-folder-group');
+  group.open = true;
+  group.dispatchEvent(new w.Event('toggle'));
+  let row = group.querySelectorAll('.change-row')[1];
+  row.click();
+  row.focus();
+  d.querySelector('#lang').value = 'ko';
+  d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+  group = d.querySelector('details.change-folder-group');
+  row = group.querySelector('.change-row[data-path="src/b.js"]');
+  assert.equal(group.open, true);
+  assert.match(row.className, /selected/);
+  assert.equal(d.activeElement, row);
+  assert.equal(d.querySelector('#change-view-label').textContent, '폴더 보기');
+  const changeToggle = d.querySelector('#all-changes-toggle');
+  changeToggle.checked = true;
+  changeToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+  assert.equal(d.activeElement.dataset.path, 'src/b.js');
+  changeToggle.checked = false;
+  changeToggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+  assert.equal(d.querySelector('details.change-folder-group').open, true);
+  assert.equal(d.activeElement.dataset.path, 'src/b.js');
+
+  d.querySelector('#timeline-tab-events').click();
+  await settle();
+  const eventGroup = d.querySelector('details.event-group');
+  eventGroup.open = true;
+  eventGroup.dispatchEvent(new w.Event('toggle'));
+  const eventRow = eventGroup.querySelector('.event-row[data-index="1"]');
+  eventRow.click();
+  eventRow.focus();
+  d.querySelector('#lang').value = 'ja';
+  d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+  assert.equal(d.querySelector('details.event-group').open, true);
+  assert.match(d.querySelector('.event-row[data-index="1"]').className, /selected/);
+  assert.equal(d.activeElement, d.querySelector('.event-row[data-index="1"]'));
+  assert.equal(d.querySelector('#event-view-label').textContent, 'イベント概要');
+  assert.match(d.querySelector('#inspector').textContent, /PostToolUse/);
+});
+
+test('Changes and Events view labels localize independently in all supported languages', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.changes = [{ path: 'README.md', kind: 'modified', tracked: false }];
+  data.details.eventCount = 1;
+  data.events = [{ hook_event_name: 'SessionStart', session_id: 's', source: 'startup' }];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  for (const [lang, folder, files, summary, events] of [
+    ['en', 'Folder view', 'All files', 'Event summary', 'All events'],
+    ['ko', '폴더 보기', '모든 파일', '이벤트 요약', '모든 이벤트'],
+    ['ja', 'フォルダー表示', 'すべてのファイル', 'イベント概要', 'すべてのイベント'],
+    ['zh-CN', '文件夹视图', '所有文件', '事件摘要', '所有事件'],
+  ]) {
+    d.querySelector('#lang').value = lang;
+    d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+    d.querySelector('#timeline-tab-changes').click();
+    await settle();
+    assert.equal(d.querySelector('#change-view-label').textContent, folder);
+    assert.equal(d.querySelector('#change-view-controls label span').textContent, files);
+    d.querySelector('#timeline-tab-events').click();
+    await settle();
+    assert.equal(d.querySelector('#event-view-label').textContent, summary);
+    assert.equal(d.querySelector('#event-view-controls label span').textContent, events);
+  }
+  assert.equal(d.querySelector('#all-actions-toggle').checked, false);
+  assert.equal(d.querySelector('#all-changes-toggle').checked, false);
+  assert.equal(d.querySelector('#all-events-toggle').checked, false);
+});
+
+for (const mode of ['changes', 'events']) for (const outcome of ['success', 'error', 'moved-success', 'moved-error']) {
+  test(`keyboard manual paging ${mode} ${outcome} keeps visible focus`, async (t) => {
+    const data = fixture('completed', 'pass', 'PASS');
+    const items = mode === 'changes'
+      ? [{ path: 'old/a.js', tracked: false }, { path: 'old/b.js', tracked: false }]
+      : ['Read', 'Bash'].map((tool_name) => ({ hook_event_name: 'PostToolUse', session_id: 's', tool_name }));
+    data[mode] = () => ({ items, nextCursor: 98765, total: 4, status: 'available' });
+    data.details.eventCount = 4;
+    const dom = await renderFixture(data); t.after(() => dom.window.close());
+    const w = dom.window, d = w.document;
+    d.querySelector(`#timeline-tab-${mode}`).click(); await settle();
+    const selected = d.querySelector('.action-row');
+    selected.click();
+    let resolvePage, rejectPage;
+    const originalFetch = w.fetch;
+    w.fetch = (input, init) => String(input).includes(`/${mode}?cursor=98765`)
+      ? new Promise((resolve, reject) => { resolvePage = resolve; rejectPage = reject; }) : originalFetch(input, init);
+    const more = d.querySelector('.stream-tail .load-more');
+    more.focus(); assert.equal(d.activeElement, more); more.click();
+    assert.ok(resolvePage);
+    const other = d.querySelector('#search-all');
+    if (outcome.startsWith('moved')) other.focus();
+    if (outcome.endsWith('error')) rejectPage(new Error('keyboard page failure'));
+    else resolvePage(await response({ items: mode === 'changes' ? items.map((item) => ({ ...item, path: item.path.replace('old/', 'new/') })) : items, nextCursor: null, total: 4, status: 'available' }));
+    await settle();
+    assert.ok(d.querySelector('.action-row.selected'), 'selected evidence survives');
+    if (outcome.startsWith('moved')) assert.equal(d.activeElement, other, 'pending request must not steal focus');
+    else if (outcome === 'error') {
+      assert.equal(d.activeElement, d.querySelector('.stream-tail .load-more'));
+      assert.equal(d.activeElement.classList.contains('hidden'), false);
+    } else {
+      const row = d.querySelector('.action-row[data-index="2"]');
+      assert.ok(d.activeElement === row || d.activeElement === row.closest('details')?.querySelector('summary'), 'new evidence receives focus');
+      assert.ok(!d.activeElement.closest('details:not([open])') || d.activeElement.tagName === 'SUMMARY', 'focus must be visible');
+    }
+  });
+}
+
+test('Folder view append preserves the open group, selected file and focus', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.changes = (cursor) => cursor === 0
+    ? { items: [{ path: 'src/a.js', kind: 'modified', tracked: false }, { path: 'src/b.js', kind: 'modified', tracked: false }], nextCursor: 2, total: 3, status: 'available' }
+    : { items: [{ path: 'src/c.js', kind: 'added', tracked: false }], nextCursor: null, total: 3, status: 'available' };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  d.querySelector('#timeline-tab-changes').click();
+  await settle();
+  let group = d.querySelector('details.change-folder-group');
+  group.open = true;
+  group.dispatchEvent(new w.Event('toggle'));
+  let selected = group.querySelector('.change-row[data-path="src/b.js"]');
+  selected.click();
+  selected.focus();
+  d.querySelector('.stream-tail .load-more').click();
+  await settle();
+  group = d.querySelector('details.change-folder-group');
+  selected = group.querySelector('.change-row[data-path="src/b.js"]');
+  assert.equal(group.open, true);
+  assert.equal(group.querySelector('.change-folder-meta').textContent, '3 loaded files');
+  assert.match(selected.className, /selected/);
+  assert.equal(d.activeElement, selected);
+});
+
+for (const scenario of ['poll', 'locale', 'disappear', 'empty']) {
+  test(`live Folder summary focus survives ${scenario}`, async (t) => {
+    const data = fixture('running', '', 'RUNNING');
+    let files = [{ path: 'src/a.js', status: 'M' }], tick;
+    data.live = () => ({ measuredAt: '2026-09-03T00:00:05Z', files });
+    data.configure = (w) => {
+      const native = w.setTimeout.bind(w);
+      w.setTimeout = (callback, delay) => {
+        if (delay === 3000) { tick = callback; return 3000; }
+        return native(callback, delay);
+      };
+      w.clearTimeout = () => {};
+    };
+    const dom = await renderFixture(data); t.after(() => dom.window.close());
+    const w = dom.window, d = w.document;
+    d.querySelector('#timeline-tab-changes').click(); await settle();
+    const summary = d.querySelector('.change-folder-summary');
+    summary.focus(); assert.equal(d.activeElement, summary);
+    assert.equal(typeof tick, 'function');
+    if (scenario === 'locale') {
+      d.querySelector('#lang').value = 'ko';
+      d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+    } else {
+      if (scenario === 'disappear') files = [{ path: 'other/b.js', status: 'M' }];
+      if (scenario === 'empty') files = [];
+      await tick(); await settle();
+    }
+    if (scenario === 'poll' || scenario === 'locale') {
+      assert.equal(d.activeElement, d.querySelector('.change-folder-summary'));
+      assert.equal(d.activeElement.dataset.groupId, summary.dataset.groupId);
+    } else assert.equal(d.activeElement, d.querySelector('#timeline-tab-changes'), 'missing group falls back to visible Changes tab');
+  });
+}
+
+test('live Folder view clears a disappearing selection and never invents stored patch controls', async (t) => {
+  const data = fixture('running', '', 'RUNNING');
+  let liveFiles = [{ path: 'src/live.js', status: 'M' }, { path: 'src/peer.js', status: '??' }];
+  let tick;
+  data.live = () => ({ measuredAt: '2026-09-03T00:00:05Z', files: liveFiles });
+  data.configure = (w) => {
+    const native = w.setTimeout.bind(w);
+    w.setTimeout = (callback, delay) => {
+      if (delay === 3000) { tick = callback; return 3000; }
+      return native(callback, delay);
+    };
+    w.clearTimeout = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  d.querySelector('#timeline-tab-changes').click();
+  await settle();
+  const group = d.querySelector('details.change-folder-group');
+  assert.equal(group.querySelector('.change-folder-meta').textContent, '2 loaded files');
+  group.open = true;
+  const row = d.querySelector('.change-row[data-path="src/live.js"]');
+  row.click();
+  row.focus();
+  assert.equal(d.querySelector('.copy-evidence-link'), null);
+  assert.equal(d.querySelector('.diff-patch'), null);
+  liveFiles = [...liveFiles, { path: 'src/new.js', status: 'A' }];
+  await tick();
+  await settle();
+  assert.match(d.querySelector('.change-row[data-path="src/live.js"]').className, /selected/);
+  assert.equal(d.activeElement, d.querySelector('.change-row[data-path="src/live.js"]'));
+  liveFiles = [{ path: 'src/peer.js', status: '??' }];
+  await tick();
+  await settle();
+  assert.equal(d.querySelector('.change-row.selected'), null);
+  assert.match(d.querySelector('#inspector').textContent, /Select an action/);
+});
+
+test('grouped event paging stays manual and a failed page retries from the visible button', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.eventCount = 3;
+  let secondReads = 0;
+  data.events = (cursor) => {
+    if (cursor === 0) return { items: [
+      { hook_event_name: 'PostToolUse', session_id: 's', tool_name: 'Read' },
+      { hook_event_name: 'PostToolUse', session_id: 's', tool_name: 'Bash' },
+    ], nextCursor: 2 };
+    secondReads += 1;
+    if (secondReads === 1) throw new Error('synthetic page failure');
+    return { items: [{ hook_event_name: 'SessionEnd', session_id: 's', reason: 'done' }], nextCursor: null };
+  };
+  let observed = 0;
+  data.configure = (w) => {
+    w.IntersectionObserver = class {
+      constructor() {}
+      observe() { observed += 1; }
+      disconnect() {}
+    };
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  d.querySelector('#timeline-tab-events').click();
+  await settle();
+  assert.equal(observed, 0, 'collapsed summaries do not register an eager paging sentinel');
+  const allEvents = d.querySelector('#all-events-toggle');
+  allEvents.checked = true;
+  allEvents.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(observed, 1, 'the exhaustive view retains the existing observer paging path');
+  assert.ok(d.querySelector('.stream-sentinel'));
+  allEvents.checked = false;
+  allEvents.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(d.querySelector('.stream-sentinel'), null);
+  let group = d.querySelector('details.event-group');
+  group.open = true;
+  group.dispatchEvent(new dom.window.Event('toggle'));
+  let selected = group.querySelector('.event-row[data-index="1"]');
+  selected.click();
+  selected.focus();
+  let more = d.querySelector('.stream-tail .load-more');
+  assert.equal(more.classList.contains('hidden'), false);
+  more.click();
+  await settle();
+  assert.match(d.querySelector('.stream-error').textContent, /synthetic page failure/);
+  more = d.querySelector('.stream-tail .load-more');
+  assert.equal(more.classList.contains('hidden'), false);
+  more.click();
+  await settle();
+  assert.equal(secondReads, 2);
+  assert.equal(d.querySelector('.stream-error'), null);
+  assert.equal(d.querySelectorAll('.event-row').length, 3);
+  group = d.querySelector('details.event-group');
+  selected = group.querySelector('.event-row[data-index="1"]');
+  assert.equal(group.open, true);
+  assert.match(selected.className, /selected/);
+  assert.equal(d.activeElement, selected);
 });
 
 test('a delayed load-more response cannot replace a newer run generation', async (t) => {
