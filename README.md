@@ -221,6 +221,18 @@ cursor, inspector, selection, and browser-history behavior. This is loaded-snaps
 presentation only: it adds no summary model, endpoint, request per row, storage
 change, or persistence.
 
+**Unreleased — readable Changes and Provider events:** Changes defaults to
+**Folder view**, grouping loaded files by their exact immediate directory.
+**All files** and filtered lists show full paths; exact file links open the
+containing folder without changing the original path, cursor, or patch behavior.
+Provider events defaults to **Event summary**, folding only recognized, safe,
+consecutive `PostToolUse` records within the same loaded page and session.
+Lifecycle, failure, dropped, unknown, and conflicting-type records stay separate;
+provider events are not independent verification. **All events** restores the
+loaded records in their original order. Grouped views use explicit **Load more**
+and preserve retry and keyboard focus. Records, APIs, and the Actions reading
+view are unchanged; no event permalinks or generated summaries are introduced.
+
 **v0.13.0 — focused run list:** Choose an exact project name to narrow the
 sidebar together with the existing `q`, `exit`, `verification`, and `failures`
 filters. The project choice is reflected in the `project` URL parameter and

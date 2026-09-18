@@ -208,6 +208,7 @@ h1 { margin: 6px 0; font: 600 24px/1.35 var(--sans); letter-spacing: -.015em; ov
 .timeline-empty { display: grid; place-items: center; min-height: 200px; padding: 20px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .timeline-empty:only-child { height: 100%; }
 .timeline-note { padding: 8px 12px 2px 14px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
 .stream-error { color: var(--fail); }
 .change-evidence-warning { color: var(--warn); }
 .action-group { border-bottom: 1px solid var(--border-subtle); }
