@@ -3660,3 +3660,199 @@ test('a delayed load-more response cannot replace a newer run generation', async
   for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual([...window.document.querySelectorAll('.run-item')].map((node) => node.dataset.runId), [newFirst.id, oldFirst.id]);
 });
+
+// --- Loaded-run overview (DESIGN.md section 11) ---
+
+function overviewFixture(runs) {
+  const data = fixture('completed', 'pass', 'PASS');
+  const base = data.list.runs[0];
+  const detail = data.details;
+  data.list.runs = runs.map((run, index) => ({ ...base, id: `run-${index}`, ...run }));
+  data.list.total = data.list.runs.length;
+  data.list.generation = 'same';
+  data.details = (id) => ({ ...detail, run: { ...detail.run, id } });
+  return data;
+}
+
+const overviewGroups = (d, kind) =>
+  Array.from(d.querySelectorAll(`#run-overview [data-overview-kind="${kind}"] .overview-group`), (node) => [
+    node.querySelector('.overview-group-name').textContent,
+    node.querySelector('.overview-group-count').textContent,
+  ]);
+
+test('overview counts only loaded runs and keeps every recorded verification value', async (t) => {
+  const data = overviewFixture([
+    { provider: 'claude', verification: 'PASS', project: 'agentrec' },
+    { provider: 'claude', verification: 'FAIL', project: 'agentrec' },
+    { provider: 'codex', verification: 'PASS', project: 'etf-trading' },
+    { provider: 'codex', verification: 'TAINTED', project: 'etf-trading' },
+    { provider: 'codex', verification: 'NOT RUN', project: 'hermes-sustain' },
+    { provider: 'codex', verification: 'PENDING', project: 'hermes-sustain' },
+  ]);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  const overview = d.querySelector('#run-overview');
+  assert.ok(overview, 'the sidebar offers a loaded-run overview');
+  assert.equal(overview.classList.contains('hidden'), false);
+  // It costs one row until asked for, beside the list it describes.
+  assert.equal(overview.tagName, 'DETAILS');
+  assert.equal(overview.open, false);
+  assert.ok(d.querySelector('.sidebar #run-overview'), 'the overview sits with the run list');
+
+  assert.deepEqual(overviewGroups(d, 'provider'), [['claude', '2'], ['codex', '4']]);
+  // Recorded verification values survive verbatim: no residual bucket, no re-ranking.
+  assert.deepEqual(overviewGroups(d, 'verification'), [
+    ['FAIL', '1'], ['NOT RUN', '1'], ['PASS', '2'], ['PENDING', '1'], ['TAINTED', '1'],
+  ]);
+  assert.deepEqual(overviewGroups(d, 'project'), [['agentrec', '2'], ['etf-trading', '2'], ['hermes-sustain', '2']]);
+
+  const total = overview.querySelector('#run-overview-scope').textContent;
+  assert.match(total, /6/);
+  // A fully loaded store must not imply unloaded runs exist.
+  assert.doesNotMatch(total, /more/i);
+});
+
+test('overview says the count is partial while more runs remain unloaded', async (t) => {
+  const data = overviewFixture([
+    { provider: 'claude', verification: 'PASS', project: 'agentrec' },
+    { provider: 'codex', verification: 'FAIL', project: 'agentrec' },
+  ]);
+  data.list.total = 34;
+  data.list.nextCursor = 'page-two';
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  const scope = d.querySelector('#run-overview-scope').textContent;
+  assert.match(scope, /2 loaded/);
+  assert.match(scope, /34 recorded/);
+  // Load more stays the only way to widen the scope.
+  assert.equal(d.querySelector('#run-load-more').classList.contains('hidden'), false);
+});
+
+test('overview groups drive the existing run-list filters instead of a separate view', async (t) => {
+  const data = overviewFixture([
+    { provider: 'claude', verification: 'PASS', project: 'agentrec' },
+    { provider: 'codex', verification: 'FAIL', project: 'etf-trading' },
+    { provider: 'codex', verification: 'PASS', project: 'etf-trading' },
+  ]);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+
+  const codex = Array.from(d.querySelectorAll('#run-overview [data-overview-kind="project"] .overview-group'))
+    .find((node) => node.querySelector('.overview-group-name').textContent === 'etf-trading');
+  assert.ok(codex, 'each group is reachable');
+  assert.equal(codex.tagName, 'BUTTON', 'groups are keyboard-reachable native controls');
+
+  codex.click();
+  await settle();
+
+  assert.equal(d.querySelector('#run-project-filter').value, 'etf-trading');
+  assert.deepEqual(runIDs(d), ['run-1', 'run-2']);
+  assert.equal(new w.URL(w.location.href).searchParams.get('project'), 'etf-trading');
+});
+
+test('overview survives run selection and stays hidden for an empty store', async (t) => {
+  const data = overviewFixture([{ provider: 'claude', verification: 'PASS', project: 'agentrec' }]);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  // The viewer auto-selects a run, so the overview must coexist with the run view.
+  assert.equal(d.querySelector('#run-view').classList.contains('hidden'), false);
+  assert.equal(d.querySelector('#run-overview').classList.contains('hidden'), false);
+  assert.deepEqual(overviewGroups(d, 'provider'), [['claude', '1']]);
+
+  const emptyStore = fixture('completed', 'pass', 'PASS');
+  emptyStore.list = { runs: [], total: 0, unreadable: 0 };
+  const emptyDom = await renderFixture(emptyStore);
+  t.after(() => emptyDom.window.close());
+  const e = emptyDom.window.document;
+  assert.equal(e.querySelector('#run-overview').classList.contains('hidden'), true);
+  assert.equal(e.querySelector('#workspace-empty-title').textContent, 'No runs recorded yet');
+});
+
+test('overview is localized without translating recorded status values', async (t) => {
+  const data = overviewFixture([
+    { provider: 'claude', verification: 'PASS', project: 'agentrec' },
+    { provider: 'codex', verification: 'NOT RUN', project: 'agentrec' },
+  ]);
+  data.configure = (w) => w.localStorage.setItem('agentrec.lang', 'ko');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  const heading = d.querySelector('#run-overview > summary').textContent;
+  assert.match(heading, /[가-힣]/, 'the overview heading is localized');
+  // Recorded values are identifiers, not prose.
+  assert.deepEqual(overviewGroups(d, 'verification'), [['NOT RUN', '1'], ['PASS', '1']]);
+});
+
+test('overview stays consistent after delete, undo, and a metadata-only poll', async (t) => {
+  const data = overviewFixture([
+    { provider: 'claude', verification: 'PASS', project: 'agentrec' },
+    { provider: 'codex', verification: 'FAIL', project: 'etf-trading' },
+  ]);
+  let list = data.list;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  // renderFixture installs its own fetch after configure; wrap it afterwards so
+  // the list can change under the page and restore has a route.
+  w.fetch = ((original) => (input, init) => {
+    const url = new w.URL(String(input), w.location.href);
+    if (url.pathname === '/api/runs') return response(list);
+    if (init && init.method === 'POST' && /\/restore$/.test(url.pathname)) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+    return original(input, init);
+  })(w.fetch);
+  const scope = () => d.querySelector('#run-overview-scope').textContent;
+  assert.equal(scope(), '2 loaded run(s)');
+
+  // Delete through the page's own path: the store shrank with the page, so the
+  // count must not claim an unloaded run exists behind a hidden Load more.
+  list = { ...data.list, runs: data.list.runs.slice(1), total: 1 };
+  [...d.querySelectorAll('button')].find((b) => /^Delete/i.test(b.textContent)).click();
+  await settle();
+  [...d.querySelectorAll('button')].find((b) => /^Delete/i.test(b.textContent)).click();
+  await settle();
+  assert.equal(d.querySelectorAll('#run-list .run-item').length, 1);
+  assert.equal(scope(), '1 loaded run(s)');
+  assert.doesNotMatch(scope(), /load more/i);
+
+  // Undo restores the summary and the count together.
+  list = data.list;
+  [...d.querySelectorAll('button')].find((b) => /^Undo$/i.test(b.textContent)).click();
+  await settle();
+  assert.equal(scope(), '2 loaded run(s)');
+  assert.deepEqual(overviewGroups(d, 'provider'), [['claude', '1'], ['codex', '1']]);
+
+  // A poll whose page content is unchanged but whose total shrank must not
+  // leave the overview describing the old store.
+  list = { ...data.list, total: 2, nextCursor: '' };
+  d.dispatchEvent(new w.Event('visibilitychange'));
+  await settle();
+  assert.equal(scope(), '2 loaded run(s)');
+});
+
+test('overview group activation keeps focus and remembers the project like the select does', async (t) => {
+  const data = overviewFixture([
+    { provider: 'claude', verification: 'PASS', project: 'agentrec' },
+    { provider: 'codex', verification: 'FAIL', project: 'etf-trading' },
+  ]);
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const group = [...d.querySelectorAll('[data-overview-kind="project"] .overview-group')]
+    .find((n) => n.querySelector('.overview-group-name').textContent === 'etf-trading');
+  group.focus();
+  group.click();
+  await settle();
+  // The list re-renders, but the reader's keyboard position must survive on the
+  // same group, not fall to BODY.
+  const active = d.activeElement;
+  assert.ok(active && active.classList.contains('overview-group'), `focus landed on ${active && active.tagName}`);
+  assert.equal(active.querySelector('.overview-group-name').textContent, 'etf-trading');
+  assert.equal(w.localStorage.getItem('agentrec.project'), 'etf-trading');
+});
