@@ -85,3 +85,13 @@ The run list answers "which run", never "what is in the store". Once dozens of r
 - A facet with no recorded values is hidden rather than shown empty, and an empty store hides the overview entirely instead of displaying zeroes. Provider has no run-list filter of its own, so it counts without pretending to be actionable.
 - Keep it keyboard reachable and legible at 1440/768/375 in EN/KO/JA/ZH with the current tokens; it is a short summary, not a second dashboard.
 - Acceptance: counts match the loaded summaries for real saved runs, partial-load wording appears whenever more runs remain, group selection drives the existing filters, and rendered screenshots are reviewed.
+
+## 12. Discoverable later verification
+
+A viewer started without `--allow-run` silently omits the **Verify now** control, so a reader never learns that a run can be verified again from the page. The comparison panel already says how to enable running; the Verification block must say the same for the same reason. Measured cause: 34 recorded runs and zero later verifications.
+
+- When the viewer may not run things and the run is not live, the Verification block shows one short, neutral sentence naming the exact command (`agentrec start --allow-run`) and, as the equivalent that needs no restart, `agentrec verify <run-id>`. It is guidance about the viewer's own permission, not a claim about the run.
+- The sentence appears only where **Verify now** would have appeared: never for live runs, never when running is already allowed, and never inside the run's own recorded verdict or the later-verification section. It does not change verdicts, attribution wording, or the existing "not verified when it ended" caveat.
+- Existing `--allow-run` behavior, the verify endpoint, its 403/409/422 handling, and the CLI are unchanged. No new endpoint or setting.
+- Localized in EN/KO/JA/ZH; the commands stay verbatim in code spans.
+- Acceptance: with `allowRun=false` the hint renders and **Verify now** does not; with `allowRun=true` the button renders and the hint does not; live runs show neither; a real viewer started without the flag shows the hint on a stored run.

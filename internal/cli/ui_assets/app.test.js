@@ -3856,3 +3856,77 @@ test('overview group activation keeps focus and remembers the project like the s
   assert.equal(active.querySelector('.overview-group-name').textContent, 'etf-trading');
   assert.equal(w.localStorage.getItem('agentrec.project'), 'etf-trading');
 });
+
+// --- Discoverable later verification (DESIGN.md section 12) ---
+
+
+test('verification block tells a read-only viewer how to verify later, and only then', async (t) => {
+  // Default fixture answers /api/shadow with allowRun:false.
+  const dom = await renderFixture(fixture('completed', 'pass', 'PASS'));
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.equal(d.querySelector('#verify-now'), null, 'no Verify now without --allow-run');
+  const hint = d.querySelector('#verify-later-hint');
+  assert.ok(hint, 'the Verification block explains how to verify later');
+  assert.match(hint.textContent, /agentrec start --allow-run/);
+  assert.match(hint.textContent, /agentrec verify/);
+  // Commands are verbatim code, not prose.
+  assert.ok([...hint.querySelectorAll('code')].some((c) => c.textContent === 'agentrec start --allow-run'));
+  // The hint is about the viewer's permission, never the run's verdict.
+  const verdict = d.querySelector('#run-verdict').textContent;
+  assert.doesNotMatch(hint.textContent, new RegExp(verdict));
+});
+
+test('verification hint yields to Verify now when running is allowed', async (t) => {
+  const dom = await renderFixture(fixture('completed', 'pass', 'PASS'));
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  // Override the shadow answer after renderFixture installs its fetch.
+  const original = w.fetch;
+  w.fetch = (input, init) => {
+    const url = new w.URL(String(input), w.location.href);
+    if (url.pathname === '/api/shadow') return response({ allowRun: true, runners: [], jobs: [] });
+    return original(input, init);
+  };
+  w.document.querySelector('#compare-open').click();
+  await settle();
+  w.document.querySelector('#run-list .run-item').click();
+  await settle();
+  const d = w.document;
+  assert.ok(d.querySelector('#verify-now'), 'Verify now renders when allowed');
+  assert.equal(d.querySelector('#verify-later-hint'), null, 'no hint once running is allowed');
+});
+
+test('live runs show neither Verify now nor the later-verification hint', async (t) => {
+  const dom = await renderFixture(fixture('running', 'running', 'running'));
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.equal(d.querySelector('#verify-now'), null);
+  assert.equal(d.querySelector('#verify-later-hint'), null);
+});
+
+test('later-verification hint is localized with verbatim commands', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.configure = (w) => w.localStorage.setItem('agentrec.lang', 'ko');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const hint = dom.window.document.querySelector('#verify-later-hint');
+  assert.ok(hint);
+  assert.match(hint.textContent, /[가-힣]/);
+  assert.match(hint.textContent, /agentrec start --allow-run/);
+});
+
+test('later-verification hint never pastes a shell-unsafe run id', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  // Reaches the client only if the server accepted it; the guard is defence in depth.
+  // A tilde survives URL paths verbatim yet expands in a shell.
+  const unsafe = 'run~x';
+  data.list.runs[0].id = unsafe;
+  data.details.run.id = unsafe;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  const codes = [...d.querySelectorAll('#verify-later-hint code')].map((c) => c.textContent);
+  assert.deepEqual(codes, ['agentrec start --allow-run', 'agentrec verify <run-id>']);
+  assert.doesNotMatch(d.querySelector('#verify-later-hint').textContent, /run~x|\{restart\}|\{cli\}/);
+});

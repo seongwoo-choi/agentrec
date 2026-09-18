@@ -284,6 +284,7 @@
       Copied: '복사됨',
       Run: '실행',
       'Start the viewer with `agentrec start --allow-run` to run comparisons from here': '여기에서 비교를 실행하려면 뷰어를 `agentrec start --allow-run`으로 시작합니다',
+      'To verify this run again from here, start the viewer with {restart}; without restarting, run {cli}.': '이 실행을 여기에서 다시 검증하려면 뷰어를 {restart}로 시작하세요. 재시작 없이 하려면 {cli}를 실행하세요.',
       'Cannot run comparison: {error}': '비교를 실행할 수 없습니다: {error}',
       'Cannot cancel: {error}': '취소할 수 없습니다: {error}',
       'Could not load comparison status: {error}': '비교 상태를 불러오지 못했습니다: {error}',
@@ -606,6 +607,7 @@
       Copied: 'コピーしました',
       Run: '実行',
       'Start the viewer with `agentrec start --allow-run` to run comparisons from here': 'ここから比較を実行するには、ビューアを `agentrec start --allow-run` で起動します',
+      'To verify this run again from here, start the viewer with {restart}; without restarting, run {cli}.': 'この実行をここから再検証するには、ビューアを {restart} で起動してください。再起動せずに行うには {cli} を実行します。',
       'Cannot run comparison: {error}': '比較を実行できません: {error}',
       'Cannot cancel: {error}': 'キャンセルできません: {error}',
       'Could not load comparison status: {error}': '比較の状態を読み込めませんでした: {error}',
@@ -928,6 +930,7 @@
       Copied: '已复制',
       Run: '运行',
       'Start the viewer with `agentrec start --allow-run` to run comparisons from here': '要从这里运行比较，请使用 `agentrec start --allow-run` 启动查看器',
+      'To verify this run again from here, start the viewer with {restart}; without restarting, run {cli}.': '要从这里重新验证此运行，请使用 {restart} 启动查看器；如不想重启，可运行 {cli}。',
       'Cannot run comparison: {error}': '无法运行比较：{error}',
       'Cannot cancel: {error}': '无法取消：{error}',
       'Could not load comparison status: {error}': '无法加载比较状态：{error}',
@@ -3335,6 +3338,24 @@ function shortID(id) {
       button.addEventListener('click', () => verifyRun(id));
       actions.append(button);
       block.append(actions);
+    } else if (!state.allowRun && !isLive()) {
+      // Without --allow-run the button is absent, and a reader would never learn
+      // the run can be verified again. Say so once, about the viewer's own
+      // permission, with the exact commands; never about the run's verdict.
+      const hint = node('p', 'verify-later-hint');
+      hint.id = 'verify-later-hint';
+      // The command is meant to be pasted into a shell: only inline an id made
+      // of shell-inert characters, otherwise leave a placeholder the reader fills.
+      const pasteable = /^[A-Za-z0-9._-]+$/.test(id) ? id : '<run-id>';
+      const parts = { restart: 'agentrec start --allow-run', cli: `agentrec verify ${pasteable}` };
+      const template = t('To verify this run again from here, start the viewer with {restart}; without restarting, run {cli}.');
+      // Placeholders may appear in any order in a translation; a missing one is dropped, never printed literally.
+      for (const piece of template.split(/(\{restart\}|\{cli\})/)) {
+        const key = piece.slice(1, -1);
+        if (piece.startsWith('{') && key in parts) hint.append(node('code', '', parts[key]));
+        else if (piece) hint.append(piece);
+      }
+      block.append(hint);
     }
     if (verify.error && verify.runId === id) block.append(node('p', 'compare-error verify-error', verify.error));
     if (!doc) return;

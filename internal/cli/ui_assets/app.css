@@ -425,6 +425,9 @@ html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
 .verify-error { margin-top: 8px; }
 .posthoc { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 10px; }
 .posthoc-caveat { margin: 6px 0 0; color: var(--warn); font-size: 12px; line-height: 1.45; }
+/* guidance about the viewer's own permission: quiet, not a warning about the run */
+.verify-later-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; word-break: keep-all; overflow-wrap: anywhere; }
+.verify-later-hint code { font: 11px var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; }
 .posthoc-output { margin-top: 8px; }
 .posthoc-output summary { cursor: pointer; color: var(--muted); font: 12px var(--mono); }
 
