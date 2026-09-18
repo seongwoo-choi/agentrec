@@ -233,6 +233,17 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — the run heading stops at its first sentence:** In a local
+store 22 of 35 titles were cut at the 120-rune cap mid-phrase and 27 of 35
+headings wrapped to two lines, while in most of them the first sentence ended
+within 80 characters and the rest was the second and third sentence of the
+request, which the request card carries in full. The heading now shows the
+loaded title up to the end of its first sentence (`. `, `? ` or `! ` after the
+twelfth character; a colon is not a boundary because it introduces the
+request's substance). The full title stays in the heading's tooltip, the
+sidebar row and the request card. Trailing sentences go; words never do. On
+that store two-line headings fell from 27 to 5.
+
 **Unreleased — the timeline panel fits the screen it is on:** The timeline
 and inspector panels were sized by a fixed guess (`100vh − 340px`) while the
 context above them measured 565–583 px, so on every desktop size the panel's
