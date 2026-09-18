@@ -4280,3 +4280,28 @@ test('desktop panels flex to the space left below the run context instead of gue
   const narrow = css.slice(css.indexOf('@media (max-width: 1023px)'));
   assert.match(narrow, /\.timeline-panel, \.inspector-panel\s*\{\s*height:\s*min\(70vh, 640px\);?\s*\}/, 'narrow layouts keep their height');
 });
+
+// --- The run heading stops at its first sentence (DESIGN.md section 20) ---
+
+test('the run heading shows the first sentence of the loaded title and keeps the whole title reachable', async (t) => {
+  const cases = [
+    ['Fix one observed telemetry defect: Hermes Sustain does not count go vet as a gate. Add a test.', 'Fix one observed telemetry defect: Hermes Sustain does not count go vet as a gate.'],
+    ['Reply with exactly: ok', 'Reply with exactly: ok'],
+    ['Read AGENTS.md if present and README.md. Report the project purpose and current state.', 'Read AGENTS.md if present and README.md.'],
+    ['Is the build green? Then tag it.', 'Is the build green?'],
+    ['v0.1.0: release candidate. Make only the changes listed.', 'v0.1.0: release candidate.'],
+    ['Intentionally fail for dogfood: print a short explanation, do not edit files, then exit nonzero.', 'Intentionally fail for dogfood: print a short explanation, do not edit files, then exit nonzero.'],
+    ['Implement the approved local Viewer UI/UX polish in this worktree with no trailing boundary at all', 'Implement the approved local Viewer UI/UX polish in this worktree with no trailing boundary at all'],
+    ['e.g. this starts with an abbreviation. Then continues.', 'e.g. this starts with an abbreviation.'],
+  ];
+  for (const [title, expected] of cases) {
+    const data = fixture('completed', 'pass', 'PASS');
+    data.list.runs[0].title = title;
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const heading = dom.window.document.querySelector('#run-title');
+    assert.equal(heading.textContent, expected, title);
+    assert.equal(heading.title, title === expected ? '' : title, 'the full title is the tooltip only when the heading was cut');
+    assert.equal(dom.window.document.querySelector('.run-item .run-title-text').textContent, title, 'the sidebar row keeps the full title');
+  }
+});
