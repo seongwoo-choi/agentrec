@@ -4342,3 +4342,50 @@ test('the task notification speaker is localized', async (t) => {
     assert.equal(dom.window.document.querySelector('.conversation-row .speaker').textContent, label, lang);
   }
 });
+
+// --- Prompt rows say which turn they are (DESIGN.md section 23) ---
+
+test('prompt rows carry their ordinal among the recorded prompts, exact per loaded page', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const at = (s) => `2026-09-03T00:00:${String(s).padStart(2, '0')}Z`;
+  const prompt = (id, s, text) => ({ id, type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: at(s), input: { prompt: text } });
+  const reply = (id, s) => ({ id, type: 'agent.message', provider: 'claude', status: 'completed', startedAt: at(s), input: { text: 'ok' } });
+  const first = [prompt('p1', 1, 'first request'), reply('m1', 2), prompt('p2', 3, '<task-notification>\n<status>completed</status>\n</task-notification>')];
+  const second = [reply('m2', 4), prompt('p3', 5, 'third request'), reply('m3', 6)];
+  data.details.actionCount = 6;
+  data.details.promptCount = 3;
+  data.actions = (cursor) => cursor === 0 ? { items: first, nextCursor: 1000 } : { items: second, nextCursor: null };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  const speakers = () => [...d.querySelectorAll('.conversation-row.prompt .speaker')].map((n) => n.textContent);
+  assert.deepEqual(speakers(), ['You · 1 of 3', 'Task notification · 2 of 3'], 'first page: exact ranks, total from the record');
+  d.querySelector('.stream-tail .load-more').click();
+  await settle();
+  assert.deepEqual(speakers(), ['You · 1 of 3', 'Task notification · 2 of 3', 'You · 3 of 3']);
+});
+
+test('a single-prompt run shows no ordinal', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ id: 'p1', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:01Z', input: { prompt: 'only request' } }];
+  data.details.actionCount = 1;
+  data.details.promptCount = 1;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('.conversation-row.prompt .speaker').textContent, 'You');
+});
+
+test('the prompt ordinal is localized', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [
+    { id: 'p1', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:01Z', input: { prompt: 'a' } },
+    { id: 'p2', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:02Z', input: { prompt: 'b' } },
+  ];
+  data.details.actionCount = 2;
+  data.details.promptCount = 2;
+  for (const [lang, expected] of [['ko', '나 · 2 / 2'], ['ja', '自分 · 2 / 2'], ['zh-CN', '我 · 2 / 2']]) {
+    const dom = await renderFixture({ ...data, configure: (w) => w.localStorage.setItem('agentrec.lang', lang) });
+    t.after(() => dom.window.close());
+    assert.equal([...dom.window.document.querySelectorAll('.conversation-row.prompt .speaker')].pop().textContent, expected, lang);
+  }
+});

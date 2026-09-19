@@ -233,6 +233,17 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — prompt rows say which turn they are:** On a multi-turn
+session in a local store, twelve prompt rows sat among 108 actions with no way
+to tell which request a row was or how many followed without counting while
+scrolling. The run detail now carries `promptCount` (the `user.prompt` actions
+in the record, counted in the pass that already counts actions), and each
+prompt row's speaker line reads `You · 3 of 12` — the rank among prompts
+loaded so far, which is exact because pages arrive in order. Task
+notifications count as turns too, since the provider recorded them as
+prompts. A single-prompt run shows no ordinal. The Viewer still does not infer
+which reply answers which prompt.
+
 **Unreleased — task notifications are not spoken by the operator:** Claude
 Code delivers a finished background task back into the conversation through
 the same prompt hook as the operator's own words, as a prompt beginning

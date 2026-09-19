@@ -171,6 +171,7 @@ type viewRunResponse struct {
 	// verbatim and bounded; absent when the run has none. It is a record, not
 	// a summary or a verdict.
 	LastAgentMessage *viewLastAgentMessage `json:"lastAgentMessage,omitempty"`
+	PromptCount      int                   `json:"promptCount"` // user.prompt actions in the record
 }
 
 type viewLastAgentMessage struct {

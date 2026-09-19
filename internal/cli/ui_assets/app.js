@@ -200,6 +200,7 @@
       reply: '응답',
       You: '나',
       'Task notification': '작업 알림',
+      '{n} of {total}': '{n} / {total}',
       'Show more': '더 보기',
       'Show less': '접기',
       '… full text in the inspector': '… 전체 내용은 인스펙터에서 확인',
@@ -540,6 +541,7 @@
       reply: '返答',
       You: '自分',
       'Task notification': 'タスク通知',
+      '{n} of {total}': '{n} / {total}',
       'Show more': 'もっと見る',
       'Show less': '閉じる',
       '… full text in the inspector': '… 全文はインスペクターで確認',
@@ -880,6 +882,7 @@
       reply: '回复',
       You: '我',
       'Task notification': '任务通知',
+      '{n} of {total}': '{n} / {total}',
       'Show more': '展开',
       'Show less': '收起',
       '… full text in the inspector': '… 全文见检视器',
@@ -2295,7 +2298,11 @@ function shortID(id) {
       // hook; the operator did not say it (DESIGN.md section 22).
       const notification = type === 'user.prompt' && isTaskNotification(speech);
       if (notification) row.classList.add('notification');
-      const speaker = notification ? t('Task notification') : type === 'user.prompt' ? t('You') : (action.provider || t('provider'));
+      let speaker = notification ? t('Task notification') : type === 'user.prompt' ? t('You') : (action.provider || t('provider'));
+      // Which turn this is: exact for loaded rows, total from the record; silent when there is only one.
+      const total = state.run?.promptCount || 0;
+      const rank = type === 'user.prompt' ? byID?.promptRank?.get(action.id) : undefined;
+      if (rank && total > 1) speaker = `${speaker} · ${t('{n} of {total}', { n: rank, total })}`;
       body.append(node('div', 'speaker', speaker), speechBlock(speech));
       row.append(time, body);
       return row;
@@ -2488,7 +2495,13 @@ function shortID(id) {
   const MODES = {
     actions: {
       typeOf: (action) => action.type || 'unknown',
-      context: (items) => new Map(items.map((action) => [action.id, action])),
+      // The id map for depth, plus each prompt's rank among loaded prompts (DESIGN.md section 23).
+      context: (items) => {
+        const byID = new Map(items.map((action) => [action.id, action]));
+        let rank = 0;
+        byID.promptRank = new Map(items.filter((action) => action.type === 'user.prompt').map((action) => [action.id, ++rank]));
+        return byID;
+      },
       row: actionRow,
       total: () => state.run.actionCount || 0,
       error: 'Could not load actions: {error}',
