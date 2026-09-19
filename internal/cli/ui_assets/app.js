@@ -199,6 +199,7 @@
       prompt: '요청',
       reply: '응답',
       You: '나',
+      'Task notification': '작업 알림',
       'Show more': '더 보기',
       'Show less': '접기',
       '… full text in the inspector': '… 전체 내용은 인스펙터에서 확인',
@@ -538,6 +539,7 @@
       prompt: 'プロンプト',
       reply: '返答',
       You: '自分',
+      'Task notification': 'タスク通知',
       'Show more': 'もっと見る',
       'Show less': '閉じる',
       '… full text in the inspector': '… 全文はインスペクターで確認',
@@ -877,6 +879,7 @@
       prompt: '提示',
       reply: '回复',
       You: '我',
+      'Task notification': '任务通知',
       'Show more': '展开',
       'Show less': '收起',
       '… full text in the inspector': '… 全文见检视器',
@@ -2255,6 +2258,11 @@ function shortID(id) {
   }
 
   // ── Timeline rows ─────────────────────────────────────────────────────────
+  // One recognized shape only: a prompt whose text starts with <task-notification>.
+  function isTaskNotification(prompt) {
+    return /^\s*<task-notification>/.test(prompt);
+  }
+
   function actionRow(action, index, byID) {
     const type = action.type || 'unknown';
     const speech = conversationText(action);
@@ -2283,7 +2291,12 @@ function shortID(id) {
     const time = node('div', 'action-time', clock(action.startedAt));
     if (speech !== null) {
       const body = node('div', 'speech-body');
-      body.append(node('div', 'speaker', type === 'user.prompt' ? t('You') : (action.provider || t('provider'))), speechBlock(speech));
+      // Claude delivers a finished background task back through the prompt
+      // hook; the operator did not say it (DESIGN.md section 22).
+      const notification = type === 'user.prompt' && isTaskNotification(speech);
+      if (notification) row.classList.add('notification');
+      const speaker = notification ? t('Task notification') : type === 'user.prompt' ? t('You') : (action.provider || t('provider'));
+      body.append(node('div', 'speaker', speaker), speechBlock(speech));
       row.append(time, body);
       return row;
     }

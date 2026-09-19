@@ -180,3 +180,13 @@ Measured on the local store: after selecting any action, the first payload in th
 - The caption becomes the button's `title` (tooltip) and its `aria-description`, in the same four locales; the visible paragraph is removed. The status line (`Copied` / clipboard-denied guidance) and the fallback URL input stay exactly where they are, since they carry per-action outcomes.
 - The wording does not change: `Local link: requires the same Viewer and recorded data. Not a public share.`
 - Acceptance: the button carries the caption as `title` and `aria-description` in EN/KO/JA/ZH; no `.evidence-link-caption` element renders; the first payload rises by the caption's height on the measured run; copy success and denied paths are unchanged.
+
+## 22. Task notifications are not spoken by the operator
+
+Measured on the local store's one multi-turn session (`20260909T090038`, 12 `user.prompt` actions): four of the twelve are Claude Code background-task notifications — Claude delivers a finished background task's summary back into the conversation through the same `UserPromptSubmit` hook, as a prompt whose text begins `<task-notification>` and carries `<task-id>`, `<status>` and `<summary>` elements. The record is faithful: the provider did submit it as a prompt. The Viewer labels every `user.prompt` row **You**, so on this session a third of what the reader sees "the operator saying" was said by Claude's own task runner.
+
+- A `user.prompt` action whose prompt text, after leading whitespace, begins with `<task-notification>` is labelled **Task notification** instead of **You**, in the same conversation-row shape, with a distinct neutral tone (no accent bar, muted speaker). The text is shown verbatim as it is today; nothing is parsed out of it, nothing is summarized, and the action type, id, status, search, inspector and stored record are unchanged.
+- The header's request card, which shows the first prompt of the run, is unaffected: a run cannot begin with a notification. The Loaded-run overview and title derivation do not read prompts beyond the first line and are unaffected.
+- This is a display label for one recognized shape, not a classifier: any other prompt, including one that merely mentions the words, is still **You**.
+- Localized in EN/KO/JA/ZH.
+- Acceptance: on the measured session the four notification rows read **Task notification** and the eight operator prompts still read **You**; a prompt that contains `<task-notification>` after other text is still **You**; the inspector for a notification row shows the unchanged `user.prompt` record.

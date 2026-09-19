@@ -277,6 +277,7 @@ html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
 .speaker { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .speech { border-left: 3px solid var(--border); background: var(--surface); border-radius: 0 8px 8px 0; padding: 8px 12px; }
 .conversation-row.prompt .speech { border-left-color: var(--accent); background: var(--accent-soft); }
+.conversation-row.prompt.notification .speech { border-left-color: var(--border); background: transparent; }
 .speech-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .speech-text.expanded { display: block; max-height: 60vh; overflow: auto; }
 .show-more { margin-top: 6px; border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; font-weight: 500; }

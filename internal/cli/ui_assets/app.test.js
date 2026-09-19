@@ -4307,3 +4307,38 @@ test('the run heading shows the first sentence of the loaded title and keeps the
     assert.equal(dom.window.document.querySelector('.run-item .run-title-text').textContent, title, 'the sidebar row keeps the full title');
   }
 });
+
+// --- Task notifications are not spoken by the operator (DESIGN.md section 22) ---
+
+test('a user.prompt that is a Claude task notification is labelled as such, not as You', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const at = (s) => `2026-09-03T00:00:0${s}Z`;
+  const notification = '<task-notification>\n<task-id>abc123</task-id>\n<status>completed</status>\n<summary>Background task finished.</summary>\n</task-notification>';
+  data.actions = [
+    { id: 'p1', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: at(1), input: { prompt: 'Rewrite the resume.' } },
+    { id: 'p2', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: at(2), input: { prompt: '  \n' + notification } },
+    { id: 'p3', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: at(3), input: { prompt: 'Please ignore the <task-notification> above.' } },
+    { id: 'm1', type: 'agent.message', provider: 'claude', status: 'completed', startedAt: at(4), input: { text: 'Done.' } },
+  ];
+  data.details.actionCount = 4;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  const speakers = [...d.querySelectorAll('.conversation-row')].map((row) => [row.dataset.index, row.querySelector('.speaker').textContent, row.classList.contains('notification')]);
+  assert.deepEqual(speakers, [['0', 'You', false], ['1', 'Task notification', true], ['2', 'You', false], ['3', 'claude', false]]);
+  d.querySelector('.conversation-row[data-index="1"] .show-more').click();
+  assert.match(d.querySelector('.conversation-row[data-index="1"] .speech').textContent, /<task-id>abc123<\/task-id>/, 'the text is shown verbatim once expanded');
+  d.querySelector('.conversation-row[data-index="1"]').click();
+  assert.match(d.querySelector('#inspector').textContent, /user\.prompt/, 'the record is still a user.prompt');
+});
+
+test('the task notification speaker is localized', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ id: 'p2', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:01Z', input: { prompt: '<task-notification>\n<status>completed</status>\n</task-notification>' } }];
+  data.details.actionCount = 1;
+  for (const [lang, label] of [['ko', '작업 알림'], ['ja', 'タスク通知'], ['zh-CN', '任务通知']]) {
+    const dom = await renderFixture({ ...data, configure: (w) => w.localStorage.setItem('agentrec.lang', lang) });
+    t.after(() => dom.window.close());
+    assert.equal(dom.window.document.querySelector('.conversation-row .speaker').textContent, label, lang);
+  }
+});

@@ -233,6 +233,16 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
+**Unreleased — task notifications are not spoken by the operator:** Claude
+Code delivers a finished background task back into the conversation through
+the same prompt hook as the operator's own words, as a prompt beginning
+`<task-notification>`. On the one multi-turn session in a local store, four of
+twelve prompt rows were such notifications, all labelled **You**. A prompt
+whose text begins `<task-notification>` is now labelled **Task notification**
+in a neutral tone; the text stays verbatim and the `user.prompt` record, its
+id, status, search and inspector are unchanged. Any other prompt is still
+**You**. Localized in EN/KO/JA/ZH.
+
 **Unreleased — the evidence-link caption moves under the button:** After
 selecting any action, a two-line caption explaining that the copy link is
 local sat between the button and the payload on every selection. It is now the
