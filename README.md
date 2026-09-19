@@ -5,7 +5,7 @@
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <a href="assets/viewer-en-light.png"><img src="assets/viewer-en-light.png" alt="The agentrec viewer: a recorded session read as a conversation with its tool calls, six evidence tiles and the evidence inspector"></a><br>
+      <a href="assets/viewer-en-light.png"><img src="assets/viewer-en-light.png" alt="The agentrec viewer: a recorded session read as a conversation with its tool calls, the summary strip and the evidence inspector"></a><br>
       <sub><b>One run, read back.</b><br>What the agent said, what the process did, what the repository shows, what the checks returned — kept apart.</sub>
     </td>
     <td width="50%" align="center">
@@ -34,10 +34,10 @@ English | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文]
   <em>Launched by agentrec or recorded from an interactive session. Provider claims, process result, repository delta and pinned checks — each from its own observer, never merged into a score.</em>
 </p>
 
-**agentrec** records one Claude Code or Codex run into a bundle: a normalized
-action timeline, the supervised process result, the repository difference across
-the run window, and the outcome of checks the repository itself pinned. Each
-comes from a different observer, and the bundle keeps them apart — so a code
+**agentrec** records one Claude Code or Codex run into a bundle: the actions the
+provider reported, the supervised process result, the repository difference
+across the run window, and the outcome of checks the repository itself pinned.
+Each comes from a different observer and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
@@ -55,21 +55,7 @@ version starts from what was observed rather than from a summary.
 
 ## Quick start
 
-> **Status:** v0.15.0 is the latest release. The Viewer reads like a record of
-> what happened: a reading-first timeline, folded hook and tool noise, safe
-> titles, durations, turn ordinals and the agent's last message — every one of
-> them a fold, a label or a position over the unchanged evidence.
->
-> v0.6.0 added the live view of a running session and search across every run;
-> v0.5.0 added deleting runs into a trash, infinite scroll, usage and model
-> from the transcript, three plain words for `UNAVAILABLE`, and comparisons
-> launched from the page behind `--allow-run`; v0.4.0 added prompts and
-> replies, `agentrec setup` and `agentrec start`, and the viewer's four
-> languages; v0.3.0 added interactive session recording
-> for Claude Code and Codex, pins repository evidence to Git's defaults, and keeps
-> redaction from growing a line past the stream limit.
-
-**Pick one install. Homebrew is the easiest.**
+**Install.** Homebrew is the easiest; a checksummed archive or `go install` also works.
 
 ```sh
 brew install seongwoo-choi/tap/agentrec
@@ -87,20 +73,16 @@ tar -xzf "$archive"
 go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.15.0
 ```
 
-Each tagged release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
-`linux_arm64` archives plus one `SHA256SUMS` covering all four. On Linux, use
-`sha256sum -c -` in place of `shasum -a 256 -c -`. `agentrec version` prints the
-tag, the commit and the UTC build time; a build made any other way reports `dev`,
-so an unstamped binary is never mistaken for a released one. Building from source
-needs Go 1.26 or newer; `shadow run` also needs Git 2.36 or newer.
+Each release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
+`linux_arm64` archives plus one `SHA256SUMS`. `agentrec version` prints the tag,
+commit and UTC build time; any other build reports `dev`. Building from source
+needs Go 1.26 or newer; `shadow run` also needs Git 2.36 or newer. If several
+installations may be present, `agentrec version --verbose` names the executable
+actually invoked and every `agentrec` on `PATH`.
 
-If more than one installation may be present, first use `type -a agentrec` to
-locate the shell candidates, then invoke the newly installed binary by its
-explicit path with `version --verbose`. It reports the executable actually
-invoked and every executable `agentrec` candidate in `PATH` order, marking
-candidates that identify the running file.
-
-**⭐ Commit the verification config (recommended):**
+**Pin the checks a run is verified against** by committing `.agentrec.yaml`
+(copy `.agentrec.example.yaml`). Each command is launched directly, without a
+shell.
 
 ```yaml
 version: 1
@@ -113,11 +95,8 @@ verify:
     timeout: 5m
 ```
 
-Copy `.agentrec.example.yaml` to `.agentrec.yaml` and commit it. A run is verified
-only against checks the repository already held, and each command is launched
-directly, with no shell: an argument is an argument and nothing else.
-
-**Record a run agentrec launches:**
+**Record a run agentrec launches.** The working directory must be a clean Git
+checkout; one traced run at a time per repository.
 
 ```sh
 agentrec trace claude -- -p "add a regression test for the parser"
@@ -127,11 +106,10 @@ agentrec trace codex --verify -- exec "add a regression test for the parser"
 agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 ```
 
-The working directory must be a Git checkout with no uncommitted changes and no
-operation in progress, so the run's own changes can be told apart. One traced run
-at a time per repository: a second is refused, not queued.
-
-**Record the interactive sessions you already have:**
+**Record the interactive sessions you already have.** `setup` installs the
+provider hooks (user or project file, existing hooks kept, a backup written
+beside the file, idempotent); every session opened afterwards is filed as a run.
+Codex needs `/hooks` once, inside Codex, to trust the new hook.
 
 ```sh
 agentrec setup
@@ -140,19 +118,9 @@ agentrec setup --codex --project
 agentrec hooks print --claude
 ```
 
-On a terminal, `agentrec setup` asks which agent to record (Claude Code, Codex or
-both), whether to run the checks pinned in `.agentrec.yaml` after each session
-(`--verify`), and whether to write your user file (`~/.claude/settings.json`,
-`~/.codex/hooks.json`) or the project's (`.claude/settings.json`, `.codex/hooks.json`).
-Flags skip the questions. Existing hooks are kept, a backup is written beside the
-file, and running it again changes nothing. Codex needs `/hooks` once, inside Codex,
-to trust the new hook. `hooks print` shows the fragment instead of installing it.
-Every session opened afterwards is filed as a run; sessions already open are not.
-Each prompt and each final reply is recorded beside the tool calls, as `PROMPT`
-and `MESSAGE` lines paired by the provider's turn id. Upgrading from v0.3.0? Run
-`agentrec setup` again: it adds the `Stop` hook and touches nothing else.
-
-**Read it back — in the browser, where most people will want it:**
+**Read it back.** `start` keeps the viewer at `http://127.0.0.1:7788/` in the
+background; `view` serves it in the foreground; `list`, `show` and `events` read
+the same bundle in the terminal.
 
 ```sh
 agentrec start
@@ -164,299 +132,39 @@ agentrec show latest
 agentrec events latest --json
 ```
 
-`agentrec start` keeps the viewer running in the background at `http://127.0.0.1:7788/`
-and opens it; `status` says whether it is running, how many runs are recorded and
-whether the hooks are installed; `stop` ends it. `view` serves the same pages in the
-foreground. A run deleted in the viewer goes to the trash, which `agentrec trash`
-lists, restores from, or empties. Started with `--allow-run`, the viewer can also
-run a comparison: the Compare runners panel takes a repository, a task and the
-runners, launches `agentrec shadow run` for you, and shows its output and the two
-runs it recorded. Without the flag the panel only writes the command for you to
-copy. While a run is still going, its page keeps up on its own and shows the
-working tree as it is now; the search field in the top bar looks for a word in
-every run — where it happened, its prompt, its actions, and stored changed-file
-paths — and opens the run at the matching action or changed file. The sidebar
-filters the runs loaded into the browser by
-their exact exit and verification values. **Failures only** uses the same
-failure union as `agentrec list --failures-only`, and combines with those exact
-filters to narrow it further. The sidebar search and filters are reflected in
-`?q=...&exit=...&verification=...&failures=1`, so those settings survive
-reloads and can be bookmarked or shared alongside comparison links in
-`#compare=...`. A shared link applies them to the runs loaded on arrival;
-**Load more** extends that set.
-
-**v0.15.0 — title-first run list:** Each loaded sidebar row now leads with a
-Viewer-only title derived from a complete, valid UTF-8 `prompt.txt` no larger
-than 64 KiB. The whole prompt is re-redacted before taking its first non-empty
-line and limiting it to 120 Unicode characters; missing, unreadable, invalid, or oversized prompts fall
-back to the run ID. This does not change canonical bundle storage or the
-`agentrec list --json` contract. Project, provider, and time remain visible as
-secondary facts, while process and verification stay separate; routine outcomes
-are neutral and failures, warnings, and running work are emphasized. Title
-search and the project selector remain visible. Exit, verification, and
-failure-only controls start collapsed under **Advanced filters**, show how many
-are applied, and keep their values when hidden. Search still covers only loaded
-summaries and makes no per-row detail requests; the recent-10 fold, selected
-older run, exact evidence links, and **Load more** scope are unchanged.
-
-**v0.15.0 — calmer evidence workspace:** The detail heading reuses the safe
-title from a loaded summary and keeps the full run ID underneath; a run outside
-the loaded summaries still uses its ID. The request starts collapsed, with a
-160-character Unicode preview and the complete sanitized text available on
-expansion. Process and verification lead a single summary strip. Narrow screens
-keep the run list scrollable and reflow search, tabs, and the inspector without
-hiding evidence. Dark and light system themes remain supported; recordings,
-CLI/API contracts, and exact evidence links are unchanged.
-
-**v0.15.0 — reading-first action timeline:** Actions now open in **Reading
-view**, which uses native disclosure groups only for consecutive, completed
-known tool records on the same loaded byte page and under the same parent.
-Runner recognition uses bounded invocation signatures, not words in filenames or search patterns. Group kinds are localized, and counts describe top-level entries, excluding expanded children.
-Prompts, replies, file mutations, verification-like commands, nonzero exits,
-structured errors, warnings, unfinished or unknown records stay visible as
-individual rows; a provider's completed status is not presented as independent
-verification. **All actions** restores every chronological row. Timeline search
-and type filters expose matching actions directly, while exact action links open
-the containing group and retain the original action ID, object, index, byte
-cursor, inspector, selection, and browser-history behavior. This is loaded-snapshot
-presentation only: it adds no summary model, endpoint, request per row, storage
-change, or persistence.
-
-**v0.15.0 — readable Changes and Provider events:** Changes defaults to
-**Folder view**, grouping loaded files by their exact immediate directory.
-**All files** and filtered lists show full paths; exact file links open the
-containing folder without changing the original path, cursor, or patch behavior.
-Provider events defaults to **Event summary**, folding only recognized, safe,
-consecutive `PostToolUse` records within the same loaded page and session.
-Lifecycle, failure, dropped, unknown, and conflicting-type records stay separate;
-provider events are not independent verification. **All events** restores the
-loaded records in their original order. Grouped views use explicit **Load more**
-and preserve retry and keyboard focus. Records, APIs, and the Actions reading
-view are unchanged; no event permalinks or generated summaries are introduced.
-
-**v0.15.0 — prompt rows say which turn they are:** On a multi-turn
-session in a local store, twelve prompt rows sat among 108 actions with no way
-to tell which request a row was or how many followed without counting while
-scrolling. The run detail now carries `promptCount` (the `user.prompt` actions
-in the record, counted in the pass that already counts actions), and each
-prompt row's speaker line reads `You · 3 of 12` — the rank among prompts
-loaded so far, which is exact because pages arrive in order. Task
-notifications count as turns too, since the provider recorded them as
-prompts. A single-prompt run shows no ordinal. The Viewer still does not infer
-which reply answers which prompt.
-
-**v0.15.0 — task notifications are not spoken by the operator:** Claude
-Code delivers a finished background task back into the conversation through
-the same prompt hook as the operator's own words, as a prompt beginning
-`<task-notification>`. On the one multi-turn session in a local store, four of
-twelve prompt rows were such notifications, all labelled **You**. A prompt
-whose text begins `<task-notification>` is now labelled **Task notification**
-in a neutral tone; the text stays verbatim and the `user.prompt` record, its
-id, status, search and inspector are unchanged. Any other prompt is still
-**You**. Localized in EN/KO/JA/ZH.
-
-**v0.15.0 — the evidence-link caption moves under the button:** After
-selecting any action, a two-line caption explaining that the copy link is
-local sat between the button and the payload on every selection. It is now the
-button's tooltip and accessible description, in the same wording and the same
-four languages; the `Copied` / clipboard-denied status and the fallback URL
-field stay where they were. The first payload rises 43 px on a measured run.
-
-**v0.15.0 — the run heading stops at its first sentence:** In a local
-store 22 of 35 titles were cut at the 120-rune cap mid-phrase and 27 of 35
-headings wrapped to two lines, while in most of them the first sentence ended
-within 80 characters and the rest was the second and third sentence of the
-request, which the request card carries in full. The heading now shows the
-loaded title up to the end of its first sentence (`. `, `? ` or `! ` after the
-twelfth character; a colon is not a boundary because it introduces the
-request's substance). The full title stays in the heading's tooltip, the
-sidebar row and the request card. Trailing sentences go; words never do. On
-that store two-line headings fell from 27 to 5.
-
-**v0.15.0 — the timeline panel fits the screen it is on:** The timeline
-and inspector panels were sized by a fixed guess (`100vh − 340px`) while the
-context above them measured 565–583 px, so on every desktop size the panel's
-bottom edge sat 225–383 px below the viewport and one list needed two
-scrollbars. On desktop layouts the panels now flex to the height left below the
-run context, with a 320 px floor. At 1920×1080 the page no longer scrolls at
-all on a normal run; on a 900 px-tall window the panel sits on its floor — that
-is the honest limit of the space the context leaves. Narrow layouts are
-unchanged.
-
-**v0.15.0 — a compact summary strip:** The summary grid above the timeline
-had nine columns with three always empty, and two of its six cards repeated the
-action and event counts printed in the tab labels directly below. It now keeps
-four cards — process outcome, verification verdict, repository evidence,
-warnings — in four full columns; the counts stay in the tab labels. At 375 px
-the strip is 60 px shorter. Nothing is folded or hidden.
-
-**v0.15.0 — Codex patch rows name their files:** Every Codex edit is
-recorded as an `apply_patch` document in `input.command`, so the row detail
-began `*** Begin Patch *** Update File: /Users/…` sixty-five times in a local
-store and the file was visible only when the absolute path fit. Such a row now
-lists the patch's `Add`/`Update`/`Delete File:` headers verbatim in document
-order; when they do not fit in the row, whole headers are kept and the rest
-are counted (`· +2 files`). A patch without file headers keeps the old detail.
-Search still covers the whole command; the inspector, the Changes tab and the
-stored record are untouched. Naming the file is a reading aid, not a claim the
-patch applied.
-
-**v0.15.0 — hook lifecycle records fold in the Event summary:** Across the
-17 Claude runs in a local store, 87% of provider events were `system` records
-with subtype `hook_started`, `hook_response`, `hook_progress` or
-`thinking_tokens` — the lifecycle of agentrec's own hooks and token-count
-ticks. The Event summary folded only `PostToolUse`, so on the largest run it
-still showed 224 top-level rows. Consecutive records of that family now fold
-under the same rules: same loaded page, same session token, no error field, no
-dropped stub; any other `system` subtype stays its own row, and a group never
-crosses a `PostToolUse` group or a page boundary. The closed group names a
-neutral count and the subtypes it holds verbatim; hook names stay in the
-expanded records and the inspector. On that run the summary drops to 45
-top-level entries with all 224 loaded records still in the page. All events
-is unchanged. A group is a fold, not a claim that the hooks succeeded.
-
-**v0.15.0 — the agent's last message beside the request:** The request
-card showed what was asked; nothing showed what the agent said last. A second
-card, **Last message from <provider>**, now sits under the request with the
-provider's own last recorded message, verbatim, collapsed by default. It names
-the message's position among the recorded actions so a message followed by
-more work is not mistaken for a closing report, links to the action in the
-timeline, and states when the stored text was cut at 64 KiB. It is a record,
-not a summary and not a verdict; live runs keep the timeline as their surface.
-Run details carry `lastAgentMessage` for it; no stored record changes.
-
-**v0.15.0 — skip links:** From a fresh load the first run row was the
-ninth Tab stop. Two skip links now come first, visible only while focused:
-**Skip to run list** and **Skip to run evidence**. Activating one moves focus
-to its target so the next Tab continues from there. Nothing else about the tab
-order, the disclosures or focus restoration changes.
-
-**v0.15.0 — duration on the run row:** Each loaded run row now shows how
-long the recorded process ran, beside when it started, as a compact `6s` /
-`14m` / `1h 12m` token with the exact value on hover. It is the same
-measurement the run page's `Duration` field shows: the recorded process result
-first, else the manifest's end minus start. Runs that are still open or have
-no recorded end show nothing rather than zero. `/api/runs` summaries carry
-`durationMillis` for it; the `agentrec list` schema is unchanged. Duration is
-a measurement of the recorded window, not effort or quality; it is not a
-filter and is never totalled.
-
-**v0.15.0 — discoverable later verification:** A viewer started without
-`--allow-run` used to omit **Verify now** silently, so a reader never learned a
-run could be verified again. The Verification block now says how, in one quiet
-sentence with the exact commands: `agentrec start --allow-run` to enable it from
-the page, or `agentrec verify <run-id>` without restarting. It appears only
-where the button would have, never for live runs, and says nothing about the
-run's own verdict. No endpoint, permission or CLI behavior changes.
-
-**v0.15.0 — loaded-run overview:** The run list gains a collapsed **Loaded
-runs at a glance** panel that counts the runs the page has already loaded,
-grouped by provider, verification result and project. It is arithmetic over
-loaded summaries: it never projects unloaded runs, and it says how many of the
-recorded runs are loaded whenever more remain behind **Load more**. Recorded
-values stay verbatim, including `PENDING`, `NOT RUN`, `TAINTED` and values a
-newer recorder may introduce. A verification result is evidence recorded for
-that run, not independent proof the task succeeded, so no rate, score or trend
-is shown. Choosing a verification or project group applies the run list's
-existing filter and URL parameter rather than opening a separate view. No API,
-stored record or retention behavior changes.
-
-**v0.13.0 — focused run list:** Choose an exact project name to narrow the
-sidebar together with the existing `q`, `exit`, `verification`, and `failures`
-filters. The project choice is reflected in the `project` URL parameter and
-remembered in the browser; an explicit URL choice takes precedence. Direct run
-or evidence links without `project` do not inherit the remembered project scope.
-By default, the list shows the 10 most recent matching **loaded** runs; older
-matches stay folded and can be expanded. A selected older match remains reachable
-without expanding all older runs, and filtering leaves the currently open evidence
-unchanged. This is browser-side filtering, not a store-wide backend query: load
-more runs to include records not yet loaded, especially in larger stores. Folding
-and filtering do not delete, archive, or change retention, and test projects are
-not hidden automatically.
-
-**v0.11.1:** Changed-file search deep links preserve the matching file through
-reloads and browser Back/Forward navigation, reopening its paginated Changes row
-and inspector.
-
-**v0.12.0:** Exact action links preserve the action ID and its page's byte
-cursor, reopening the same recorded action after reloads or browser Back/Forward
-navigation. Selecting another action updates the link; opening a regular evidence
-tab clears the exact action selection. If the linked action is absent, the viewer
-does not select another action in its place.
-
-**v0.14.0 — copy a local evidence link:** With a recorded action or stored
-changed-file row selected, use the link-copy button to copy its canonical URL:
-`run`, `focus`, the action ID or file path, and the evidence cursor (the action
-page's byte offset or the changed file's absolute index), without sidebar filters
-or the `#compare` fragment. The button supports only these two
-selection types. Copy success is shown only after the clipboard write succeeds;
-if clipboard access is denied or unavailable, a selectable URL is shown for
-manual copying instead. This is a local link for the same viewer with the same
-recorded data, not a public share link. Copying does not upload or export evidence
-or post anything externally.
-
-A selected run and evidence destination are
-stored as `run=...&focus=...`; `focus` can reopen Actions, Changes, Provider
-events, or focus Verification. The linked run is fetched directly even when it
-is outside the loaded list. If it is unavailable, the viewer shows the error
-without leaving another run's evidence on screen. If `run` and `#compare=a,b`
-disagree, comparison run `a` becomes selected and the `run` query is
-canonicalized to it. Each
-run keeps its run outcome and verification verdict separate, with recorded
-warnings counted beside them. When a run or verification fails, **Failure
-triage** puts non-passing checks and
-warnings first and links to the Changes and Verification evidence. Repository
-changes remain observations from the run window, not proof of what caused the
-failure.
-
-| Provider | Executable | Supported range | What agentrec injects |
-| --- | --- | --- | --- |
-| Claude Code | `claude` | `>=2.1.0, <3.0.0` | `trace` requires `-p`/`--print` and adds `--output-format stream-json --verbose --include-hook-events` |
-| Codex | `codex` | `>=0.144.0, <1.0.0` | `trace` requires `exec` first and adds `--json` |
-
-A provider version outside the range is refused, not recorded on the assumption
-its event stream still fits. `--allow-unsupported-version` records anyway and
-stamps the manifest and every report `versionUnverified`; `shadow run` has no
-such override, because a comparison between one timeline that was read properly
-and one that was not is not a comparison.
-
-## What agentrec shows you
+## The Viewer
 
 <table align="center">
   <tr>
     <td width="50%" align="center">
       <a href="assets/viewer-en-dark.png"><img src="assets/viewer-en-dark.png" alt="The agentrec viewer in dark mode"></a><br>
-      <sub><b><code>agentrec view</code>.</b> The same evidence on loopback, in your browser; <code>agentrec show</code> files the same reading as <code>report.md</code> beside the evidence.</sub>
+      <sub><b><code>agentrec view</code>.</b> Read-only, loopback-only, no external assets.</sub>
     </td>
     <td width="50%" align="center">
       <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="The four evidence layers"></a><br>
-      <sub><b><code>agentrec view</code>.</b> A read-only, loopback-only viewer over the same bundle.</sub>
+      <sub><b>The same bundle, four layers.</b> Every summary is a fold, a label or a position over the unchanged record.</sub>
     </td>
   </tr>
 </table>
 
-What the timeline and the viewer put in front of you:
-
-- **Action timeline** — every tool call, shell command, file read and edit the
-  provider reported, normalized across providers, each carrying its `Source` and
-  `Assurance`.
-- **Change Explorer** — tracked, untracked, binary, addition and deletion
-  evidence, separated from unavailable or malformed capture states.
-- **Unified Overview** — process outcome, verification verdict, repository
-  evidence, actions, events, duration and warnings together, without converting
-  unavailable evidence into success.
-- **Same-path observations** — a file action whose explicit path matches a
-  changed path is linked and labelled `same path observed — not causal proof`;
-  command and result text are never inferred as paths.
-- **Provider events and usage** — bounded provider events, non-event stdout, and
-  provider-reported token usage stay separate from normalized actions.
-- **Two runs side by side** — pick any other run from the page and read them
-  together: provider, model, duration, usage, actions and events, and the files
-  each one changed, split into only-here, only-there, and both.
-- **Verified later** — the repository's committed checks can be run again today,
-  from the page or from `agentrec verify`. The result is filed as its own later
-  measurement, with the time it ran and whether HEAD has moved since; the run's
-  own verdict stays where it is.
+- **Run list** — title-first rows with provider, project, time, duration and the
+  separate process and verification verdicts; search, project selector and
+  collapsed advanced filters; a collapsed count of loaded runs by provider,
+  verification result and project.
+- **Run detail** — the request and the agent's last message side by side; a
+  four-card summary (process, verification, repository, warnings); failure
+  triage on failed runs; **Verify now** or, without `--allow-run`, the command
+  to verify later.
+- **Timeline** — **Reading view** folds routine tool actions and keeps prompts
+  (`You · 3 of 12`), replies, edits, failures and unknown states visible;
+  **Changes** groups files by directory; **Provider events** folds `PostToolUse`
+  and hook-lifecycle records. **All actions / files / events** is one toggle
+  away, and every row opens its original record in the inspector.
+- **Across runs** — search every run for a word and land on the matching action
+  or changed file; compare any two runs side by side; copy a local evidence link
+  to the exact row.
+- **Live** — a run still going keeps its page up to date and shows the working
+  tree as it is now.
 
 ## Four evidence layers
 
@@ -467,71 +175,47 @@ What the timeline and the viewer put in front of you:
 | 🌳 **Repository-observed changes** | agentrec | The difference between the commit pinned before the run and the worktree after it, measured by agentrec itself. | `observed during run, not causal proof` |
 | ✅ **Verification-observed result** | agentrec | How the repository's own pinned checks ended when agentrec ran them after the provider stopped. Says nothing about how the work was done. | `verification_observed` |
 
-Events carrying only provider progress, collaboration waits or todo-list lifecycle
-are stream metadata: they name no action and do not inflate warnings. A stdout
-line that is not a provider event at all — an update banner, a deprecation
-warning — is kept in `provider-stdout.unparsed.log`, redacted like everything
-else, counted in the manifest as `unparsedLines`, and named in the report. It
-does not fail the run: a provider that printed one line of prose has still run.
-
 ## Two ways to record
 
 | | 🚀 `agentrec trace` | 🎧 Interactive session |
 | --- | --- | --- |
 | Who starts the provider | agentrec, as the parent process | You, as always; the provider's hooks report to agentrec |
 | Supervisor-observed result | exit code, signal, duration | `NOT OBSERVED`; `Ended By` says whether the `SessionEnd` hook reported the end or the recorder gave up (`session_lost`, after eight hours without a hook) |
-| Baseline | pinned before the process starts | pinned when the `SessionStart` hook arrives; the `Window` line says so |
+| Baseline | pinned before the process starts | pinned when the `SessionStart` hook arrives |
 | Checkout state | must be clean; one run per repository | dirty checkouts and concurrent sessions are recorded, not refused |
 | Verification | `--verify` pins `.agentrec.yaml` before launch | only for a fragment printed with `--verify`, and only when `.agentrec.yaml` is tracked and identical to `HEAD` |
-| Provider events | the event stream agentrec reads | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `SessionEnd` payloads |
 
-The first hook of a session starts a recorder for it; the recorder pins the
-baseline, takes every event the hooks deliver, and closes the run out when the
-session ends. No single delivery can end the recording of the ones after it, and a
-session resumed under the same ID gets a recorder of its own. Actions carry the
-provider's `tool_use_id` and `duration_ms`, and a subagent's calls carry its
-`agent_id`; a hook the session disabled leaves a gap, not an absence.
-
-Codex sends no `PostToolUseFailure`, so a command that failed appears as a
-completed action whose response says so, and its `apply_patch` edits name their
-files in the patch headers, which is where the repository paths come from. The
-payload shapes were confirmed against Codex 0.150.1 in `codex exec`; hooks in
-the interactive TUI follow the same documented contract.
+Codex sends no `PostToolUseFailure`, so a failed command appears as a completed
+action whose response says so; its `apply_patch` edits name their files in the
+patch headers. A hook the session disabled leaves a gap, not an absence.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | Records one non-interactive run agentrec launches and supervises. |
-| 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | Installs the hooks that record interactive sessions; without flags, on a terminal, it asks which agent, whether to verify and where. |
-| ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | Starts the viewer in the background and opens it; with `--allow-run`, comparisons can be launched from the page. |
-| ⏹️ `agentrec stop` | Stops the background viewer. |
-| ℹ️ `agentrec status` | Reports the viewer, the run count and whether the hooks are installed. |
-| 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | Lists the runs deleted from the viewer, restores one, erases them all, or sweeps runs older than an age such as `30d` into the trash (`--dry-run` only lists them). |
-| ✅ `agentrec verify <run-id>\|latest` | Runs the repository's committed verification config now, against the repository as it is today, and files the result beside the run as a later measurement (`--allow-run` viewers offer the same from the run page). |
-| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | Prints the hooks fragment `setup` would install, for installing by hand. |
-| ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | Records one task twice, from one committed baseline, in isolated worktrees. |
-| ⚖️ `agentrec shadow show <group-id>` | Re-renders a recorded comparison, evidence only. |
-| 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]` | Lists runs newest first. `--failures-only` keeps explicit process failures and terminal verification evidence that does not consistently pass; pending and neutral outcomes are omitted. It can be combined with `--cwd`, but not the exact status filters. `--json` emits a schema-versioned machine-readable result including the unreadable-run count. |
-| 📄 `agentrec show <run-id>\|latest [--failures-only] [--json]` | Renders one run from its bundle; `--failures-only` keeps failed actions, explicit process failures, terminal verification evidence that does not consistently pass, and repository context. Pending and neutral outcomes are omitted. `--json` emits the same bounded, sanitized report as a schema-versioned document without raw provider payloads. Writes nothing. |
-| 🗂️ `agentrec changes <run-id>\|latest [--json]` | Lists the structured changed-file inventory from the run's recorded repository evidence without patch or file content. Output is limited to 250 files; larger inventories fail closed and direct you to the Viewer. `--json` emits schema `1`. Writes nothing. |
+| 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | Installs the hooks that record interactive sessions; without flags it asks. |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | Starts the viewer in the background; with `--allow-run`, comparisons and later verification can be launched from the page. |
+| ⏹️ `agentrec stop` · ℹ️ `agentrec status` | Stops the background viewer · reports the viewer, the run count and whether the hooks are installed. |
+| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | Serves the read-only viewer in the foreground. |
+| 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]` | Lists runs newest first; `--json` is schema-versioned. |
+| 📄 `agentrec show <run-id>\|latest [--failures-only] [--json]` | Renders one run from its bundle. Writes nothing. |
+| 🗂️ `agentrec changes <run-id>\|latest [--json]` | Lists the changed-file inventory (up to 250 files) without patch or file content. |
 | 🧾 `agentrec events <run-id>\|latest [--json]` | Summarises or dumps the recorded provider events. |
-| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | Serves the read-only viewer on loopback. |
-| 🏷️ `agentrec version [--verbose]` | Prints the tag, commit and UTC build time. `--verbose` also lists executable `agentrec` candidates in `PATH` order and marks the running file. |
+| ✅ `agentrec verify <run-id>\|latest` | Runs the committed checks now, against the repository as it is today, and files the result beside the run as a later measurement. |
+| 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | Lists, restores, erases or sweeps runs deleted from the viewer. |
+| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | Prints the hooks fragment `setup` would install. |
+| ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` · `shadow show <group-id>` | Records one task twice from one committed baseline in isolated worktrees · re-renders the comparison. |
+| 🏷️ `agentrec version [--verbose]` | Prints the tag, commit and UTC build time; `--verbose` lists every `agentrec` on `PATH`. |
 
-Every documented top-level command accepts `-h` and `--help`. Help exits `0`,
-prints that command's usage to stdout, and performs no command action.
-The documented `shadow run`, `shadow show`, `hooks print`, `trash restore`,
-`trash empty`, and `trash sweep` paths accept the same help flags and no-action
-boundary.
-
-`agentrec hook <provider>` and `agentrec session serve` exist too; the provider
-runs the first and the first hook starts the second. Neither is meant to be typed.
+Every command accepts `-h`/`--help`. `agentrec hook <provider>` and
+`agentrec session serve` exist too; the provider runs the first and the first
+hook starts the second.
 
 ## What a report looks like
 
-`agentrec show` is read-only: it renders a run from its bundle and writes nothing.
-Excerpt from a real recorded run (`582ee874`, trimmed to one action):
+`agentrec show` renders a run from its bundle and writes nothing. Excerpt from a
+real run, trimmed to one action:
 
 ```
 PROVIDER-REPORTED ACTIONS
@@ -566,9 +250,8 @@ VERIFICATION-OBSERVED RESULT
   Attribution  verification_observed
 ```
 
-`agentrec trace` writes the same reading of the same bundle to `<run>/report.md`
-before printing anything, once and never again: a report already standing at that
-name is refused rather than overwritten.
+`agentrec trace` writes the same reading to `<run>/report.md` once; a report
+already standing at that name is refused rather than overwritten.
 
 ## Comparing two agents on one task
 
@@ -577,47 +260,31 @@ agentrec shadow run task.md --runner claude --runner codex
 agentrec shadow show <group-id>
 ```
 
-`shadow run` records one task twice — once with Claude Code, once with Codex —
-from a single committed baseline, each in a disposable detached Git worktree
-under `$AGENTREC_HOME/shadow/<group>/workspaces/<runner>`, removed once that
-leg's evidence is closed. Both legs leave ordinary run bundles; the private
-`group.json` keeps the baseline, leg order, run IDs and outcome, never the task
-body. The comparison prints one block per runner — run ID, verification and its
-pinned config, process result, repository delta, action count — always `claude`
-then `codex`, with `Order` recording which actually ran first.
+One task, recorded once with Claude Code and once with Codex, from a single
+committed baseline, each in a disposable detached worktree under
+`$AGENTREC_HOME/shadow/<group>/`. Both legs leave ordinary run bundles.
 
 | It gives you | It does not give you |
 | --- | --- |
-| Two runs from the same commit, verified against the same committed `.agentrec.yaml`, one after another | A score, a winner or a recommendation — the reader judges |
-| Isolation that narrows interference between the legs | Causal attribution — each delta is still `observed during run, not causal proof` |
-| Source drift detection after each leg (`HEAD`, status, index, refs, worktrees, config) that stops the next leg | A sandbox — a linked worktree shares the common Git directory, and untracked `.env` files are not copied in |
-| Exit `2` for a refusal before anything exists, `0`/`1` for the legs, `130` when interrupted | The provider's own exit code — that is evidence in its bundle, never passed through |
-
-A committed `.gitmodules` or Git LFS pointer file is refused before any checkout
-exists. The task is one regular UTF-8 file of at most 64 KiB, handed to each
-agent as one argument. If agentrec is killed outright, recover the leftover
-checkout with `git worktree prune` and delete the directory under
-`$AGENTREC_HOME/shadow`; there is no automatic stale-worktree collection.
+| Two runs from the same commit, verified against the same committed `.agentrec.yaml` | A score, a winner or a recommendation — the reader judges |
+| Isolation that narrows interference between the legs; source drift after a leg stops the next | Causal attribution — each delta is still `observed during run, not causal proof` |
+| Exit `2` for a refusal before anything exists, `0`/`1` for the legs, `130` when interrupted | A sandbox — a linked worktree shares the common Git directory, and untracked `.env` files are not copied in |
 
 ## Evidence before claims
 
-agentrec only says that what it saw happened. A status is shown as it was
-recorded, never inferred:
+A status is shown as it was recorded, never inferred:
 
 | Shown | Means |
 | --- | --- |
 | `AVAILABLE` | The repository was measured. Counts are shown only here. |
-| `NOT RUN` | No verification was requested for this run. Neutral, never a pass. |
-| `NOT OBSERVED` | No process was supervised: the run is a session agentrec did not launch, so exit code and signal were never seen. |
+| `NOT RUN` | No verification was requested. Neutral, never a pass. |
+| `NOT OBSERVED` | No process was supervised: a session agentrec did not launch. |
 | `NOT RECORDED` | No repository measurement was made. Neutral, never a pass. |
-| `PENDING` | Written before the run and never answered. Its zeros mean *not measured*, not *measured as nothing*. |
+| `PENDING` | Written before the run and never answered. Its zeros mean *not measured*. |
 | `PASS` / `FAIL` / `TIMEOUT` / `ERROR` | How the pinned checks ended on the tree the run left behind. |
-| `TAINTED` | The run rewrote `.agentrec.yaml` after it was pinned: **nothing was executed**, and the checks stay `PENDING`. |
-| `(none)` | No verification was requested. This is not a check that passed. |
+| `TAINTED` | The run rewrote `.agentrec.yaml` after it was pinned: **nothing was executed**. |
 | `completed` / `nonzero` / `timeout` / `interrupted` | How agentrec saw the supervised process end. |
-| `session_ended` / `session_lost` | The session's `SessionEnd` hook reported the end — or the recorder stopped waiting for it. |
-| `running` | The session is still open and its recorder is alive. |
-| `unknown` | The recorder ended without writing how the session ended. |
+| `session_ended` / `session_lost` / `running` / `unknown` | The `SessionEnd` hook reported the end — or the recorder stopped waiting, is still waiting, or ended without writing how. |
 
 | Exit code | Meaning |
 | --- | --- |
@@ -625,97 +292,53 @@ recorded, never inferred:
 | `1`–`125` | The provider's own exit code, passed through by `trace`. |
 | `1` | Recording, rendering or verification failed. |
 | `2` | agentrec was called wrongly. |
-| `130` | Interrupted. |
-
-`--timeout` bounds only the provider process: at the deadline agentrec sends
-SIGTERM to the process group, waits five seconds, then SIGKILL, and files the run
-as `timeout`. Ctrl-C and SIGTERM are held rather than obeyed for the whole
-recording — the provider group is stopped, the repository measured, the checks
-run and the report filed, and the run exits `130` instead of standing at
-`PENDING`. The first signal is the last one held: a second ends the process where
-it stands. `process/result.json` records an exit code when the process exited and
-the terminating signal when it was killed, and never infers one from the other.
+| `130` | Interrupted — the provider group is stopped, the repository measured, the checks run and the report filed first. |
 
 What agentrec does not claim:
 
-- **Not syscall-complete.** Nothing observes the agent while it works; the
-  record is what the provider reported, what the repository looked like either
-  side of the run, and what independent checks said afterwards.
+- **Not syscall-complete.** The record is what the provider reported, what the
+  repository looked like either side of the run, and what independent checks
+  said afterwards.
 - **A repository delta is not causal attribution.** Anything else editing the
   checkout lands in the same delta, and every report says so.
-- **A session's end is the provider's word.** Anything running as you can send a
-  `SessionEnd`; the report says who ended the run.
-- **No policy engine, no sandbox, no remote upload.** agentrec observes and
-  writes locally. Windows is unbuilt and unverified; macOS and Linux are supported.
+- **A session's end is the provider's word.** The report says who ended the run.
+- **No policy engine, no sandbox, no remote upload.** macOS and Linux are
+  supported; Windows is unbuilt and unverified.
 
 ## Security
 
 - **The viewer trusts the machine, not the browser.** It listens on loopback
-  without authentication, so any process on the machine that can reach loopback
-  can read every run — and, since v0.5.0, move one to the trash. A page from
-  another origin in your browser cannot: deleting and restoring require a token
-  only the viewer's own page can read, sent in a header no cross-site request can
-  carry, and a same-origin fetch destination. Nothing is erased by the viewer;
-  only `agentrec trash empty` erases. With `--allow-run`, a process that reaches
-  loopback can also launch `agentrec shadow run` in a repository of its choosing,
-  as you: leave the flag off unless you want that.
-- **Structural redaction before persistence.** Provider events, stderr and
-  non-event stdout are redacted before they are written. Values under field names
-  whose canonicalized form ends in one of 17 secret suffixes (`TOKEN`, `SECRET`,
-  `PASSWORD`, `APIKEY`, `PASSPHRASE`, `AUTHORIZATION`, `COOKIE`, …), `NAME=VALUE`
-  assignments and 13 vendor token shapes (GitHub, OpenAI, AWS, Google, Stripe,
-  JWT, Slack, GitLab, npm, Hugging Face, PyPI) become `[REDACTED:n]`. Matching on
-  the suffix keeps `PUBLIC_KEY`, `primaryKey` and `token_id` readable. The rule
-  version is stamped per manifest; bundles judged by different rules have
-  redaction counts that are not comparable.
-- **A zero redaction count is not a secret-absence claim.** A secret in an
-  unnamed field, in prose, or shorter than the minimum length produces the same
-  zero.
-- **Untracked file bodies are stored** under `git/untracked/`, hashed over
-  sanitized text — a hash of raw text would hand a short secret back by guessing.
+  without authentication; any local process can read every run and move one to
+  the trash. Cross-origin pages cannot: deleting requires a token only the
+  viewer's own page can read. Only `agentrec trash empty` erases. With
+  `--allow-run`, a local process can also launch `agentrec shadow run` as you —
+  leave the flag off unless you want that.
+- **Structural redaction before persistence.** Values under 17 secret field
+  suffixes (`TOKEN`, `SECRET`, `PASSWORD`, `APIKEY`, `COOKIE`, …), `NAME=VALUE`
+  assignments and 13 vendor token shapes become `[REDACTED:n]`. A zero redaction
+  count is not a secret-absence claim.
 - **Reports never embed the raw event stream, tracked patch or untracked body.**
-  An action is reduced to a label, one allowlisted detail and fixed summary fields
-  with control characters escaped, so no provider string can forge a timeline row
-  or drive the terminal. Bundles are read back defensively: symlinks refused,
-  sizes, line lengths and item counts bounded.
-- **Repository evidence is pinned to Git's defaults.** The tracked diff runs with
-  textconv, colour, prefixes, context, algorithm and indent heuristic fixed, and
-  every evidence command runs with `core.fsmonitor` off, so repository attributes
+  Actions are reduced to a label and allowlisted fields with control characters
+  escaped; bundles are read back defensively (symlinks refused, sizes bounded).
+- **Repository evidence is pinned to Git's defaults**, so repository attributes
   and operator configuration cannot rewrite the patch.
-- **The viewer is read-only, loopback-only and loads no external assets.** It is
-  not authenticated against other users of the same host.
 - **Release archives are checksummed, not signed.** `SHA256SUMS` establishes
   artifact identity, not publisher identity.
 
 ## Where runs are stored
 
-Under `$AGENTREC_HOME/runs` when that is set, otherwise
-`~/.local/share/agentrec/runs`. Run directories are created `0700` and every file
-in them `0600`, `report.md` included — a bundle may quote a private repository.
-One directory per run holds `manifest.json`, `prompt.txt`, the sanitized event
-stream and stderr, `actions.jsonl`, `process/result.json` (traced runs only),
-`git/` (baseline, result, untracked bodies), `verification/results.json` and
-`report.md`. `provider-stdout.unparsed.log` joins them only when the provider
-printed something on stdout that was not an event, and `verification-posthoc/`
-only when the run was verified after the fact. Runs deleted from the page wait
-in `trash/` until `agentrec trash empty`; a running viewer keeps its stream
-copies in a directory of its own under `viewer-cache/` and removes them when it
-stops. `AGENTREC_HOME` must lie outside the repository being recorded; the
-interactive recorder keeps its socket and lock under the system temporary
-directory.
+`$AGENTREC_HOME/runs`, otherwise `~/.local/share/agentrec/runs`; directories
+`0700`, files `0600`. One directory per run holds `manifest.json`, `prompt.txt`,
+the sanitized event stream and stderr, `actions.jsonl`, `process/result.json`
+(traced runs), `git/`, `verification/results.json` and `report.md`. Deleted runs
+wait in `trash/`. `AGENTREC_HOME` must lie outside the repository being recorded.
 
 ## Documentation
 
-- [Release notes for v0.15.0](docs/releases/v0.15.0.md) · [v0.14.0](docs/releases/v0.14.0.md) · [v0.13.0](docs/releases/v0.13.0.md) · [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
-- [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
-- [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
-- [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed
-  20-attempt checkpoint plus real mutations covering verification `FAIL`,
-  provider nonzero, config `TAINTED`, interruption, and what those runs do
-  **not** establish.
-- [Dogfood evidence — shadow run](docs/dogfood/2026-07-29-shadow-evidence.md):
-  one macOS run against Claude Code and Codex from the same commit.
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Release notes](docs/releases/) — one file per release, latest [v0.15.0](docs/releases/v0.15.0.md)
+- [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
+- [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
+- [Viewer design contract](DESIGN.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 ## Development
 
@@ -730,21 +353,18 @@ go build ./...
 scripts/build-release.sh v0.15.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
-`scripts/build-release.sh` builds the release archives locally and publishes
-nothing; its output directory must not already exist. `.github/workflows/release.yml`
-runs the same script on a `v*.*.*` tag, checks every archive's inventory and the
-version output of the binary it built, and publishes only then. It refuses to run
-against a release that already exists. The public Homebrew tap validates each new
-release with a real `brew install` and `brew test` before updating its formula.
+`scripts/build-release.sh` builds the archives locally and publishes nothing.
+`release.yml` runs the same script on a `v*.*.*` tag, smoke-checks every archive
+and publishes only then; it refuses to overwrite an existing release. The
+Homebrew tap validates each release with a real `brew install` and `brew test`
+before updating its formula.
 
 ## Maintaining translations
 
-`README.md` is the factual canonical document. A localized README should be
-written for its readers, not translated word for word, but it must preserve
-commands, links, supported-version ranges, and every attribution or safety caveat.
-Natural prose still needs native-language review. The checker below proves only
-what automation can: heading structure, executable code-block payloads, and
-external link destinations.
+`README.md` is the canonical document. A localized README is written for its
+readers, not translated word for word, but keeps every command, link,
+supported-version range and safety caveat. The checker proves what automation
+can: heading structure, executable code blocks and external links.
 
 ```sh
 python3 scripts/check-readme-localizations.py

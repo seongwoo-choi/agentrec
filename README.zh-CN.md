@@ -52,18 +52,7 @@
 
 ## 快速开始
 
-> **状态：** v0.15.0 是最新版本。Viewer 现在读起来像一份“发生了什么”的记录：阅读优先的
-> 时间线、折叠的钩子与工具噪音、安全的标题、耗时、轮次序号和智能体的最后一条消息——
-> 每一项都只是不变证据之上的折叠、标签或位置。
->
-> v0.6.0 新增了正在运行会话的实时视图，以及跨所有运行记录的搜索；v0.5.0 新增了把运行
-> 记录删除到回收站、无限滚动、从 transcript 读取用量和模型、取代 `UNAVAILABLE` 的三个
-> 直白的词，以及在启用 `--allow-run` 时从页面发起比较；v0.4.0 新增了
-> 对提示词和回复的记录、`agentrec setup` 与 `agentrec start`，以及查看器的四种语言；
-> v0.3.0 新增了 Claude Code 与 Codex 的交互式会话记录，把仓库证据固定到 Git 默认值，
-> 并防止脱敏把一行放大到超过流上限。
-
-**任选一种安装方式。Homebrew 最简单。**
+**安装。** Homebrew 最简单；带校验和的归档包或 `go install` 也可以。
 
 ```sh
 brew install seongwoo-choi/tap/agentrec
@@ -81,18 +70,14 @@ tar -xzf "$archive"
 go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.15.0
 ```
 
-每个已打标签的发布版本都包含 `darwin_amd64`、`darwin_arm64`、`linux_amd64` 和
-`linux_arm64` 四个归档，以及一份覆盖全部四个归档的 `SHA256SUMS`。在 Linux 上请用
-`sha256sum -c -` 代替 `shasum -a 256 -c -`。`agentrec version` 会输出标签、提交和
-UTC 构建时间；以其他方式构建的二进制会显示 `dev`，因此未加构建信息的二进制不会被
-误认为发布版。从源码构建需要 Go 1.26 或更高版本；`shadow run` 还需要 Git 2.36 或
-更高版本。
+每个版本附带 `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64` 四个归档包和一个
+覆盖全部四者的 `SHA256SUMS`。`agentrec version` 会打印标签、提交和 UTC 构建时间；用其他方式
+构建的二进制会报告 `dev`。从源码构建需要 Go 1.26 或更高版本；`shadow run` 还需要 Git 2.36 或
+更高版本。如果机器上可能有多个安装，`agentrec version --verbose` 会指出实际执行的文件以及
+`PATH` 上的每一个 `agentrec`。
 
-如果可能存在多个安装，请先用 `type -a agentrec` 查找 shell 候选项，再通过明确路径
-调用新安装的二进制并执行 `version --verbose`。它会显示实际启动的可执行文件，并按
-`PATH` 顺序列出所有可执行的 `agentrec` 候选项并标记当前文件。
-
-**⭐ 提交验证配置（推荐）：**
+**固定用于验证运行的检查**：提交 `.agentrec.yaml`（复制 `.agentrec.example.yaml`）。每条命令
+都直接启动，不经过 shell。
 
 ```yaml
 version: 1
@@ -105,11 +90,7 @@ verify:
     timeout: 5m
 ```
 
-将 `.agentrec.example.yaml` 复制为 `.agentrec.yaml` 并提交。一次运行只会依据仓库
-原本已有的检查进行验证，且每条命令都直接启动、不经 shell：参数始终只是参数，不会
-被当作其他内容解释。
-
-**记录一次由 agentrec 启动的运行：**
+**记录由 agentrec 启动的运行。** 工作目录必须是干净的 Git 检出；每个仓库同时只记录一次。
 
 ```sh
 agentrec trace claude -- -p "add a regression test for the parser"
@@ -119,10 +100,9 @@ agentrec trace codex --verify -- exec "add a regression test for the parser"
 agentrec trace claude --verify --allow-unsupported-version -- -p "..."
 ```
 
-工作目录必须是没有未提交变更、也没有进行中操作的 Git 检出，以便区分本次运行自身
-造成的变更。每个仓库同一时间只能有一次被跟踪的运行；第二次会被拒绝，不会排队。
-
-**记录你已经在用的交互式会话：**
+**记录你已经在用的交互式会话。** `setup` 安装提供方钩子（用户文件或项目文件，保留现有钩子，
+在旁边写入备份，重复执行不会改变任何东西）；此后打开的每个会话都会作为运行记录下来。Codex
+需要在 Codex 内执行一次 `/hooks` 来信任新钩子。
 
 ```sh
 agentrec setup
@@ -131,17 +111,8 @@ agentrec setup --codex --project
 agentrec hooks print --claude
 ```
 
-在终端中，`agentrec setup` 会询问要记录哪个智能体（Claude Code、Codex 或两者）、是否在
-每次会话结束后运行 `.agentrec.yaml` 中固定的检查（`--verify`），以及写入你的用户文件
-（`~/.claude/settings.json`、`~/.codex/hooks.json`）还是项目文件（`.claude/settings.json`、
-`.codex/hooks.json`）。带上标志即可跳过提问。已有的 hooks 会被保留，备份会写在原文件
-旁边，再次运行不会有任何改动。Codex 需要在 Codex 内执行一次 `/hooks` 来信任新的 hook。
-`hooks print` 只显示片段而不安装。此后打开的每个会话都会作为一次运行被归档；已经打开
-的会话不会。每条提示词和每条最终回复都会记在工具调用旁边，以 `PROMPT` 和 `MESSAGE`
-行的形式出现，并按提供方的 turn id 配对。从 v0.3.0 升级？再运行一次 `agentrec setup`：
-它只添加 `Stop` hook，不会改动其他任何内容。
-
-**回读记录——在浏览器中查看，多数人会更喜欢这种方式：**
+**回看。** `start` 在后台把 Viewer 保持在 `http://127.0.0.1:7788/`；`view` 在前台提供同样的
+页面；`list`、`show` 和 `events` 在终端中读取同一个证据包。
 
 ```sh
 agentrec start
@@ -153,285 +124,80 @@ agentrec show latest
 agentrec events latest --json
 ```
 
-`agentrec start` 会让查看器在后台持续运行于 `http://127.0.0.1:7788/` 并打开它；`status`
-会说明查看器是否在运行、已记录多少次运行以及 hooks 是否已安装；`stop` 会结束它。`view`
-在前台提供同样的页面。在查看器中删除的运行记录会进入回收站，`agentrec trash` 可以列出、
-恢复或清空它。以 `--allow-run` 启动时，查看器还能运行比较：在“比较运行器”面板里填入
-仓库、任务和运行器，它会替你启动 `agentrec shadow run`，并展示其输出以及记录下的两条
-运行记录。没有该标志时，面板只会把命令写出来供你复制。当一次运行仍在进行时，它的页面
-会自行跟进，并展示此刻的工作树；顶栏的搜索框会在每一条运行记录中查找一个词——它发生在
-哪里、它的提示词、它的操作以及已保存的变更文件路径——并在匹配的操作或变更文件处打开该运行记录。
-侧栏可按退出状态和验证状态
-精确筛选已加载到浏览器中的运行记录。**仅显示失败**采用与
-`agentrec list --failures-only` 相同的失败并集；再配合精确筛选可以继续缩小范围。侧栏搜索词和
-筛选设置会反映到 `?q=...&exit=...&verification=...&failures=1` 中，因此刷新后仍会保留，也可以加入书签，或与
-`#compare=...` 比较链接一起分享。共享链接会把这些设置应用到首次加载的运行记录；点击
-**加载更多**会扩大筛选范围。
-
-**v0.15.0——标题优先的运行列表：** 已加载的侧栏条目现在会优先显示标题。标题取自完整、
-有效且不超过 64 KiB 的 UTF-8 `prompt.txt`：先对整个提示词再次脱敏，再提取第一行非空内容，
-最多保留 120 个 Unicode 字符。如果文件缺失、无法读取、编码无效或超过大小上限，则回退显示
-运行 ID。这只是查看器使用的派生信息，不会改变规范证据包的存储方式，也不会改变
-`agentrec list --json` 契约。项目、提供方和时间继续作为次要信息显示，进程结果与验证结论
-仍然分开；常规正常状态保持中性，失败、警告和运行中状态会被突出显示。标题搜索和项目选择器
-始终可见。退出状态、验证状态和“仅显示失败”起初收在折叠的**高级筛选**中，并显示已应用
-数量；再次折叠不会清除取值。搜索只使用已加载的摘要，不会逐条请求详情。最新 10 条折叠、
-当前选中的较早运行、精确证据链接以及**加载更多**的范围均保持不变。
-
-**v0.15.0——更易阅读的证据工作区：** 详情页优先使用已加载摘要中的安全标题，并在下方保留
-完整运行 ID；摘要尚未加载时，仍以 ID 作为标题。请求内容默认折叠，预览最多显示 160 个
-Unicode 字符，展开后可阅读经过脱敏的完整原文。进程结果和验证结论在统一的摘要栏中优先
-展示。窄屏下运行列表仍可滚动，搜索框、标签页和证据详情会重新排布，避免遮挡内容。
-系统深色与浅色主题继续受支持；原始记录、CLI/API 契约和精确证据链接均不变。
-
-分组类型使用易读的本地化名称，计数表示顶层条目，不包含展开的子操作。验证命令依据已知运行器的调用模式识别，而不是文件名或搜索词。
-
-**v0.15.0——阅读优先的操作时间线：** 操作现在默认以**阅读视图**打开。只有同一父级下、
-位于同一已加载字节分页中且连续出现的已完成已知工具记录，才会组成原生展开组。提示词、回复、
-文件修改、类似验证的命令、非零退出码、结构化错误、警告、未完成或未知记录仍逐条显示。
-提供方报告“已完成”不会被表述为独立验证。切换到**所有操作**可恢复按时间顺序排列的每一行。
-时间线搜索和类型筛选会直接展示匹配的操作；精确操作链接会自动打开所属分组，并保留原始操作
-ID、对象、索引、字节游标、证据检视器、选择状态及浏览器历史行为。该功能只改变已加载快照的
-展示方式，不会引入摘要模型、新 endpoint、逐行请求、存储变更或持久化设置。
-
-**v0.15.0——更易阅读的变更与提供方事件：** 变更标签页默认采用**文件夹视图**，按实际路径的
-直接上级目录归组已加载文件。**所有文件**和筛选结果显示完整路径；精确文件链接会展开对应
-文件夹，同时保留原始路径、游标和补丁查看行为。提供方事件默认采用**事件摘要**，仅折叠同一
-已加载分页、同一会话中连续出现且结构可识别、没有错误信号的 `PostToolUse` 记录。
-生命周期、失败、缺失、未知或类型冲突的记录仍逐条显示，不把提供方记录当作独立验证。
-**所有事件**恢复已加载记录的原始顺序。分组视图通过**加载更多**显式获取下一页，并保留重试和
-键盘焦点。原始记录、API 和操作阅读视图不变；不新增事件固定链接或生成式摘要。
-
-**v0.15.0——提示行标明是第几轮：** 在本地存储的一个多轮会话中，108 个操作之间散布着
-12 个提示行，不边滚动边数就无法知道某行是第几个请求、后面还有几个。运行详情现在携带
-`promptCount`（记录中的 `user.prompt` 操作数，在原有的操作计数遍历中一并统计），每个
-提示行的说话者一行显示为 `我 · 3 / 12`——即在已加载提示中的序号；由于分页按顺序到达，
-该序号是精确的。任务通知也计为一轮，因为提供方将其记录为提示。只有一个提示的运行不
-显示序号。Viewer 仍不推断哪条回复对应哪个请求。
-
-**v0.15.0——任务通知并非操作者所说：** Claude Code 会把已完成的后台任务通过与操作者
-自身话语相同的提示钩子送回对话，形式是以 `<task-notification>` 开头的提示。在本地存储
-唯一的多轮会话中，12 个提示行里有 4 个是这类通知，全部被标为**我**。现在以
-`<task-notification>` 开头的提示以中性色调标为**任务通知**；正文原样保留，`user.prompt`
-记录、id、状态、搜索和检查器均不变。其他提示仍为**我**。支持 EN/KO/JA/ZH。
-
-**v0.15.0——证据链接说明移到按钮之下：** 每次选择操作后，按钮和载荷之间都有一段两行的
-说明，解释复制链接仅限本地。现在它以相同措辞、相同四种语言成为按钮的工具提示和无障碍
-描述；`已复制`/剪贴板被拒的状态行和备用 URL 输入框保持原位。在测量的运行中第一个载荷
-上移 43px。
-
-**v0.15.0——运行标题止于第一句：** 在本地存储中，35 个标题里有 22 个在 120 字符上限处
-被截在词组中间，27 个标题换到两行；而其中大多数第一句在 80 字符内结束，其余是请求的第二、
-第三句，请求卡片中有完整内容。标题现在只显示已加载标题到第一句结束处（第 12 个字符之后的
-`. `、`? ` 或 `! `）；冒号引出请求的实质内容，因此不作为边界。完整标题保留在标题的工具提示、
-侧栏行和请求卡片中。去掉的是后续句子，绝不截断词语。在该存储中两行标题从 27 个降到 5 个。
-
-**v0.15.0——时间线面板适配所在屏幕：** 时间线和检查器面板此前按固定估值（`100vh − 340px`）
-定高，而上方的上下文实测为 565–583px，因此在所有桌面尺寸下面板底边都在视口之下 225–383px，
-一个列表需要两个滚动条。桌面布局下面板现在按运行上下文之下剩余的高度伸缩，并保持 320px
-的下限。在 1920×1080 下普通运行不再需要页面滚动；在 900px 高的窗口中面板停在下限——这是
-上下文所留空间的诚实极限。窄布局不变。
-
-**v0.15.0——紧凑的摘要条：** 时间线上方的摘要网格有 9 列，其中 3 列始终为空，6 张卡片中
-有 2 张重复了正下方标签页标签上的操作数和事件数。现在保留进程结果、验证结论、仓库证据、
-警告 4 张卡片并占满 4 列；计数保留在标签页标签中。在 375px 下摘要条缩短 60px。没有任何
-内容被折叠或隐藏。
-
-**v0.15.0——Codex 补丁行显示文件名：** 每次 Codex 编辑都以 `apply_patch` 文档形式记录在
-`input.command` 中，因此在本地存储里行详情有 65 次以 `*** Begin Patch *** Update File:
-/Users/…` 开头，只有绝对路径放得下时才能看到文件。现在这类行按文档顺序原样列出补丁的
-`Add`/`Update`/`Delete File:` 头；放不下时只保留完整的头，其余以数量表示（`· +2 个文件`）。
-没有文件头的补丁保持原有详情。搜索仍覆盖整条命令；检查器、变更标签页和存储的记录不变。
-显示文件名只是阅读辅助，并不表示补丁已应用。
-
-**v0.15.0——事件摘要折叠钩子生命周期记录：** 在本地存储的 17 个 Claude 运行中，
-87% 的提供方事件是子类型为 `hook_started`、`hook_response`、`hook_progress` 或
-`thinking_tokens` 的 `system` 记录——即 agentrec 自身钩子的生命周期和 token 计数
-刻度。事件摘要此前只折叠 `PostToolUse`，因此最大的运行仍显示 224 个顶级行。现在
-该类连续记录按同样规则折叠：同一已加载页面、同一会话令牌、无错误字段、无丢弃存根；
-其他 `system` 子类型各自保留为独立行，分组不会跨越 `PostToolUse` 分组或页面边界。
-折叠的分组显示中性的计数和所含子类型原文；钩子名称保留在展开的记录和检查器中。
-在该运行中摘要降至 45 个顶级条目，已加载的 224 条记录全部仍在页面中。全部事件视图
-不变。分组只是折叠，并不表示钩子执行成功。
-
-**v0.15.0——请求旁边显示代理的最后一条消息：** 请求卡片展示了提出的要求，但代理最后说了
-什么却无处可见。现在请求下方新增折叠的**<提供方> 的最后一条消息**卡片，原样显示记录的最后
-一条消息。它标出该消息在已记录操作中的位置，避免把之后仍有工作的消息误认为收尾报告；链接到
-时间线中的对应操作；当存储文本在 64 KiB 处被截断时会明确说明。它是记录，不是摘要也不是判定；
-进行中的运行仍以时间线为准。运行详情新增 `lastAgentMessage`，存储的记录不变。
-
-**v0.15.0——跳转链接：** 刚打开时需要按九次 Tab 才能到达第一条运行。现在**跳到运行列表**和
-**跳到运行证据**两个链接排在最前，仅在获得焦点时显示。激活链接会把焦点移到目标处，下一次
-Tab 从那里继续。其余的 Tab 顺序、折叠区域和焦点恢复均不变。
-
-**v0.15.0——运行行显示耗时：** 每条已加载的运行行会在开始时间旁边显示所记录进程运行了
-多久，形式为 `6秒` / `14分钟` / `1小时12分` 的简短标记，悬停可见精确值。它与运行页面的
-`Duration` 字段是同一测量值：优先采用记录的进程结果，否则用清单中的结束时间减去开始时间。
-仍在进行或没有结束记录的运行不显示任何内容，而不是显示零。为此 `/api/runs` 摘要新增
-`durationMillis`，`agentrec list` 的模式不变。耗时只是所记录时段的测量值，不代表投入或
-质量；它不是筛选条件，也不会被汇总。
-
-**v0.15.0——更易发现的事后验证：** 未带 `--allow-run` 启动的查看器此前会默默省略**立即验证**
-按钮，读者因此无从得知运行还能再次验证。现在验证区块会用一句平实的话给出准确命令：要从页面
-操作，请用 `agentrec start --allow-run` 启动；不想重启，可运行 `agentrec verify <run-id>`。
-它只出现在按钮原本应在的位置，进行中的运行不会显示，也不会对运行本身的判定作任何表述。
-端点、权限和 CLI 行为均不变。
-
-**v0.15.0——已加载运行一览：** 运行列表新增一个折叠的**已加载运行一览**面板，按提供方、
-验证结果和项目统计页面已经加载的运行。它只对已加载的摘要做统计，不推测尚未加载的运行；
-当还有运行需要通过**加载更多**才能看到时，会一并说明已记录的运行中加载了多少条。
-`PENDING`、`NOT RUN`、`TAINTED` 等已记录的值，以及今后记录端新增的值，都按原样显示。
-验证结果是该运行记录的证据，并非任务成功的独立证明，因此不显示比例、评分或趋势。
-选择验证结果或项目分组时，会沿用运行列表已有的筛选条件和 URL 参数，而不是打开另一个
-视图。API、已存储的记录和保留方式均不变。
-
-**v0.13.0 — 精简运行列表：** 按项目名称精确筛选，并与现有的 `q`、`exit`、
-`verification`、`failures` 筛选条件组合使用，可缩小侧栏列表范围。所选项目会反映到
-URL 的 `project` 参数中，也会保存在浏览器中；URL 中明确指定的选择优先。不含
-`project` 的运行或证据直达链接不会沿用浏览器记住的项目范围。默认只显示符合条件的
-**已加载**运行中最新的 10 条，较早的匹配记录会折叠起来，需要时可以展开。如果当前
-选中的较早记录符合条件，无须展开所有旧记录也能访问它；调整筛选条件不会改变当前
-打开的证据。这只是浏览器端的筛选，并非后端对全部已存记录的查询。要纳入尚未加载的
-记录，仍需继续加载运行记录，记录较多时尤其如此。折叠和筛选不会删除、归档记录或
-改变保留策略，也不会自动隐藏测试项目。
-
-**v0.11.1:** 变更文件搜索结果的深层链接会在刷新或使用浏览器的后退、前进功能时
-保留匹配的文件，并重新打开分页变更列表中的对应行和证据检视器。
-
-**v0.12.0:** 指向具体操作的链接会保留操作 ID 及其所在分页的字节游标，刷新或使用浏览器的
-后退、前进功能后，仍会打开同一条已记录的操作。选择其他操作会更新链接；打开普通证据标签页
-会清除对具体操作的选择。如果链接指向的操作不存在，查看器不会选择其他操作来替代。
-
-**v0.14.0 — 复制本地证据链接：** 选中一条已记录的操作或已存储的变更文件行后，
-使用链接复制按钮即可复制其规范 URL，其中包含 `run`、`focus`、操作 ID 或文件路径，
-以及证据位置游标：操作使用所在分页的字节偏移量，变更文件使用其在完整变更文件列表中的
-绝对索引。链接不包含侧栏筛选条件或 `#compare` 片段。按钮仅支持这两类选择。
-只有成功写入剪贴板后才会显示复制成功；如果剪贴板访问被拒绝或不可用，则会显示可选中
-的 URL，供手动复制。这是用于在同一查看器中打开同一份记录数据的本地链接，并非公开
-分享链接。复制不会上传或导出证据，也不会向外部发布任何内容。
-
-所选运行及证据位置会保存在 `run=...&focus=...` 中；`focus`
-可以重新打开操作、变更或提供方事件，也可以聚焦验证证据。即使链接中的运行不在已加载列表中，
-查看器也会直接获取；如果无法获取，则会显示错误，而不会继续展示其他运行的证据。
-如果 `run` 与 `#compare=a,b` 不一致，则会选择比较运行 `a`，并将 `run` 查询参数规范为该值。
-每条运行记录会分别显示运行结果和验证结论，并在旁边显示已记录的警告数。当运行或验证失败时，
-**失败诊断**会优先显示未通过的检查和警告，并可直接跳转到变更和验证证据。仓库变更仍只是运行
-期间的观测结果，不会被表述为失败原因的证明。
-
-| 提供方 | 可执行文件 | 支持范围 | agentrec 注入的内容 |
-| --- | --- | --- | --- |
-| Claude Code | `claude` | `>=2.1.0, <3.0.0` | `trace` 要求 `-p`/`--print`，并添加 `--output-format stream-json --verbose --include-hook-events` |
-| Codex | `codex` | `>=0.144.0, <1.0.0` | `trace` 要求 `exec` 为第一个参数，并添加 `--json` |
-
-超出支持范围的提供方版本会被拒绝，而不是假定其事件流仍然兼容就继续记录。
-`--allow-unsupported-version` 会照常记录，并在 manifest 和每份报告中标记
-`versionUnverified`；`shadow run` 没有这样的覆盖选项，因为一条被正确读取的时间线
-与一条未被正确读取的时间线之间的比较，算不上比较。
-
-## agentrec 会向你展示什么
+## Viewer
 
 <table align="center">
   <tr>
     <td width="50%" align="center">
-      <a href="assets/viewer-en-dark.png"><img src="assets/viewer-en-dark.png" alt="深色模式下的 agentrec 查看器"></a><br>
-      <sub><b><code>agentrec view</code>。</b>同样的证据，在回环地址上通过浏览器回读；<code>agentrec show</code> 会把同一份读取结果以 <code>report.md</code> 的形式与证据一起归档。</sub>
+      <a href="assets/viewer-en-dark.png"><img src="assets/viewer-en-dark.png" alt="深色模式下的 agentrec Viewer"></a><br>
+      <sub><b><code>agentrec view</code>。</b> 只读、仅回环地址、不加载外部资源。</sub>
     </td>
     <td width="50%" align="center">
       <a href="assets/agentrec-evidence-layers.svg"><img src="assets/agentrec-evidence-layers.svg" alt="四个证据层"></a><br>
-      <sub><b><code>agentrec view</code>。</b>基于同一证据包的只读、仅回环地址的查看器。</sub>
+      <sub><b>同一个证据包，四个层。</b> 每一处摘要都只是不变记录之上的折叠、标签或位置。</sub>
     </td>
   </tr>
 </table>
 
-时间线和查看器会呈现以下内容：
-
-- **操作时间线**——提供方报告的每次工具调用、shell 命令、文件读取和编辑，跨提供方
-  规范化，每一条都带有各自的 `Source` 和 `Assurance`。
-- **Change Explorer**——已跟踪、未跟踪、二进制、新增和删除的证据，与不可用或格式
-  异常的采集状态分开呈现。
-- **统一概览**——进程结果、验证结论、仓库证据、操作数、事件数、耗时和警告集中显示，
-  但不会把不可用的证据转换为成功。
-- **同路径观察**——文件操作的明确路径与某个变更路径一致时，两者会被关联并标注
-  `same path observed — not causal proof`；绝不会从命令或结果文本中推断路径。
-- **提供方事件与用量**——受限的提供方事件、非事件 stdout 以及提供方报告的 token
-  用量，与规范化操作保持分离。
-- **两条运行记录并排**——在页面上任选另一条运行记录一起阅读：提供方、模型、时长、
-  用量、操作与事件，以及各自改动的文件，分为仅此处、仅彼处与两者皆有。
-- **事后验证**——仓库中已提交的检查今天可以重新运行，既可从页面发起，也可用
-  `agentrec verify`。结果连同运行时刻以及 HEAD 在此期间是否移动，一并作为独立的
-  事后测量记录下来；运行记录本身的判定保持原样。
+- **运行列表** — 以标题开头的行，附带提供方、项目、时间、耗时，以及分开显示的进程结论和
+  验证结论；搜索、项目选择器和折叠的高级筛选；按提供方、验证结果和项目统计已加载运行的
+  折叠计数。
+- **运行详情** — 请求与智能体的最后一条消息并排；进程、验证、仓库、警告四张摘要卡；失败运行
+  的失败分诊；**Verify now**，或在未带 `--allow-run` 启动时给出稍后验证的命令。
+- **时间线** — **阅读视图** 折叠常规工具操作，保留提示（`我 · 3 / 12`）、回复、编辑、失败和
+  未知状态可见；**变更** 按目录分组文件；**提供方事件** 折叠 `PostToolUse` 和钩子生命周期
+  记录。**全部操作/文件/事件** 只需一次切换，每一行都能在检查器中打开原始记录。
+- **跨运行** — 在所有运行中搜索一个词，直达匹配的操作或变更文件；并排比较任意两个运行；复制
+  指向精确行的本地证据链接。
+- **实时** — 仍在进行的运行会自动刷新页面，并显示当前的工作树。
 
 ## 四个证据层
 
 | 层 | 观察者 | 含义 | 记录的归属 |
 | --- | --- | --- | --- |
-| 🗣️ **提供方报告的操作** | 智能体 | 智能体声称执行过的操作：工具调用、shell 命令、文件读写、MCP 调用和 Codex 文件变更。会被规范化和汇总，但绝不视为证明。 | `provider_reported` |
-| 👁️ **监管方观察到的结果** | agentrec | 提供方进程如何结束：退出码、退出原因、信号、耗时和警告数量。对于不是由 agentrec 启动的会话，显示为 `NOT OBSERVED`。 | `supervisor_observed` |
-| 🌳 **仓库观察到的变更** | agentrec | 运行前固定的提交与运行后工作树之间的差异，由 agentrec 自行测量。 | `observed during run, not causal proof` |
-| ✅ **验证观察到的结果** | agentrec | 提供方停止后，agentrec 运行仓库自身固定检查时得到的结果。它并不说明工作是如何完成的。 | `verification_observed` |
-
-仅包含提供方进度、协作等待或待办列表生命周期的事件属于流元数据：它们不对应具体
-操作，也不会增加警告数。完全不是提供方事件的 stdout 行——例如更新横幅、弃用警告——
-会保存在 `provider-stdout.unparsed.log` 中，与其他内容一样经过脱敏处理，在 manifest
-中按 `unparsedLines` 计数，并在报告中注明。这不会导致运行失败：即使提供方只额外
-输出了一行文本，它仍然完成过运行。
+| 🗣️ **提供方报告的操作** | 智能体 | 智能体声称自己做了什么——工具调用、shell 命令、文件读取与编辑、MCP 调用、Codex 文件变更。经过规范化和摘要，但从不视为证明。 | `provider_reported` |
+| 👁️ **监管者观察的结果** | agentrec | 提供方进程如何结束：退出码、退出原因、信号、耗时、警告数。对不由 agentrec 启动的会话为 `NOT OBSERVED`。 | `supervisor_observed` |
+| 🌳 **仓库观察的变更** | agentrec | 运行前固定的提交与运行后工作树之间的差异，由 agentrec 自行测量。 | `observed during run, not causal proof` |
+| ✅ **验证观察的结果** | agentrec | 提供方停止后，agentrec 运行仓库自身固定的检查所得的结果。它不说明工作是如何完成的。 | `verification_observed` |
 
 ## 两种记录方式
 
 | | 🚀 `agentrec trace` | 🎧 交互式会话 |
 | --- | --- | --- |
-| 谁启动提供方 | agentrec，作为父进程 | 一如往常由你启动；提供方的 hook 向 agentrec 报告 |
-| 监管方观察到的结果 | 退出码、信号、耗时 | `NOT OBSERVED`；`Ended By` 会说明是 `SessionEnd` hook 报告了结束，还是 recorder 放弃等待（`session_lost`，在 8 小时没有 hook 之后） |
-| 基线 | 在进程启动前固定 | 在 `SessionStart` hook 到达时固定；`Window` 行会说明这一点 |
-| 检出状态 | 必须干净；每个仓库一次运行 | 有未提交变更的检出和并发会话会被记录，而不是拒绝 |
-| 验证 | `--verify` 在启动前固定 `.agentrec.yaml` | 仅对用 `--verify` 输出的片段生效，且只在 `.agentrec.yaml` 已被跟踪且与 `HEAD` 一致时执行 |
-| 提供方事件 | agentrec 读取的事件流 | `SessionStart`、`UserPromptSubmit`、`PostToolUse`、`PostToolUseFailure`、`SessionEnd` 的 payload |
+| 谁启动提供方 | agentrec，作为父进程 | 一如既往是你；提供方的钩子向 agentrec 报告 |
+| 监管者观察的结果 | 退出码、信号、耗时 | `NOT OBSERVED`；`Ended By` 说明是 `SessionEnd` 钩子报告了结束，还是记录器放弃了等待（`session_lost`，八小时无钩子） |
+| 基线 | 进程启动前固定 | `SessionStart` 钩子到达时固定 |
+| 检出状态 | 必须干净；每个仓库一次运行 | 脏检出和并发会话照样记录，不拒绝 |
+| 验证 | `--verify` 在启动前固定 `.agentrec.yaml` | 仅对带 `--verify` 打印的片段，且仅当 `.agentrec.yaml` 已被跟踪并与 `HEAD` 一致时 |
 
-会话的第一个 hook 会为该会话启动一个 recorder；recorder 固定基线，接收 hook 送达的
-每个事件，并在会话结束时收尾这次运行。任何一次投递都不能终止其后事件的记录，以同一
-ID 恢复的会话会得到自己独立的 recorder。操作带有提供方的 `tool_use_id` 和
-`duration_ms`，子智能体的调用带有其 `agent_id`；被会话禁用的 hook 只会留下空白，
-而不代表什么都没发生。
-
-Codex 不发送 `PostToolUseFailure`，因此失败的命令会以响应中注明失败的已完成操作
-出现；其 `apply_patch` 编辑在补丁头中写明文件名，仓库路径即由此而来。payload 的
-形状已在 Codex 0.150.1 的 `codex exec` 中确认；交互式 TUI 中的 hook 遵循同一份
-文档化契约。
+Codex 不发送 `PostToolUseFailure`，因此失败的命令表现为一条响应中写明失败的已完成操作；
+其 `apply_patch` 编辑在补丁头中写明文件。会话禁用的钩子留下的是空缺，而不是"不存在"。
 
 ## 命令
 
 | 命令 | 作用 |
 | --- | --- |
 | 🚀 `agentrec trace <claude\|codex> [--verify] [--allow-unsupported-version] [--timeout <d>] -- <args...>` | 记录一次由 agentrec 启动并监管的非交互式运行。 |
-| 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | 安装用于记录交互式会话的 hooks；不带标志在终端中运行时，会询问记录哪个智能体、是否验证以及写到哪里。 |
-| ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | 在后台启动查看器并打开它；启用 `--allow-run` 时，可以从页面上发起比较。 |
-| ⏹️ `agentrec stop` | 停止后台查看器。 |
-| ℹ️ `agentrec status` | 报告查看器状态、运行记录数量以及 hooks 是否已安装。 |
-| 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | 列出从查看器中删除的运行记录，恢复其中一条，将其全部清除，或把早于指定期限（如 `30d`）的运行记录移入回收站（`--dry-run` 仅列出对象）。 |
-| ✅ `agentrec verify <run-id>\|latest` | 立即针对仓库当前的状态运行其已提交的验证配置，并把结果作为事后测量记录在运行记录旁（以 `--allow-run` 启动的查看器可在运行页面执行同样的操作）。 |
-| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 输出 `setup` 将要安装的 hooks 片段，供手动安装使用。 |
-| ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` | 从同一个已提交基线出发，在相互隔离的工作树中把同一任务记录两次。 |
-| ⚖️ `agentrec shadow show <group-id>` | 重新渲染一次已记录的比较，只呈现证据。 |
-| 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]` | 按时间倒序列出运行记录。`--failures-only` 仅保留明确的进程失败与未能一致通过的终态验证证据，并省略待定和中性结果。它可与 `--cwd` 组合，但不能与精确状态筛选器同时使用。`--json` 输出带模式版本、并包含不可读运行记录数量的机器可读结果。 |
-| 📄 `agentrec show <run-id>\|latest [--failures-only] [--json]` | 从证据包渲染一次运行；`--failures-only` 仅保留失败操作、明确的进程失败、未能一致通过的终态验证证据，以及仓库上下文。待定与中性结果会被省略。`--json` 不包含 raw provider payload，并将同一份 bounded、sanitized report 输出为带模式版本的 document。不写入任何内容。 |
-| 🗂️ `agentrec changes <run-id>\|latest [--json]` | 从运行记录中的仓库证据输出结构化的变更文件清单，不包含 patch 或文件内容。输出限制为 250 个文件；超过限制时不会把部分结果伪装成成功，而是提示使用查看器并返回失败。`--json` 输出模式 `1`。不写入任何内容。 |
-| 🧾 `agentrec events <run-id>\|latest [--json]` | 汇总或导出已记录的提供方事件。 |
-| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 在回环地址上提供只读查看器。 |
-| 🏷️ `agentrec version [--verbose]` | 输出标签、提交和 UTC 构建时间。`--verbose` 还会按 `PATH` 顺序列出可执行的 `agentrec` 候选项并标记当前文件。 |
+| 🧩 `agentrec setup [--claude] [--codex] [--verify] [--project] [--uninstall]` | 安装记录交互式会话的钩子；不带参数时会询问。 |
+| ▶️ `agentrec start [--listen <loopback-address>] [--no-open] [--allow-run]` | 在后台启动 Viewer；带 `--allow-run` 时可从页面发起比较和稍后验证。 |
+| ⏹️ `agentrec stop` · ℹ️ `agentrec status` | 停止后台 Viewer · 报告 Viewer、运行数以及钩子是否已安装。 |
+| 🖥️ `agentrec view [<run-id>\|latest] [--listen <loopback-address>] [--no-open] [--allow-run]` | 在前台提供只读 Viewer。 |
+| 📋 `agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]` | 按最新顺序列出运行；`--json` 带 schema 版本。 |
+| 📄 `agentrec show <run-id>\|latest [--failures-only] [--json]` | 从证据包渲染一次运行。不写入任何内容。 |
+| 🗂️ `agentrec changes <run-id>\|latest [--json]` | 列出变更文件清单（最多 250 个），不含补丁或文件内容。 |
+| 🧾 `agentrec events <run-id>\|latest [--json]` | 汇总或导出记录的提供方事件。 |
+| ✅ `agentrec verify <run-id>\|latest` | 现在针对当前仓库运行已提交的检查，并把结果作为稍后的测量记录在运行旁。 |
+| 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | 列出、恢复、清空或清理从 Viewer 删除的运行。 |
+| 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 打印 `setup` 将安装的钩子片段。 |
+| ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` · `shadow show <group-id>` | 从同一个已提交基线在隔离的 worktree 中把一个任务记录两次 · 重新渲染比较。 |
+| 🏷️ `agentrec version [--verbose]` | 打印标签、提交和 UTC 构建时间；`--verbose` 列出 `PATH` 上的每一个 `agentrec`。 |
 
-文档列出的所有顶层命令都支持 `-h` 和 `--help`。帮助选项不会执行命令本身，
-只会把用法输出到 stdout，并以退出码 `0` 结束。
-文档列出的 `shadow run`、`shadow show`、`hooks print`、`trash restore`、
-`trash empty` 和 `trash sweep` 路径也支持相同的帮助选项；显示帮助时不会执行
-命令本身。
-
-`agentrec hook <provider>` 和 `agentrec session serve` 也存在；前者由提供方运行，
-后者由第一个 hook 启动。两者都不是给人手动输入的。
+每条命令都接受 `-h`/`--help`。`agentrec hook <provider>` 和 `agentrec session serve` 也存在；
+前者由提供方运行，后者由第一个钩子启动。
 
 ## 报告长什么样
 
-`agentrec show` 是只读操作：它从证据包渲染一次运行，不写入任何内容。以下为一次
-真实记录运行（`582ee874`）的节选，只保留了一个操作：
+`agentrec show` 从证据包渲染一次运行且不写入任何内容。以下摘自一次真实运行，只保留了一个操作：
 
 ```
 PROVIDER-REPORTED ACTIONS
@@ -466,139 +232,85 @@ VERIFICATION-OBSERVED RESULT
   Attribution  verification_observed
 ```
 
-`agentrec trace` 会在输出任何内容前，将针对同一证据包的同一份读取结果写入
-`<run>/report.md`。它只写一次，绝不会再次写入：如果该名称的报告已存在，命令会
-拒绝执行而非覆盖它。
+`agentrec trace` 只把同样的内容写入 `<run>/report.md` 一次；该名称下已有报告时会拒绝而不是
+覆盖。
 
-## 在一个任务上比较两个智能体
+## 用一个任务比较两个智能体
 
 ```sh
 agentrec shadow run task.md --runner claude --runner codex
 agentrec shadow show <group-id>
 ```
 
-`shadow run` 会把同一任务记录两次——一次用 Claude Code，一次用 Codex——从同一个
-已提交的基线出发，每次都在一次性的分离 Git 工作树中进行，工作树位于
-`$AGENTREC_HOME/shadow/<group>/workspaces/<runner>`，并在该分支的证据收集完成后
-移除。两个分支都会留下普通运行证据包；private 的 `group.json` 只保留基线、分支
-顺序、run ID 和结果，绝不保存任务正文。比较结果会为每个 runner 输出一个区块——
-run ID、验证结果及其固定的配置、进程结果、仓库差异、操作数量——始终先 `claude`
-后 `codex`，并由 `Order` 记录实际上哪个先执行。
+一个任务，用 Claude Code 记录一次、用 Codex 记录一次，从同一个已提交基线出发，各自在
+`$AGENTREC_HOME/shadow/<group>/` 下的一次性分离 worktree 中进行。两条腿都留下普通的运行
+证据包。
 
-| 它提供什么 | 它不提供什么 |
+| 它给你的 | 它不给你的 |
 | --- | --- |
-| 从同一提交出发、依据同一份已提交 `.agentrec.yaml` 验证、依次执行的两次运行 | 评分、胜者或推荐——由读者自行判断 |
-| 缩小两个分支之间相互干扰的隔离 | 因果归属——每份差异仍然是 `observed during run, not causal proof` |
-| 每个分支结束后的源仓库漂移检测（`HEAD`、状态、索引、引用、工作树、配置），发现漂移则阻止下一个分支启动 | 沙箱——链接工作树与源仓库共享 Git 公共目录，未跟踪的 `.env` 文件也不会被复制进去 |
-| 在任何东西创建前被拒绝时退出 `2`，分支运行结束为 `0`/`1`，被中断时为 `130` | 提供方自身的退出码——它是证据包中的证据，绝不会被透传 |
-
-已提交的 `.gitmodules` 或 Git LFS 指针文件会在任何检出创建前被拒绝。任务必须是
-一个不超过 64 KiB 的普通 UTF-8 文件，作为一个参数传给每个智能体。如果 agentrec
-被直接杀死，可运行 `git worktree prune` 并删除 `$AGENTREC_HOME/shadow` 下的目录
-来恢复遗留检出；不会自动清理陈旧工作树。
+| 来自同一提交的两次运行，用同一个已提交的 `.agentrec.yaml` 验证 | 分数、赢家或推荐——由读者判断 |
+| 减少两条腿之间干扰的隔离；一条腿之后源码漂移会阻止下一条腿 | 因果归属——每个差异仍是 `observed during run, not causal proof` |
+| 尚未创建任何内容时拒绝退出 `2`，两条腿为 `0`/`1`，中断为 `130` | 沙箱——链接的 worktree 共享公共 Git 目录，未跟踪的 `.env` 不会被复制进去 |
 
 ## 证据先于主张
 
-agentrec 只声称它看到的事情确实发生过。状态只按记录值展示，绝不推断：
+状态按记录原样显示，从不推断：
 
 | 显示 | 含义 |
 | --- | --- |
-| `AVAILABLE` | 仓库已被测量。只有此时才显示计数。 |
-| `NOT RUN` | 本次运行未请求验证。它是中性的，绝不算作通过。 |
-| `NOT OBSERVED` | 没有受监管的进程：这次运行是一个不由 agentrec 启动的会话，因此从未看到退出码和信号。 |
-| `NOT RECORDED` | 未进行仓库测量。它是中性的，绝不算作通过。 |
-| `PENDING` | 运行前已写入，但始终未得到结果。其中的零表示*未测量*，而不是*测得为空*。 |
-| `PASS` / `FAIL` / `TIMEOUT` / `ERROR` | 固定检查在运行留下的工作树上如何结束。 |
-| `TAINTED` | 运行在 `.agentrec.yaml` 被固定后重写了它：**不会执行任何检查**，检查仍保持 `PENDING`。 |
-| `(none)` | 未请求验证。这不表示检查已通过。 |
-| `completed` / `nonzero` / `timeout` / `interrupted` | agentrec 看到受监管进程如何结束。 |
-| `session_ended` / `session_lost` | 会话的 `SessionEnd` hook 报告了结束——或者 recorder 停止了等待。 |
-| `running` | 会话仍然打开，其 recorder 仍在运行。 |
-| `unknown` | recorder 结束时没有写下会话是如何结束的。 |
+| `AVAILABLE` | 已测量仓库。计数只在这里显示。 |
+| `NOT RUN` | 未请求验证。中性，绝不是通过。 |
+| `NOT OBSERVED` | 没有被监管的进程：这是一个不由 agentrec 启动的会话。 |
+| `NOT RECORDED` | 未做仓库测量。中性，绝不是通过。 |
+| `PENDING` | 运行前写入且从未得到回答。其中的零表示*未测量*。 |
+| `PASS` / `FAIL` / `TIMEOUT` / `ERROR` | 固定的检查在运行留下的树上如何结束。 |
+| `TAINTED` | 运行在固定之后改写了 `.agentrec.yaml`：**什么都没有执行**。 |
+| `completed` / `nonzero` / `timeout` / `interrupted` | agentrec 看到的被监管进程的结束方式。 |
+| `session_ended` / `session_lost` / `running` / `unknown` | `SessionEnd` 钩子报告了结束——或记录器停止等待、仍在等待、或结束时未能写下如何结束。 |
 
 | 退出码 | 含义 |
 | --- | --- |
-| `0` | 提供方已完成，且验证（如有）通过。 |
-| `1`–`125` | 提供方自身的退出码，由 `trace` 透传。 |
+| `0` | 提供方完成，且任何验证都通过。 |
+| `1`–`125` | 提供方自身的退出码，由 `trace` 原样透传。 |
 | `1` | 记录、渲染或验证失败。 |
-| `2` | agentrec 被错误地调用。 |
-| `130` | 被中断。 |
+| `2` | agentrec 被错误调用。 |
+| `130` | 被中断——先停止提供方进程组、测量仓库、运行检查、写下报告。 |
 
-`--timeout` 只限制提供方进程：到达期限时，agentrec 会向进程组发送 SIGTERM，等待
-5 秒，再发送 SIGKILL，并把运行归档为 `timeout`。在整个记录过程中，Ctrl-C 和
-SIGTERM 都会被捕获而不是立即执行——提供方进程组被停止、仓库被测量、检查被执行、
-报告被写入，运行以 `130` 退出，而不是停在 `PENDING`。第一个信号是最后一个被捕获的
-信号：第二个信号会在当前位置直接结束进程。`process/result.json` 会在进程正常退出时
-记录退出码，在进程被杀死时记录终止信号，两者绝不相互推断。
+agentrec 不主张的事：
 
-agentrec 不声称什么：
-
-- **并非系统调用级别的完整观测。** 智能体工作时没有任何机制对其进行观测；记录的是
-  提供方报告的内容、运行前后仓库的状态，以及之后独立检查给出的结果。
-- **仓库差异不是因果归属。** 任何其他对检出的编辑都会落在同一份差异中，每份报告
-  都会注明这一点。
-- **会话的结束以提供方所言为准。** 任何以你的身份运行的东西都可以发送
-  `SessionEnd`；报告会说明是谁结束了这次运行。
-- **不提供策略引擎、沙箱或远程上传。** agentrec 只在本地观测和写入。Windows 尚未
-  构建或验证；支持 macOS 和 Linux。
+- **不是系统调用级完整记录。** 记录是提供方报告的内容、运行前后的仓库状态，以及事后独立检查
+  所说的话。
+- **仓库差异不是因果归属。** 任何其他编辑检出的东西都会落进同一个差异，每份报告都这么说。
+- **会话的结束是提供方的说法。** 报告会说明是谁结束了运行。
+- **没有策略引擎、没有沙箱、没有远程上传。** 支持 macOS 和 Linux；Windows 未构建也未验证。
 
 ## 安全
 
-- **查看器信任的是这台机器，而不是浏览器。** 它在回环地址上监听且不做身份验证，因此这台
-  机器上任何能访问回环地址的进程都能读取每一条运行记录，并且从 v0.5.0 起还能把其中一条
-  移入回收站。浏览器里来自其他源的页面则做不到：删除和恢复都需要一个只有查看器自己的
-  页面才能读到的令牌，该令牌通过跨站请求无法携带的请求头发送，且 fetch 的目标必须同源。
-  查看器不会擦除任何内容；只有 `agentrec trash empty` 才会擦除。启用 `--allow-run` 后，
-  能访问回环地址的进程还能以你的身份在它自选的仓库中启动 `agentrec shadow run`：除非你
-  确实想要这样，否则不要开启该标志。
-- **持久化前进行结构化脱敏。** 提供方事件、stderr 和非事件 stdout 都会先脱敏再写入。
-  字段名规范化后以 17 个秘密后缀之一结尾的字段下的值（`TOKEN`、`SECRET`、
-  `PASSWORD`、`APIKEY`、`PASSPHRASE`、`AUTHORIZATION`、`COOKIE`、……）、`NAME=VALUE`
-  赋值以及 13 种厂商令牌形态（GitHub、OpenAI、AWS、Google、Stripe、JWT、Slack、
-  GitLab、npm、Hugging Face、PyPI）都会变成 `[REDACTED:n]`。按后缀匹配才能让
-  `PUBLIC_KEY`、`primaryKey` 和 `token_id` 保持可读。每份 manifest 都会标注规则
-  版本；由不同规则判定的证据包，其脱敏计数不可比较。
-- **脱敏计数为零不代表不存在秘密。** 秘密若位于未命名字段中、出现在普通文本中，
-  或长度短于最小限制，结果同样为零。
-- **未跟踪文件内容会被保存**在 `git/untracked/` 下，哈希针对净化后的文本计算——
-  若对原始文本计算哈希，短秘密可能被通过猜测还原。
-- **报告绝不嵌入原始事件流、跟踪文件的补丁或未跟踪文件内容。** 每个操作会被简化为
-  标签、一个允许列表中的详情字段和固定摘要字段，控制字符会被转义，因此提供方字符串
-  无法伪造时间线行或操纵终端。读取证据包时采取防御性措施：拒绝符号链接，限制文件
-  大小、行长度和条目数。
-- **仓库证据固定到 Git 默认值。** 跟踪文件的 diff 在固定 textconv、颜色、前缀、
-  上下文、算法和缩进启发式的条件下运行，每条证据命令都在关闭 `core.fsmonitor` 的
-  情况下执行，因此仓库属性和操作者配置无法改写补丁。
-- **查看器只读、仅回环地址、不加载任何外部资源。** 它不对同一主机上的其他用户做
-  身份验证。
-- **发布归档有校验和，但未签名。** `SHA256SUMS` 只能确认产物身份，不能确认发布者
-  身份。
+- **Viewer 信任的是机器，而不是浏览器。** 它在回环地址上无认证监听，任何本地进程都能读取
+  每次运行并把它移到回收站。跨源页面做不到：删除需要只有 Viewer 自己的页面才能读到的令牌。
+  只有 `agentrec trash empty` 会真正清除。带 `--allow-run` 时，本地进程还能以你的身份启动
+  `agentrec shadow run`——除非你想要这样，否则不要加这个参数。
+- **持久化前的结构化脱敏。** 17 个秘密字段后缀（`TOKEN`、`SECRET`、`PASSWORD`、`APIKEY`、
+  `COOKIE`……）下的值、`NAME=VALUE` 赋值和 13 种厂商令牌形态会变成 `[REDACTED:n]`。脱敏
+  计数为零并不是"没有秘密"的主张。
+- **报告从不嵌入原始事件流、跟踪补丁或未跟踪文件内容。** 操作被缩减为标签和允许列表中的
+  字段并转义控制字符；证据包以防御方式读取（拒绝符号链接、限制大小）。
+- **仓库证据固定在 Git 的默认设置上**，仓库属性和操作者配置无法改写补丁。
+- **发布归档带校验和但不签名。** `SHA256SUMS` 证明的是产物一致性，不是发布者身份。
 
 ## 运行记录存放在哪里
 
-设置 `$AGENTREC_HOME` 时，运行记录存放在 `$AGENTREC_HOME/runs`；否则存放在
-`~/.local/share/agentrec/runs`。运行目录以 `0700` 权限创建，目录内每个文件均为
-`0600`，`report.md` 也不例外——证据包可能引用私有仓库。每次运行对应一个目录，
-其中包含 `manifest.json`、`prompt.txt`、经净化的事件流和 stderr、`actions.jsonl`、
-`process/result.json`（仅 trace 记录的运行）、`git/`（基线、结果、未跟踪文件内容）、
-`verification/results.json` 以及 `report.md`。只有当提供方在 stdout 输出了非事件
-内容时，才会有 `provider-stdout.unparsed.log`；只有当运行记录事后被验证过，才会有
-`verification-posthoc/`。从页面删除的运行记录会留在 `trash/` 中，直到执行
-`agentrec trash empty`；运行中的查看器把流的副本放在 `viewer-cache/` 下属于自己的
-目录里，并在停止时删除。`AGENTREC_HOME` 必须位于被记录的仓库之外；交互式 recorder
-的 socket 和锁文件放在系统临时目录下。
+`$AGENTREC_HOME/runs`，否则为 `~/.local/share/agentrec/runs`；目录权限 `0700`，文件 `0600`。
+每次运行一个目录，包含 `manifest.json`、`prompt.txt`、脱敏后的事件流和 stderr、
+`actions.jsonl`、`process/result.json`（trace 运行）、`git/`、`verification/results.json` 和
+`report.md`。删除的运行在 `trash/` 中等待。`AGENTREC_HOME` 必须位于被记录仓库之外。
 
 ## 文档
 
-- [v0.15.0 发布说明](docs/releases/v0.15.0.md) · [v0.14.0](docs/releases/v0.14.0.md) · [v0.13.0](docs/releases/v0.13.0.md) · [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
-- [飞行记录仪设计](docs/plans/2026-07-27-agentrec-flight-recorder.md)
-- [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
-- [Dogfood 证据——recorder](docs/dogfood/2026-07-28-evidence.md)：一个固定的 20 次
-  尝试检查点及后续的真实变更，覆盖验证 `FAIL`、提供方非零退出、配置 `TAINTED`、
-  中断，以及这些运行**不能**证明的事项。
-- [Dogfood 证据——shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)：一次
-  macOS 运行，从同一提交出发分别使用 Claude Code 和 Codex。
-- [第三方声明](THIRD_PARTY_NOTICES.md)
+- [发布说明](docs/releases/) — 每个版本一个文件，最新为 [v0.15.0](docs/releases/v0.15.0.md)
+- [Flight recorder 设计](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
+- [Dogfood 证据——记录器](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
+- [Viewer 设计契约](DESIGN.md) · [第三方声明](THIRD_PARTY_NOTICES.md)
 
 ## 开发
 
@@ -613,18 +325,14 @@ go build ./...
 scripts/build-release.sh v0.15.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
-`scripts/build-release.sh` 在本地构建发布归档，不发布任何内容；其输出目录必须
-事先不存在。`.github/workflows/release.yml` 会在 `v*.*.*` 标签上运行同一脚本，
-检查每个归档的文件清单和所构建二进制的版本输出，全部通过后才发布。若对应发布
-版本已存在，工作流会拒绝运行。公开的 Homebrew tap 会在更新 formula 前，用真实的
-`brew install` 和 `brew test` 验证每个新版本。
+`scripts/build-release.sh` 只在本地构建归档，不发布任何东西。`release.yml` 在 `v*.*.*` 标签上
+运行同一脚本，检查每个归档后才发布；已存在的版本不会被覆盖。Homebrew tap 在更新 formula 之前
+会用真实的 `brew install` 和 `brew test` 验证每个版本。
 
-## 维护翻译版本
+## 维护翻译
 
-`README.md` 是事实依据的基准文档。各语言 README 不应逐字翻译，而应为当地读者
-重写成自然的技术文档；但命令、链接、支持版本范围，以及所有归属和安全性注意事项
-都必须保留。是否自然仍需由熟悉该语言的人审阅。下面的检查器只证明自动化可以证明
-的契约：标题层级、可执行代码块的内容和外部链接目标。
+`README.md` 是正本。本地化的 README 面向其读者撰写而非逐字翻译，但保留每条命令、链接、
+支持的版本范围和安全提示。检查器只验证自动化能证明的内容：标题结构、可执行代码块和外部链接。
 
 ```sh
 python3 scripts/check-readme-localizations.py
@@ -633,5 +341,5 @@ sh scripts/check-readme-localizations_test.sh
 
 ## 许可证
 
-agentrec 采用 [MIT 许可证](LICENSE)发布。第三方归属声明和依赖许可证保存在
+agentrec 以 [MIT 许可证](LICENSE) 提供。第三方署名和依赖许可证保留在
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 中。
