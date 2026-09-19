@@ -199,7 +199,7 @@
       prompt: '요청',
       reply: '응답',
       You: '나',
-      'Task notification': '작업 알림',
+      'Notification-shaped prompt': '알림 형식 요청',
       '{n} of {total}': '{n} / {total}',
       'Show more': '더 보기',
       'Show less': '접기',
@@ -540,7 +540,7 @@
       prompt: 'プロンプト',
       reply: '返答',
       You: '自分',
-      'Task notification': 'タスク通知',
+      'Notification-shaped prompt': '通知形式のプロンプト',
       '{n} of {total}': '{n} / {total}',
       'Show more': 'もっと見る',
       'Show less': '閉じる',
@@ -881,7 +881,7 @@
       prompt: '提示',
       reply: '回复',
       You: '我',
-      'Task notification': '任务通知',
+      'Notification-shaped prompt': '通知格式提示',
       '{n} of {total}': '{n} / {total}',
       'Show more': '展开',
       'Show less': '收起',
@@ -2261,8 +2261,8 @@ function shortID(id) {
   }
 
   // ── Timeline rows ─────────────────────────────────────────────────────────
-  // One recognized shape only: a prompt whose text starts with <task-notification>.
-  function isTaskNotification(prompt) {
+  // One recognized shape only; matching text does not establish provenance.
+  function hasTaskNotificationShape(prompt) {
     return /^\s*<task-notification>/.test(prompt);
   }
 
@@ -2294,11 +2294,11 @@ function shortID(id) {
     const time = node('div', 'action-time', clock(action.startedAt));
     if (speech !== null) {
       const body = node('div', 'speech-body');
-      // Claude delivers a finished background task back through the prompt
-      // hook; the operator did not say it (DESIGN.md section 22).
-      const notification = type === 'user.prompt' && isTaskNotification(speech);
+      // The text matches a notification shape, but the prompt record does not
+      // establish who produced it (DESIGN.md section 22).
+      const notification = type === 'user.prompt' && hasTaskNotificationShape(speech);
       if (notification) row.classList.add('notification');
-      let speaker = notification ? t('Task notification') : type === 'user.prompt' ? t('You') : (action.provider || t('provider'));
+      let speaker = notification ? t('Notification-shaped prompt') : type === 'user.prompt' ? t('You') : (action.provider || t('provider'));
       // Which recorded prompt this is; silent when there is only one.
       const total = state.run?.promptCount || 0;
       const rank = type === 'user.prompt' ? byID?.promptRank?.get(action) : undefined;
