@@ -210,3 +210,13 @@ On the local store's ten initially visible runs, two groups of three rows share 
 - Render that token as a semantic `time` element whose `datetime` is the normalized recorded instant. Its tooltip is the same locale-aware exact timestamp used in run detail, and its accessible label prefixes that timestamp with the localized **Started** label.
 - Do not infer precision beyond `startedAt`, alter sorting, or change the canonical record.
 - Acceptance: each valid start keeps its relative text, exposes the ISO instant in `datetime`, and exposes the localized exact timestamp in both `title` and its accessible label; an absent zero-time sentinel stays **unknown** without exact-time semantics; no visible text is added and the measured viewports gain no overflow.
+
+## 25. A mobile run selection reveals the selected evidence
+
+Measured on the real local store at 375×812: the run list occupies y=349–609 and the selected run begins at y=658. Activating two different rows leaves document scroll at y=0 both times; for the two measured long titles the heading ends at y=806 and the first evidence below it remains off-screen. The selection rail changes, but the reader must manually scroll past the list after every selection to reach what they selected.
+
+- Only an explicit run-row activation on a narrow layout (<1024 px) moves to the freshly loaded `#run-view`; initial auto-selection, URL/deep-link restoration, history navigation, polling and desktop selection keep their current scroll behavior.
+- Move only after that exact run has loaded. A failed, superseded or aborted navigation must not scroll to stale evidence.
+- Focus the run view together with the scroll so keyboard and assistive-technology users do not remain focused on an off-screen row replaced during rendering. The existing selected row, URL, list filters and evidence content remain unchanged.
+- Use the existing responsive breakpoint and native `scrollIntoView`; add no animation, sticky control or second mobile layout.
+- Acceptance: two consecutive row activations at 375×812 each place the selected run view at the top and focus it; at 1024 px the same activation does not request scrolling; the initial load and a failed selection do not request scrolling; browser captures at 375/768/1440 in EN/KO/JA/ZH show no clipping or horizontal overflow.

@@ -1574,7 +1574,7 @@ function shortID(id) {
     const shown = displayed.length;
     for (const run of displayed) {
       const button = runItem(run, Boolean(state.run && state.run.run.id === run.id));
-      button.addEventListener('click', () => navigateRun(run.id));
+      button.addEventListener('click', () => navigateRunFromList(run.id));
       list.append(button);
       if (focused === run.id) button.focus({ preventScroll: true });
     }
@@ -4160,6 +4160,15 @@ function shortID(id) {
     await loadRun(id, false, changedFile ? changedFile.cursor : action ? action.cursor : 0, true);
     if (!state.run || state.run.run.id !== id) return;
     focusRunEvidenceFromURL();
+  }
+
+  async function navigateRunFromList(id) {
+    const generation = state.loadGeneration + 1;
+    await navigateRun(id);
+    if (state.loadGeneration !== generation || window.matchMedia?.('(max-width: 1023px)').matches !== true || !state.run || state.run.run.id !== id) return;
+    const view = $('run-view');
+    view.scrollIntoView({ block: 'start' });
+    view.focus({ preventScroll: true });
   }
 
   function applyRunList(list, append = false) {
