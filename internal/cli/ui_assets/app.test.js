@@ -734,6 +734,147 @@ function fixture(exitReason, statusClass, statusLabel) {
   };
 }
 
+test('mobile run-list activation reveals and focuses each freshly loaded run', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const runs = ['run-a', 'run-b', 'run-c'].map((id) => ({ ...data.list.runs[0], id, title: `Run ${id}` }));
+  data.list = { ...data.list, runs, total: runs.length };
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id, title: `Run ${id}` } });
+  const scrolled = [];
+  const mediaQueries = [];
+  data.configure = (window) => {
+    window.matchMedia = (query) => { mediaQueries.push(query); return { matches: true }; };
+    window.HTMLElement.prototype.scrollIntoView = function scrollIntoView(options) {
+      scrolled.push({ id: this.id, block: options.block });
+    };
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.deepEqual(scrolled, [], 'initial auto-selection must not move the page');
+
+  document.querySelector('.run-item[data-run-id="run-b"]').click();
+  await settle();
+  assert.equal(document.querySelector('#run-title').textContent, 'Run run-b');
+  assert.deepEqual(mediaQueries, ['(max-width: 1023px)']);
+  assert.deepEqual(scrolled, [{ id: 'run-view', block: 'start' }]);
+  assert.equal(document.activeElement.id, 'run-view');
+
+  document.querySelector('.run-item[data-run-id="run-c"]').click();
+  await settle();
+  assert.deepEqual(scrolled, [
+    { id: 'run-view', block: 'start' },
+    { id: 'run-view', block: 'start' },
+  ]);
+  assert.equal(document.querySelector('#run-title').textContent, 'Run run-c');
+  assert.equal(document.activeElement.id, 'run-view');
+});
+
+test('desktop run-list activation preserves page position', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const second = { ...data.list.runs[0], id: 'run-b', title: 'Run B' };
+  data.list = { ...data.list, runs: [data.list.runs[0], second], total: 2 };
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id, title: id } });
+  const scrolled = [];
+  data.configure = (window) => {
+    window.matchMedia = () => ({ matches: false });
+    window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.id); };
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.window.document.querySelector('.run-item[data-run-id="run-b"]').click();
+  await settle();
+
+  assert.deepEqual(scrolled, []);
+  assert.equal(dom.window.document.querySelector('#run-title').textContent, 'Run B');
+});
+
+test('superseded same-run mobile activation cannot reveal stale evidence', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const base = data.details;
+  const runA = { ...base, run: { ...base.run, id: 'run-a', title: 'Run A' } };
+  const runB = { ...base, run: { ...base.run, id: 'run-b', title: 'Run B' } };
+  data.list = { ...data.list, runs: [runA.run, runB.run], total: 2 };
+  let runACalls = 0;
+  let releaseA;
+  let releaseB;
+  data.details = (id) => {
+    if (id === 'run-a' && runACalls++ === 0) return runA;
+    return new Promise((resolve) => {
+      if (id === 'run-a') releaseA = () => resolve(runA);
+      else releaseB = () => resolve(runB);
+    });
+  };
+  const scrolled = [];
+  data.configure = (window) => {
+    window.matchMedia = () => ({ matches: true });
+    window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.id); };
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('.run-item[data-run-id="run-a"]').click();
+  await settle();
+  document.querySelector('.run-item[data-run-id="run-b"]').click();
+  await settle();
+
+  releaseA();
+  await settle();
+  assert.deepEqual(scrolled, [], 'superseded A must not reveal the already-rendered A');
+
+  releaseB();
+  await settle();
+  assert.deepEqual(scrolled, ['run-view']);
+  assert.equal(document.querySelector('#run-title').textContent, 'Run B');
+  assert.equal(document.activeElement.id, 'run-view');
+});
+
+test('failed mobile run-list activation does not reveal stale evidence', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const second = { ...data.list.runs[0], id: 'run-b', title: 'Run B' };
+  data.list = { ...data.list, runs: [data.list.runs[0], second], total: 2 };
+  const details = data.details;
+  data.details = (id) => id === 'run-b' ? Promise.reject(new Error('unreadable run')) : { ...details, run: { ...details.run, id } };
+  const scrolled = [];
+  data.configure = (window) => {
+    window.matchMedia = () => ({ matches: true });
+    window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.id); };
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.window.document.querySelector('.run-item[data-run-id="run-b"]').click();
+  await settle();
+
+  assert.deepEqual(scrolled, []);
+  assert.equal(dom.window.document.querySelector('#workspace-empty-title').textContent, 'Could not load selected run');
+});
+
+test('failed reload of the selected mobile run does not reveal stale evidence', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const selectedID = data.details.run.id;
+  let calls = 0;
+  const details = data.details;
+  data.details = () => calls++ === 0 ? details : Promise.reject(new Error('unreadable run'));
+  const scrolled = [];
+  data.configure = (window) => {
+    window.matchMedia = () => ({ matches: true });
+    window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this.id); };
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.window.document.querySelector(`.run-item[data-run-id="${selectedID}"]`).click();
+  await settle();
+
+  assert.deepEqual(scrolled, []);
+  assert.equal(dom.window.document.querySelector('#workspace-empty-title').textContent, 'Could not load selected run');
+});
+
 test('session_lost is failure-class in list and detail', async (t) => {
   const dom = await renderFixture(fixture('session_lost', 'fail', 'session_lost'));
   t.after(() => dom.window.close());
