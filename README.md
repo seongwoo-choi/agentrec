@@ -41,7 +41,7 @@ comes from a different observer, and the bundle keeps them apart — so a code
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.14.0.md) ·
+[Release notes](docs/releases/v0.15.0.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -55,9 +55,10 @@ version starts from what was observed rather than from a summary.
 
 ## Quick start
 
-> **Status:** v0.14.0 is the latest release. Global Viewer search now finds
-> stored repository change paths and opens the exact paginated Changes row and
-> inspector. Patch and file contents remain outside the search index.
+> **Status:** v0.15.0 is the latest release. The Viewer reads like a record of
+> what happened: a reading-first timeline, folded hook and tool noise, safe
+> titles, durations, turn ordinals and the agent's last message — every one of
+> them a fold, a label or a position over the unchanged evidence.
 >
 > v0.6.0 added the live view of a running session and search across every run;
 > v0.5.0 added deleting runs into a trash, infinite scroll, usage and model
@@ -76,14 +77,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.14.0_darwin_arm64.tar.gz
+archive=agentrec_0.15.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.14.0_darwin_arm64/agentrec version
+./agentrec_0.15.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.14.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.15.0
 ```
 
 Each tagged release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -184,7 +185,7 @@ reloads and can be bookmarked or shared alongside comparison links in
 `#compare=...`. A shared link applies them to the runs loaded on arrival;
 **Load more** extends that set.
 
-**Unreleased — title-first run list:** Each loaded sidebar row now leads with a
+**v0.15.0 — title-first run list:** Each loaded sidebar row now leads with a
 Viewer-only title derived from a complete, valid UTF-8 `prompt.txt` no larger
 than 64 KiB. The whole prompt is re-redacted before taking its first non-empty
 line and limiting it to 120 Unicode characters; missing, unreadable, invalid, or oversized prompts fall
@@ -198,7 +199,7 @@ are applied, and keep their values when hidden. Search still covers only loaded
 summaries and makes no per-row detail requests; the recent-10 fold, selected
 older run, exact evidence links, and **Load more** scope are unchanged.
 
-**Unreleased — calmer evidence workspace:** The detail heading reuses the safe
+**v0.15.0 — calmer evidence workspace:** The detail heading reuses the safe
 title from a loaded summary and keeps the full run ID underneath; a run outside
 the loaded summaries still uses its ID. The request starts collapsed, with a
 160-character Unicode preview and the complete sanitized text available on
@@ -207,7 +208,7 @@ keep the run list scrollable and reflow search, tabs, and the inspector without
 hiding evidence. Dark and light system themes remain supported; recordings,
 CLI/API contracts, and exact evidence links are unchanged.
 
-**Unreleased — reading-first action timeline:** Actions now open in **Reading
+**v0.15.0 — reading-first action timeline:** Actions now open in **Reading
 view**, which uses native disclosure groups only for consecutive, completed
 known tool records on the same loaded byte page and under the same parent.
 Runner recognition uses bounded invocation signatures, not words in filenames or search patterns. Group kinds are localized, and counts describe top-level entries, excluding expanded children.
@@ -221,7 +222,7 @@ cursor, inspector, selection, and browser-history behavior. This is loaded-snaps
 presentation only: it adds no summary model, endpoint, request per row, storage
 change, or persistence.
 
-**Unreleased — readable Changes and Provider events:** Changes defaults to
+**v0.15.0 — readable Changes and Provider events:** Changes defaults to
 **Folder view**, grouping loaded files by their exact immediate directory.
 **All files** and filtered lists show full paths; exact file links open the
 containing folder without changing the original path, cursor, or patch behavior.
@@ -233,7 +234,7 @@ loaded records in their original order. Grouped views use explicit **Load more**
 and preserve retry and keyboard focus. Records, APIs, and the Actions reading
 view are unchanged; no event permalinks or generated summaries are introduced.
 
-**Unreleased — prompt rows say which turn they are:** On a multi-turn
+**v0.15.0 — prompt rows say which turn they are:** On a multi-turn
 session in a local store, twelve prompt rows sat among 108 actions with no way
 to tell which request a row was or how many followed without counting while
 scrolling. The run detail now carries `promptCount` (the `user.prompt` actions
@@ -244,7 +245,7 @@ notifications count as turns too, since the provider recorded them as
 prompts. A single-prompt run shows no ordinal. The Viewer still does not infer
 which reply answers which prompt.
 
-**Unreleased — task notifications are not spoken by the operator:** Claude
+**v0.15.0 — task notifications are not spoken by the operator:** Claude
 Code delivers a finished background task back into the conversation through
 the same prompt hook as the operator's own words, as a prompt beginning
 `<task-notification>`. On the one multi-turn session in a local store, four of
@@ -254,14 +255,14 @@ in a neutral tone; the text stays verbatim and the `user.prompt` record, its
 id, status, search and inspector are unchanged. Any other prompt is still
 **You**. Localized in EN/KO/JA/ZH.
 
-**Unreleased — the evidence-link caption moves under the button:** After
+**v0.15.0 — the evidence-link caption moves under the button:** After
 selecting any action, a two-line caption explaining that the copy link is
 local sat between the button and the payload on every selection. It is now the
 button's tooltip and accessible description, in the same wording and the same
 four languages; the `Copied` / clipboard-denied status and the fallback URL
 field stay where they were. The first payload rises 43 px on a measured run.
 
-**Unreleased — the run heading stops at its first sentence:** In a local
+**v0.15.0 — the run heading stops at its first sentence:** In a local
 store 22 of 35 titles were cut at the 120-rune cap mid-phrase and 27 of 35
 headings wrapped to two lines, while in most of them the first sentence ended
 within 80 characters and the rest was the second and third sentence of the
@@ -272,7 +273,7 @@ request's substance). The full title stays in the heading's tooltip, the
 sidebar row and the request card. Trailing sentences go; words never do. On
 that store two-line headings fell from 27 to 5.
 
-**Unreleased — the timeline panel fits the screen it is on:** The timeline
+**v0.15.0 — the timeline panel fits the screen it is on:** The timeline
 and inspector panels were sized by a fixed guess (`100vh − 340px`) while the
 context above them measured 565–583 px, so on every desktop size the panel's
 bottom edge sat 225–383 px below the viewport and one list needed two
@@ -282,14 +283,14 @@ all on a normal run; on a 900 px-tall window the panel sits on its floor — tha
 is the honest limit of the space the context leaves. Narrow layouts are
 unchanged.
 
-**Unreleased — a compact summary strip:** The summary grid above the timeline
+**v0.15.0 — a compact summary strip:** The summary grid above the timeline
 had nine columns with three always empty, and two of its six cards repeated the
 action and event counts printed in the tab labels directly below. It now keeps
 four cards — process outcome, verification verdict, repository evidence,
 warnings — in four full columns; the counts stay in the tab labels. At 375 px
 the strip is 60 px shorter. Nothing is folded or hidden.
 
-**Unreleased — Codex patch rows name their files:** Every Codex edit is
+**v0.15.0 — Codex patch rows name their files:** Every Codex edit is
 recorded as an `apply_patch` document in `input.command`, so the row detail
 began `*** Begin Patch *** Update File: /Users/…` sixty-five times in a local
 store and the file was visible only when the absolute path fit. Such a row now
@@ -300,7 +301,7 @@ Search still covers the whole command; the inspector, the Changes tab and the
 stored record are untouched. Naming the file is a reading aid, not a claim the
 patch applied.
 
-**Unreleased — hook lifecycle records fold in the Event summary:** Across the
+**v0.15.0 — hook lifecycle records fold in the Event summary:** Across the
 17 Claude runs in a local store, 87% of provider events were `system` records
 with subtype `hook_started`, `hook_response`, `hook_progress` or
 `thinking_tokens` — the lifecycle of agentrec's own hooks and token-count
@@ -314,7 +315,7 @@ expanded records and the inspector. On that run the summary drops to 45
 top-level entries with all 224 loaded records still in the page. All events
 is unchanged. A group is a fold, not a claim that the hooks succeeded.
 
-**Unreleased — the agent's last message beside the request:** The request
+**v0.15.0 — the agent's last message beside the request:** The request
 card showed what was asked; nothing showed what the agent said last. A second
 card, **Last message from <provider>**, now sits under the request with the
 provider's own last recorded message, verbatim, collapsed by default. It names
@@ -324,13 +325,13 @@ timeline, and states when the stored text was cut at 64 KiB. It is a record,
 not a summary and not a verdict; live runs keep the timeline as their surface.
 Run details carry `lastAgentMessage` for it; no stored record changes.
 
-**Unreleased — skip links:** From a fresh load the first run row was the
+**v0.15.0 — skip links:** From a fresh load the first run row was the
 ninth Tab stop. Two skip links now come first, visible only while focused:
 **Skip to run list** and **Skip to run evidence**. Activating one moves focus
 to its target so the next Tab continues from there. Nothing else about the tab
 order, the disclosures or focus restoration changes.
 
-**Unreleased — duration on the run row:** Each loaded run row now shows how
+**v0.15.0 — duration on the run row:** Each loaded run row now shows how
 long the recorded process ran, beside when it started, as a compact `6s` /
 `14m` / `1h 12m` token with the exact value on hover. It is the same
 measurement the run page's `Duration` field shows: the recorded process result
@@ -340,7 +341,7 @@ no recorded end show nothing rather than zero. `/api/runs` summaries carry
 a measurement of the recorded window, not effort or quality; it is not a
 filter and is never totalled.
 
-**Unreleased — discoverable later verification:** A viewer started without
+**v0.15.0 — discoverable later verification:** A viewer started without
 `--allow-run` used to omit **Verify now** silently, so a reader never learned a
 run could be verified again. The Verification block now says how, in one quiet
 sentence with the exact commands: `agentrec start --allow-run` to enable it from
@@ -348,7 +349,7 @@ the page, or `agentrec verify <run-id>` without restarting. It appears only
 where the button would have, never for live runs, and says nothing about the
 run's own verdict. No endpoint, permission or CLI behavior changes.
 
-**Unreleased — loaded-run overview:** The run list gains a collapsed **Loaded
+**v0.15.0 — loaded-run overview:** The run list gains a collapsed **Loaded
 runs at a glance** panel that counts the runs the page has already loaded,
 grouped by provider, verification result and project. It is arithmetic over
 loaded summaries: it never projects unloaded runs, and it says how many of the
@@ -705,7 +706,7 @@ directory.
 
 ## Documentation
 
-- [Release notes for v0.14.0](docs/releases/v0.14.0.md) · [v0.13.0](docs/releases/v0.13.0.md) · [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
+- [Release notes for v0.15.0](docs/releases/v0.15.0.md) · [v0.14.0](docs/releases/v0.14.0.md) · [v0.13.0](docs/releases/v0.13.0.md) · [v0.12.0](docs/releases/v0.12.0.md) · [v0.11.1](docs/releases/v0.11.1.md) · [v0.11.0](docs/releases/v0.11.0.md) · [v0.10.2](docs/releases/v0.10.2.md) · [v0.10.1](docs/releases/v0.10.1.md) · [v0.10.0](docs/releases/v0.10.0.md) · [v0.9.0](docs/releases/v0.9.0.md) · [v0.8.0](docs/releases/v0.8.0.md) · [v0.7.1](docs/releases/v0.7.1.md) · [v0.7.0](docs/releases/v0.7.0.md) · [v0.6.0](docs/releases/v0.6.0.md) · [v0.5.0](docs/releases/v0.5.0.md) · [v0.4.0](docs/releases/v0.4.0.md) · [v0.3.0](docs/releases/v0.3.0.md) · [v0.2.0](docs/releases/v0.2.0.md) · [v0.1.0](docs/releases/v0.1.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md)
 - [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md): a fixed
@@ -726,7 +727,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.14.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.15.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the release archives locally and publishes
