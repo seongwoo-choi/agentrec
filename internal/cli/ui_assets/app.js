@@ -2912,24 +2912,13 @@ function shortID(id) {
     return card;
   }
 
-  // The heading stops at the end of the title's first sentence (DESIGN.md
-  // section 20): the text before the first ". ", "? " or "! " that occurs
-  // after the twelfth character. A colon is not a boundary: it introduces the
-  // substance of the request. Trailing sentences go; words never do.
-  function firstSentence(title) {
-    const m = /^[^]{12,}?[.?!](?=\s)/.exec(title);
-    return m ? m[0] : title;
-  }
-
   function renderRunIdentity() {
     if (!state.run) return;
     const run = state.run.run;
     const summary = state.runs.find((candidate) => candidate.id === run.id);
     const title = summary && summary.title || run.id;
-    const heading = firstSentence(title);
-    $('run-title').textContent = heading;
-    // The full loaded title stays one hover away when the heading was cut.
-    $('run-title').title = heading === title ? '' : title;
+    $('run-title').textContent = title;
+    $('run-title').title = '';
     $('run-id').textContent = run.id;
     $('run-context').textContent = `${run.cwd || t('unknown cwd')} · ${new Date(run.startedAt).toLocaleString(state.lang)}`;
   }

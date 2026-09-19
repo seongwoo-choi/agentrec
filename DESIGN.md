@@ -165,13 +165,13 @@ Measured on the local store at 1440×720, 1440×800, 1440×900 and 1920×1080: t
 - Measured with the rule injected into the live stylesheet: at 1920×1080 the page scroll range drops from 273 px to 0 and the panel ends inside the viewport; at 1440×900 the panel sits on its 320 px floor with 3 px of page scroll instead of 291; at 1440×720 the floor leaves 183 px of page scroll instead of 431. The floor is the honest limit: a 900 px-tall window with 583 px of context above the panel has 320 px for it.
 - Acceptance: at 1920×1080 the page scroll range on a normal run is zero and the panel bottom is inside the viewport; at 1440×720 the panel is exactly its 320 px floor; at 768 and 375 px nothing changes; every existing keyboard, scroll-restoration and deep-link test passes unchanged.
 
-## 20. The run heading stops at its first sentence
+## 20. The run heading preserves the loaded title
 
-Measured on the local store: 22 of 35 titles are cut at the 120-rune cap mid-phrase, 27 of 35 headings wrap to two 24 px lines, and the run header is 111 px tall on those runs against 79 px when the heading fits one line. In 22 of the 27 long prompts the first sentence ends within 80 characters; the rest of the 120 runes is the second and third sentence of the request, which the request card below already carries in full.
+Measured on the local store after the first-sentence display cut shipped: 23 of 31 titled runs lose trailing title text. Several cuts retain only a qualifier (`Test-maintenance task only.`, `Read-only verification task.`, `Long-running interrupt dogfood.`) while removing the action that distinguishes the run. The full title is already safe, redacted and bounded to 120 runes; saving one 32 px heading line is not worth hiding its meaning.
 
-- The heading shows the loaded title up to the end of its first sentence: the text before the first `. `, `? ` or `! ` boundary that occurs after the twelfth character, or the whole title when there is no such boundary. A colon is not a boundary: in the store it introduces the substance of the request (`Reply with exactly: ok`, `Implement one focused dogfood usability improvement: agentrec list must show …`), and cutting there would keep the label and drop the content. This is a display cut of an already safe, already redacted, already 120-rune-bounded title; no new prompt projection, no re-reading of `prompt.txt`, and the sidebar row, the `title` attribute of the heading and the request card keep the full loaded title.
-- The cut is not a summary: it removes trailing sentences, never words within a sentence, and never rewrites anything.
-- Acceptance: a title `Read AGENTS.md if present and README.md. Report the project purpose …` renders as `Read AGENTS.md if present and README.md.` with the full title in the heading's `title` attribute; `Reply with exactly: ok` renders whole; a title with no boundary renders whole; a title whose first boundary is inside the first twelve characters (`e.g. this …`) is not cut there; on the measured store two-line headings fall from 27 to 5 of 35; the sidebar row text is unchanged.
+- The heading shows the full loaded title exactly as the run list does. It does not infer sentence boundaries, summarize, or re-read `prompt.txt`.
+- The request disclosure remains the source for the full recorded prompt. This rule changes only the bounded title projection.
+- Acceptance: titles with multiple sentences, quoted punctuation, CJK punctuation, filenames and no sentence boundary all render unchanged in both the heading and sidebar; the heading has no redundant tooltip copy.
 
 ## 21. The evidence-link caption moves under the button
 
