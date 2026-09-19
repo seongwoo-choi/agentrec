@@ -810,6 +810,93 @@ func TestViewPaginatesLargeStreams(t *testing.T) {
 	}
 }
 
+func TestViewPromptRanksRemainRecordWideAcrossActionPages(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-prompt-pages", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < viewPageSize+1; i++ {
+		item := action.Action{ID: fmt.Sprintf("action-%03d", i), Type: action.TypeToolCall, Provider: "claude", Assurance: action.AssuranceProviderReported, Status: "completed"}
+		if i == 0 || i == 249 || i == 250 {
+			item.Type = action.TypeUserPrompt
+			item.ID = map[int]string{0: "duplicate", 249: "duplicate", 250: "third-prompt"}[i]
+		}
+		if err := b.WriteAction(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: late, ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newViewHandler(root, "run-prompt-pages", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var detail struct {
+		SnapshotID string `json:"snapshotId"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/run-prompt-pages", &detail)
+	type page struct {
+		Items []struct {
+			PromptRank int `json:"promptRank"`
+		} `json:"items"`
+		NextCursor *int64 `json:"nextCursor"`
+	}
+	var first page
+	viewJSONRequest(t, handler, "/api/snapshots/"+detail.SnapshotID+"/actions?cursor=0", &first)
+	if len(first.Items) != viewPageSize || first.Items[0].PromptRank != 1 || first.Items[249].PromptRank != 2 || first.NextCursor == nil {
+		t.Fatalf("first prompt ranks = first %d last %d, cursor %v", first.Items[0].PromptRank, first.Items[249].PromptRank, first.NextCursor)
+	}
+	var second page
+	viewJSONRequest(t, handler, fmt.Sprintf("/api/snapshots/%s/actions?cursor=%d", detail.SnapshotID, *first.NextCursor), &second)
+	if len(second.Items) != 1 || second.Items[0].PromptRank != 3 {
+		t.Fatalf("second prompt rank = %+v", second.Items)
+	}
+}
+
+func TestViewPromptRanksUseCRLFByteOffsets(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-prompt-crlf", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, kind := range []string{action.TypeUserPrompt, action.TypeToolCall, action.TypeUserPrompt} {
+		if err := b.WriteAction(action.Action{ID: fmt.Sprintf("action-%d", i), Type: kind, Provider: "claude", Assurance: action.AssuranceProviderReported, Status: "completed"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: late, ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	actionsPath := filepath.Join(root, "run-prompt-crlf", actionsFile)
+	raw, err := os.ReadFile(actionsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSuffix(raw, []byte("\n")), []byte("\n"))
+	crlf := bytes.Join([][]byte{lines[0], {}, lines[1], lines[2]}, []byte("\r\n"))
+	if err := os.WriteFile(actionsPath, crlf, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	targetCursor := len(lines[0]) + len(lines[1]) + 6
+
+	handler := newViewHandler(root, "run-prompt-crlf", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var detail struct {
+		SnapshotID string `json:"snapshotId"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/run-prompt-crlf", &detail)
+	var page struct {
+		Items []struct {
+			ID         string `json:"id"`
+			PromptRank int    `json:"promptRank"`
+		} `json:"items"`
+	}
+	viewJSONRequest(t, handler, fmt.Sprintf("/api/snapshots/%s/actions?cursor=%d", detail.SnapshotID, targetCursor), &page)
+	if len(page.Items) != 1 || page.Items[0].ID != "action-2" || page.Items[0].PromptRank != 2 {
+		t.Fatalf("CRLF prompt page = %+v", page.Items)
+	}
+}
+
 func TestViewPagesAreAlsoBoundedByBytes(t *testing.T) {
 	root := home(t)
 	b, err := storage.Create(root, "run-byte-pages", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})

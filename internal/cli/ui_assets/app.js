@@ -2299,9 +2299,9 @@ function shortID(id) {
       const notification = type === 'user.prompt' && isTaskNotification(speech);
       if (notification) row.classList.add('notification');
       let speaker = notification ? t('Task notification') : type === 'user.prompt' ? t('You') : (action.provider || t('provider'));
-      // Which turn this is: exact for loaded rows, total from the record; silent when there is only one.
+      // Which recorded prompt this is; silent when there is only one.
       const total = state.run?.promptCount || 0;
-      const rank = type === 'user.prompt' ? byID?.promptRank?.get(action.id) : undefined;
+      const rank = type === 'user.prompt' ? byID?.promptRank?.get(action) : undefined;
       if (rank && total > 1) speaker = `${speaker} · ${t('{n} of {total}', { n: rank, total })}`;
       body.append(node('div', 'speaker', speaker), speechBlock(speech));
       row.append(time, body);
@@ -2495,11 +2495,13 @@ function shortID(id) {
   const MODES = {
     actions: {
       typeOf: (action) => action.type || 'unknown',
-      // The id map for depth, plus each prompt's rank among loaded prompts (DESIGN.md section 23).
+      // The id map for depth, plus each prompt's record-wide rank from the snapshot.
       context: (items) => {
         const byID = new Map(items.map((action) => [action.id, action]));
-        let rank = 0;
-        byID.promptRank = new Map(items.filter((action) => action.type === 'user.prompt').map((action) => [action.id, ++rank]));
+        byID.promptRank = new Map();
+        items.filter((action) => action.type === 'user.prompt').forEach((action) => {
+          if (Number.isSafeInteger(action.promptRank) && action.promptRank > 0) byID.promptRank.set(action, action.promptRank);
+        });
         return byID;
       },
       row: actionRow,
