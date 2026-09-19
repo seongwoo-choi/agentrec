@@ -201,3 +201,12 @@ Measured on the local store's multi-turn session (`20260909T090038`): twelve `us
 - This is a position, not a structure: the Viewer does not infer which reply answers which prompt, does not group actions into turns, and does not change the request or last-message cards.
 - Localized in EN/KO/JA/ZH.
 - Acceptance: on the measured session the twelve prompt rows read `1 of 12` … `12 of 12` in order after every page is loaded; a direct link to a later page keeps the same record-wide ranks; duplicate IDs do not merge positions; a single-prompt run shows no ordinal; the Go detail for the fixture reports `promptCount` equal to the number of `user.prompt` records.
+
+## 24. Relative run times disclose the recorded instant
+
+On the local store's ten initially visible runs, two groups of three rows share the same day-level relative label (`2일 전` and `14일 전`). The exact start is available only after opening a run, so the compact list cannot distinguish those timestamps on hover or through an accessible name.
+
+- Keep the visible relative token and row density unchanged.
+- Render that token as a semantic `time` element whose `datetime` is the normalized recorded instant. Its tooltip is the same locale-aware exact timestamp used in run detail, and its accessible label prefixes that timestamp with the localized **Started** label.
+- Do not infer precision beyond `startedAt`, alter sorting, or change the canonical record.
+- Acceptance: each valid start keeps its relative text, exposes the ISO instant in `datetime`, and exposes the localized exact timestamp in both `title` and its accessible label; an absent zero-time sentinel stays **unknown** without exact-time semantics; no visible text is added and the measured viewports gain no overflow.

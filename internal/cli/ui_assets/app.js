@@ -1181,6 +1181,27 @@ function shortID(id) {
     return t('{n}d ago', { n: Math.round(seconds / 86400) });
   }
 
+  function recordedStart(value) {
+    if (typeof value !== 'string' || value.startsWith('0001-')) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function runStartText(value) {
+    return recordedStart(value) ? relativeTime(value) : t('unknown');
+  }
+
+  function runStartTime(value) {
+    const date = recordedStart(value);
+    if (!date) return node('span', 'run-time', t('unknown'));
+    const el = node('time', 'run-time', relativeTime(value));
+    const exact = date.toLocaleString(state.lang);
+    el.dateTime = date.toISOString();
+    el.title = exact;
+    el.setAttribute('aria-label', `${t('Started')}: ${exact}`);
+    return el;
+  }
+
   // compactDuration renders a recorded process window as one short token for
   // the run row; the exact Go-style value lives in the title. Absent or
   // non-numeric input yields nothing rather than a zero.
@@ -1354,7 +1375,7 @@ function shortID(id) {
       node('span', 'run-meta-separator', '·'),
       node('span', 'run-provider', run.provider || t('unknown')),
       node('span', 'run-meta-separator', '·'),
-      node('span', 'run-time', relativeTime(run.startedAt)),
+      runStartTime(run.startedAt),
     );
     const duration = compactDuration(run.durationMillis);
     if (duration) {
@@ -4175,7 +4196,7 @@ function shortID(id) {
       const byID = new Map(runs.map((run) => [run.id, run]));
       document.querySelectorAll('.run-item').forEach((button) => {
         const run = byID.get(button.dataset.runId);
-        if (run) button.querySelector('.run-time').textContent = relativeTime(run.startedAt);
+        if (run) button.querySelector('.run-time').textContent = runStartText(run.startedAt);
       });
       if (previousCursor !== state.runNextCursor || previousTotal !== state.runTotal) {
         renderRunListPaging();
