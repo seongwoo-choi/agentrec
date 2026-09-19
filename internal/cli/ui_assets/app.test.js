@@ -4308,9 +4308,9 @@ test('the run heading shows the first sentence of the loaded title and keeps the
   }
 });
 
-// --- Task notifications are not spoken by the operator (DESIGN.md section 22) ---
+// --- Notification-shaped prompts do not assert an operator (DESIGN.md section 22) ---
 
-test('a user.prompt that is a Claude task notification is labelled as such, not as You', async (t) => {
+test('a user.prompt with notification-shaped text uses a cautious shape label', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const at = (s) => `2026-09-03T00:00:0${s}Z`;
   const notification = '<task-notification>\n<task-id>abc123</task-id>\n<status>completed</status>\n<summary>Background task finished.</summary>\n</task-notification>';
@@ -4325,18 +4325,18 @@ test('a user.prompt that is a Claude task notification is labelled as such, not 
   t.after(() => dom.window.close());
   const { document: d } = dom.window;
   const speakers = [...d.querySelectorAll('.conversation-row')].map((row) => [row.dataset.index, row.querySelector('.speaker').textContent, row.classList.contains('notification')]);
-  assert.deepEqual(speakers, [['0', 'You', false], ['1', 'Task notification', true], ['2', 'You', false], ['3', 'claude', false]]);
+  assert.deepEqual(speakers, [['0', 'You', false], ['1', 'Notification-shaped prompt', true], ['2', 'You', false], ['3', 'claude', false]]);
   d.querySelector('.conversation-row[data-index="1"] .show-more').click();
   assert.match(d.querySelector('.conversation-row[data-index="1"] .speech').textContent, /<task-id>abc123<\/task-id>/, 'the text is shown verbatim once expanded');
   d.querySelector('.conversation-row[data-index="1"]').click();
   assert.match(d.querySelector('#inspector').textContent, /user\.prompt/, 'the record is still a user.prompt');
 });
 
-test('the task notification speaker is localized', async (t) => {
+test('the notification-shaped prompt label is localized', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.actions = [{ id: 'p2', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:01Z', input: { prompt: '<task-notification>\n<status>completed</status>\n</task-notification>' } }];
   data.details.actionCount = 1;
-  for (const [lang, label] of [['ko', '작업 알림'], ['ja', 'タスク通知'], ['zh-CN', '任务通知']]) {
+  for (const [lang, label] of [['ko', '알림 형식 요청'], ['ja', '通知形式のプロンプト'], ['zh-CN', '通知格式提示']]) {
     const dom = await renderFixture({ ...data, configure: (w) => w.localStorage.setItem('agentrec.lang', lang) });
     t.after(() => dom.window.close());
     assert.equal(dom.window.document.querySelector('.conversation-row .speaker').textContent, label, lang);
@@ -4359,10 +4359,10 @@ test('prompt rows carry their ordinal among the recorded prompts, exact per load
   t.after(() => dom.window.close());
   const { document: d } = dom.window;
   const speakers = () => [...d.querySelectorAll('.conversation-row.prompt .speaker')].map((n) => n.textContent);
-  assert.deepEqual(speakers(), ['You · 1 of 3', 'Task notification · 2 of 3'], 'first page: exact ranks, total from the record');
+  assert.deepEqual(speakers(), ['You · 1 of 3', 'Notification-shaped prompt · 2 of 3'], 'first page: exact ranks, total from the record');
   d.querySelector('.stream-tail .load-more').click();
   await settle();
-  assert.deepEqual(speakers(), ['You · 1 of 3', 'Task notification · 2 of 3', 'You · 3 of 3']);
+  assert.deepEqual(speakers(), ['You · 1 of 3', 'Notification-shaped prompt · 2 of 3', 'You · 3 of 3']);
 });
 
 test('an exact action link preserves record-wide prompt ranks from a nonzero cursor', async (t) => {
