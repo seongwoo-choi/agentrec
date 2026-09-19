@@ -3983,6 +3983,49 @@ test('run row duration is localized without changing the exact title', async (t)
   assert.equal(el.title, '1m30s');
 });
 
+test('run row keeps relative time visible and exposes its exact recorded start', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs[0].startedAt = '2026-09-03T00:00:00Z';
+  data.configure = (w) => w.localStorage.setItem('agentrec.lang', 'ko');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const el = dom.window.document.querySelector('.run-item .run-time');
+  const exact = new Date(data.list.runs[0].startedAt).toLocaleString('ko');
+  assert.equal(el.tagName, 'TIME');
+  assert.match(el.textContent, /전$/);
+  assert.equal(el.dateTime, '2026-09-03T00:00:00.000Z');
+  assert.equal(el.title, exact);
+  assert.equal(el.getAttribute('aria-label'), `시작: ${exact}`);
+
+  const lang = dom.window.document.querySelector('#lang');
+  lang.value = 'en';
+  lang.dispatchEvent(new dom.window.Event('change'));
+  const localized = dom.window.document.querySelector('.run-item .run-time');
+  const englishExact = new Date(data.list.runs[0].startedAt).toLocaleString('en');
+  assert.equal(localized.title, englishExact);
+  assert.equal(localized.getAttribute('aria-label'), `Started: ${englishExact}`);
+});
+
+test('run row does not expose the absent zero-time sentinel as an exact instant', async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.runs[0].startedAt = '0001-01-01T00:00:00Z';
+  data.configure = (w) => {
+    w.setInterval = (callback, delay) => { if (delay === 5000) poll = callback; return delay; };
+    w.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const el = dom.window.document.querySelector('.run-item .run-time');
+  assert.equal(el.tagName, 'SPAN');
+  assert.equal(el.textContent, 'unknown');
+  assert.equal(el.hasAttribute('datetime'), false);
+  assert.equal(el.hasAttribute('title'), false);
+  assert.equal(el.hasAttribute('aria-label'), false);
+  await poll();
+  assert.equal(dom.window.document.querySelector('.run-item .run-time').textContent, 'unknown');
+});
+
 // --- Skip links (DESIGN.md section 14) ---
 
 test('skip links are the first tab stops and hand focus to the run list and run view', async (t) => {
