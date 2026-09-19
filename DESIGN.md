@@ -190,3 +190,14 @@ Measured on the local store's one multi-turn session (`20260909T090038`, 12 `use
 - This is a display label for one recognized shape, not a classifier: any other prompt, including one that merely mentions the words, is still **You**.
 - Localized in EN/KO/JA/ZH.
 - Acceptance: on the measured session the four notification rows read **Task notification** and the eight operator prompts still read **You**; a prompt that contains `<task-notification>` after other text is still **You**; the inspector for a notification row shows the unchanged `user.prompt` record.
+
+## 23. Prompt rows say which turn they are
+
+Measured on the local store's multi-turn session (`20260909T090038`): twelve `user.prompt` rows across 108 actions, all in the same shape, with no way to tell which request a row is or how many follow without counting while scrolling. The header's request card shows the first prompt, the last-message card the last reply; the ten turns between have no landmark.
+
+- The run detail carries `promptCount`: the number of `user.prompt` actions in the record, counted in the pass that already counts actions and finds the last agent message. No new file is read.
+- Each `user.prompt` row's speaker line gains an ordinal — `You · 3 of 12` — where the ordinal is the row's rank among the `user.prompt` actions loaded so far in stream order, and the total is `promptCount`. Task notifications (section 22) count as turns too, since the provider recorded them as prompts; their label reads `Task notification · 7 of 12`. A run with a single prompt shows no ordinal: `1 of 1` says nothing.
+- Because the timeline is paged and rows are appended in order, the rank is exact for every loaded row; it is never guessed for rows not yet loaded. The reading view's folded groups never contain prompts, so folding does not change ranks.
+- This is a position, not a structure: the Viewer does not infer which reply answers which prompt, does not group actions into turns, and does not change the request or last-message cards.
+- Localized in EN/KO/JA/ZH.
+- Acceptance: on the measured session the twelve prompt rows read `1 of 12` … `12 of 12` in order after every page is loaded and `1 of 12` … on the first page alone; a single-prompt run shows no ordinal; the Go detail for the fixture reports `promptCount` equal to the number of `user.prompt` records.

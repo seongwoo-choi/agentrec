@@ -864,10 +864,11 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	if snapshot.actions == nil {
 		return fail(fmt.Errorf("cli: open %s: %w", actionsFile, os.ErrNotExist))
 	}
-	actionCount, lastMessage, err := scanViewActionsContext(ctx, snapshot.actions, snapshot.actionSize)
+	scan, err := scanViewActionsContext(ctx, snapshot.actions, snapshot.actionSize)
 	if err != nil {
 		return fail(err)
 	}
+	actionCount, lastMessage, promptCount := scan.count, scan.last, scan.prompts
 	eventCount := 0
 	if snapshot.events != nil {
 		eventCount, err = countViewEventsContext(ctx, snapshot.events, snapshot.eventSize)
@@ -907,6 +908,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		ActionCount:      actionCount,
 		EventCount:       eventCount,
 		LastAgentMessage: lastMessage,
+		PromptCount:      promptCount,
 		Run: viewRunInfo{
 			ID: runID, Provider: manifest.Provider, ProviderVersion: manifest.ProviderVersion,
 			Project: projectName(manifest.CWD), CWD: manifest.CWD, Prompt: prompt,
@@ -1190,7 +1192,8 @@ func countViewActions(file *os.File, size int64) (int, error) {
 }
 
 func countViewActionsContext(ctx context.Context, file *os.File, size int64) (int, error) {
-	count, _, err := scanViewActionsContext(ctx, file, size)
+	scan, err := scanViewActionsContext(ctx, file, size)
+	count := scan.count
 	return count, err
 }
 
@@ -1198,20 +1201,28 @@ func countViewActionsContext(ctx context.Context, file *os.File, size int64) (in
 // agent message; the full record stays in the action stream.
 const viewLastMessageMaxBytes = 64 * 1024
 
-// scanViewActionsContext counts the recorded actions and, in the same pass,
-// keeps the last agent.message so the run detail can show it without a second
-// read. A message with empty text is not a message.
-func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (int, *viewLastAgentMessage, error) {
+// viewActionScan is what one pass over actions.jsonl yields for the run detail.
+type viewActionScan struct {
+	count   int
+	prompts int
+	last    *viewLastAgentMessage
+}
+
+// scanViewActionsContext counts the recorded actions and the user.prompt
+// actions among them and, in the same pass, keeps the last agent.message so
+// the run detail can show it without a second read. A message with empty
+// text is not a message.
+func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (viewActionScan, error) {
 	scanner := bufio.NewScanner(viewContextReader{ctx: ctx, reader: io.NewSectionReader(file, 0, size)})
 	scanner.Buffer(nil, maxActionBytes)
-	count := 0
+	count, prompts := 0, 0
 	var last *viewLastAgentMessage
 	// Track each line's start the way readViewActionPage does, so the offset is
 	// a cursor the page endpoint accepts.
 	position := int64(0)
 	for line := 1; scanner.Scan(); line++ {
 		if err := ctx.Err(); err != nil {
-			return 0, nil, err
+			return viewActionScan{}, err
 		}
 		lineStart := position
 		position += int64(len(scanner.Bytes()))
@@ -1222,13 +1233,16 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (int
 			continue
 		}
 		if count == maxActions {
-			return 0, nil, fmt.Errorf("cli: %s holds more than %d actions", actionsFile, maxActions)
+			return viewActionScan{}, fmt.Errorf("cli: %s holds more than %d actions", actionsFile, maxActions)
 		}
 		var item action.Action
 		if err := json.Unmarshal(scanner.Bytes(), &item); err != nil {
-			return 0, nil, fmt.Errorf("cli: %s line %d is not a recorded action: %w", actionsFile, line, err)
+			return viewActionScan{}, fmt.Errorf("cli: %s line %d is not a recorded action: %w", actionsFile, line, err)
 		}
 		count++
+		if item.Type == action.TypeUserPrompt {
+			prompts++
+		}
 		if item.Type == action.TypeAgentMessage {
 			var input struct {
 				Text string `json:"text"`
@@ -1244,9 +1258,9 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (int
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return 0, nil, fmt.Errorf("cli: read %s: %w", actionsFile, err)
+		return viewActionScan{}, fmt.Errorf("cli: read %s: %w", actionsFile, err)
 	}
-	return count, last, nil
+	return viewActionScan{count: count, prompts: prompts, last: last}, nil
 }
 
 // boundUTF8 cuts s to at most limit bytes on a rune boundary.

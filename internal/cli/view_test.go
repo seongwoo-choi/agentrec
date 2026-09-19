@@ -2372,6 +2372,36 @@ func TestViewRunDetailCarriesLastAgentMessage(t *testing.T) {
 	}
 }
 
+func TestViewRunDetailCountsPrompts(t *testing.T) {
+	root := home(t)
+	startedAt := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	b, err := storage.Create(root, "20260918T120000.000000000Z-eeeeeeee", storage.Manifest{Provider: "claude", CWD: "/tmp", StartedAt: startedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(id, typ string, sec int) action.Action {
+		return action.Action{ID: id, Type: typ, Provider: "claude", Assurance: action.AssuranceProviderReported, StartedAt: startedAt.Add(time.Duration(sec) * time.Second), Status: "completed", Input: json.RawMessage(`{"prompt":"x","text":"y"}`)}
+	}
+	for _, act := range []action.Action{mk("p1", action.TypeUserPrompt, 1), mk("t1", "shell.exec", 2), mk("m1", action.TypeAgentMessage, 3), mk("p2", action.TypeUserPrompt, 4), mk("p3", action.TypeUserPrompt, 5)} {
+		if err := b.WriteAction(act); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: startedAt.Add(6 * time.Second), ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var out struct {
+		ActionCount int `json:"actionCount"`
+		PromptCount int `json:"promptCount"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/20260918T120000.000000000Z-eeeeeeee", &out)
+	if out.ActionCount != 5 || out.PromptCount != 3 {
+		t.Errorf("actionCount=%d promptCount=%d, want 5 and 3", out.ActionCount, out.PromptCount)
+	}
+}
+
 func TestViewLastAgentMessageIsClearedByAnUnreadableLaterOne(t *testing.T) {
 	root := home(t)
 	startedAt := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
