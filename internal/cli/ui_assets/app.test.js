@@ -4348,10 +4348,10 @@ test('the task notification speaker is localized', async (t) => {
 test('prompt rows carry their ordinal among the recorded prompts, exact per loaded page', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const at = (s) => `2026-09-03T00:00:${String(s).padStart(2, '0')}Z`;
-  const prompt = (id, s, text) => ({ id, type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: at(s), input: { prompt: text } });
+  const prompt = (id, s, text, promptRank) => ({ id, type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: at(s), input: { prompt: text }, promptRank });
   const reply = (id, s) => ({ id, type: 'agent.message', provider: 'claude', status: 'completed', startedAt: at(s), input: { text: 'ok' } });
-  const first = [prompt('p1', 1, 'first request'), reply('m1', 2), prompt('p2', 3, '<task-notification>\n<status>completed</status>\n</task-notification>')];
-  const second = [reply('m2', 4), prompt('p3', 5, 'third request'), reply('m3', 6)];
+  const first = [prompt('p1', 1, 'first request', 1), reply('m1', 2), prompt('p2', 3, '<task-notification>\n<status>completed</status>\n</task-notification>', 2)];
+  const second = [reply('m2', 4), prompt('p3', 5, 'third request', 3), reply('m3', 6)];
   data.details.actionCount = 6;
   data.details.promptCount = 3;
   data.actions = (cursor) => cursor === 0 ? { items: first, nextCursor: 1000 } : { items: second, nextCursor: null };
@@ -4363,6 +4363,48 @@ test('prompt rows carry their ordinal among the recorded prompts, exact per load
   d.querySelector('.stream-tail .load-more').click();
   await settle();
   assert.deepEqual(speakers(), ['You · 1 of 3', 'Task notification · 2 of 3', 'You · 3 of 3']);
+});
+
+test('an exact action link preserves record-wide prompt ranks from a nonzero cursor', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 5;
+  data.details.promptCount = 4;
+  data.actions = (cursor) => {
+    assert.equal(cursor, 98765);
+    return {
+      items: [
+        { id: '', type: 'user.prompt', provider: 'claude', status: 'completed', input: { prompt: 'second request' }, promptRank: 2 },
+        { id: 'duplicate', type: 'user.prompt', provider: 'claude', status: 'completed', input: { prompt: 'third request' }, promptRank: 3 },
+        { id: 'duplicate', type: 'user.prompt', provider: 'claude', status: 'completed', input: { prompt: 'fourth request' }, promptRank: 4 },
+      ],
+      nextCursor: null,
+    };
+  };
+  data.configure = (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&action=duplicate&actionCursor=98765`);
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.deepEqual(
+    [...dom.window.document.querySelectorAll('.conversation-row.prompt .speaker')].map((node) => node.textContent),
+    ['You · 2 of 4', 'You · 3 of 4', 'You · 4 of 4'],
+  );
+});
+
+test('a missing prompt-rank projection does not invent a page-local record rank', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 3;
+  data.details.promptCount = 3;
+  data.actions = () => ({
+    items: [{ id: 'p3', type: 'user.prompt', provider: 'claude', status: 'completed', input: { prompt: 'third request' } }],
+    nextCursor: null,
+  });
+  data.configure = (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&action=p3&actionCursor=98765`);
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.equal(dom.window.document.querySelector('.conversation-row.prompt .speaker').textContent, 'You');
 });
 
 test('a single-prompt run shows no ordinal', async (t) => {
@@ -4378,8 +4420,8 @@ test('a single-prompt run shows no ordinal', async (t) => {
 test('the prompt ordinal is localized', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.actions = [
-    { id: 'p1', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:01Z', input: { prompt: 'a' } },
-    { id: 'p2', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:02Z', input: { prompt: 'b' } },
+    { id: 'p1', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:01Z', input: { prompt: 'a' }, promptRank: 1 },
+    { id: 'p2', type: 'user.prompt', provider: 'claude', status: 'completed', startedAt: '2026-09-03T00:00:02Z', input: { prompt: 'b' }, promptRank: 2 },
   ];
   data.details.actionCount = 2;
   data.details.promptCount = 2;

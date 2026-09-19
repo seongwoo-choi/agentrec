@@ -34,6 +34,7 @@ const (
 type viewAction struct {
 	action.Action
 	SamePathObserved []string `json:"samePathObserved,omitempty"`
+	PromptRank       int      `json:"promptRank,omitempty"`
 }
 
 type viewActionPage struct {
@@ -55,6 +56,7 @@ type viewSnapshot struct {
 	documents         map[string][]byte
 	actions           *os.File
 	actionSize        int64
+	actionPromptRanks map[int64]int
 	events            *os.File
 	eventSize         int64
 	unparsed          *os.File
@@ -868,6 +870,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	if err != nil {
 		return fail(err)
 	}
+	snapshot.actionPromptRanks = scan.promptRanks
 	actionCount, lastMessage, promptCount := scan.count, scan.last, scan.prompts
 	eventCount := 0
 	if snapshot.events != nil {
@@ -1203,9 +1206,10 @@ const viewLastMessageMaxBytes = 64 * 1024
 
 // viewActionScan is what one pass over actions.jsonl yields for the run detail.
 type viewActionScan struct {
-	count   int
-	prompts int
-	last    *viewLastAgentMessage
+	count       int
+	prompts     int
+	promptRanks map[int64]int
+	last        *viewLastAgentMessage
 }
 
 // scanViewActionsContext counts the recorded actions and the user.prompt
@@ -1215,7 +1219,9 @@ type viewActionScan struct {
 func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (viewActionScan, error) {
 	scanner := bufio.NewScanner(viewContextReader{ctx: ctx, reader: io.NewSectionReader(file, 0, size)})
 	scanner.Buffer(nil, maxActionBytes)
+	scanner.Split(splitViewLines)
 	count, prompts := 0, 0
+	promptRanks := make(map[int64]int)
 	var last *viewLastAgentMessage
 	// Track each line's start the way readViewActionPage does, so the offset is
 	// a cursor the page endpoint accepts.
@@ -1242,6 +1248,7 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 		count++
 		if item.Type == action.TypeUserPrompt {
 			prompts++
+			promptRanks[lineStart] = prompts
 		}
 		if item.Type == action.TypeAgentMessage {
 			var input struct {
@@ -1260,7 +1267,22 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 	if err := scanner.Err(); err != nil {
 		return viewActionScan{}, fmt.Errorf("cli: read %s: %w", actionsFile, err)
 	}
-	return viewActionScan{count: count, prompts: prompts, last: last}, nil
+	return viewActionScan{count: count, prompts: prompts, promptRanks: promptRanks, last: last}, nil
+}
+
+// splitViewLines keeps a trailing carriage return in the token so callers that
+// add the consumed LF byte retain exact source offsets for both LF and CRLF.
+func splitViewLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF {
+		if len(data) == 0 {
+			return 0, nil, nil
+		}
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 // boundUTF8 cuts s to at most limit bytes on a rune boundary.
@@ -1452,6 +1474,7 @@ func readViewActionPage(snapshot *viewSnapshot, cursor int64) (viewActionPage, e
 	}
 	scanner := bufio.NewScanner(io.NewSectionReader(snapshot.actions, cursor, snapshot.actionSize-cursor))
 	scanner.Buffer(nil, maxActionBytes)
+	scanner.Split(splitViewLines)
 	page := viewActionPage{Items: make([]viewAction, 0, viewPageSize)}
 	position := cursor
 	pageBytes := 0
@@ -1473,7 +1496,11 @@ func readViewActionPage(snapshot *viewSnapshot, cursor int64) (viewActionPage, e
 		if err := json.Unmarshal(line, &item); err != nil {
 			return viewActionPage{}, fmt.Errorf("cli: read %s page: %w", actionsFile, err)
 		}
-		page.Items = append(page.Items, viewAction{Action: item, SamePathObserved: viewSamePathObservations(item, snapshot.cwd, snapshot.repoRoot, snapshot.changePaths)})
+		page.Items = append(page.Items, viewAction{
+			Action:           item,
+			SamePathObserved: viewSamePathObservations(item, snapshot.cwd, snapshot.repoRoot, snapshot.changePaths),
+			PromptRank:       snapshot.actionPromptRanks[lineStart],
+		})
 		pageBytes += len(line)
 		if len(page.Items) == viewPageSize {
 			break
@@ -1496,6 +1523,7 @@ func readViewEventPage(snapshot *viewSnapshot, cursor int64) (viewEventPage, err
 	}
 	scanner := bufio.NewScanner(io.NewSectionReader(snapshot.events, cursor, snapshot.eventSize-cursor))
 	scanner.Buffer(nil, maxEventBytes)
+	scanner.Split(splitViewLines)
 	page := viewEventPage{Items: make([]json.RawMessage, 0, viewPageSize)}
 	position := cursor
 	pageBytes := 0
