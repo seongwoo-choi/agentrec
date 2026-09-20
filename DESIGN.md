@@ -249,3 +249,13 @@ Two isolated session recordings with committed failing checks (exit 3 and exit 7
 - A session with no pinned verification keeps its current neutral exit, including when `--verify` was requested but the configuration was absent, uncommitted, or changed before it could be pinned. Session end reasons also remain separate from provider process exit because the recorder did not supervise that process.
 - The stored manifest, verification result, report, warnings, hook acknowledgements, and session availability behavior are unchanged.
 - Acceptance: committed failing checks with two distinct nonzero exits both persist **FAIL** and make the recorder exit 1; a passing committed check exits 0; an unpinned session keeps its existing exit behavior.
+
+## 29. A held session lock must have a reachable recorder
+
+A process holding the per-session lock with no reachable socket currently makes a second `agentrec session serve` exit 0 without output. The same false success occurs if a live recorder's socket path is removed: the first recorder still holds the lock, but hooks and the second recorder cannot reach it, so the session can lose every later event while startup remains green.
+
+- Lock contention still prevents duplicate recorders, but it is successful only after a bounded liveness delivery is acknowledged by the recorder at that session's socket.
+- The liveness exchange uses the exact per-session socket and is consumed as protocol control data; it is not written to provider events, actions, warnings, or the canonical bundle.
+- If the socket is absent, stale, belongs to a different session, or does not acknowledge before the bound, the second recorder exits with the ordinary failure code and an operator-visible diagnostic. It never removes the lock or starts a competing recorder.
+- Healthy racing recorders keep the existing quiet exit 0. Hook delivery, stored evidence, session IDs, socket permissions, and lock lifetime are unchanged.
+- Acceptance: a healthy first recorder acknowledges the second and leaves exactly one bundle; removing the first recorder's socket makes the second exit 1 with a diagnostic while the first keeps the lock; the probe does not add a provider event or warning.

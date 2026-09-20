@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -64,6 +65,11 @@ const (
 
 	// sessionDeliveryTimeout bounds reading one delivery and acknowledging it.
 	sessionDeliveryTimeout = 5 * time.Second
+	// sessionProbeTimeout bounds the health check made when another process
+	// holds the session lock. A recorder that cannot acknowledge within the
+	// hook's shortest acknowledgement budget is not healthy enough to call
+	// the duplicate startup successful.
+	sessionProbeTimeout = time.Second
 
 	// sessionAcceptBackoff is the pause after an accept failure that is not the
 	// listener closing — file descriptors running out, say — before trying
@@ -243,13 +249,17 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 	// prepared is not left blocking on a socket nobody reads.
 	listener, lock, err := listenSession(opts.socket)
 	if errors.Is(err, errSessionServed) {
+		if probeErr := probeSession(opts.socket, opts.sessionID, sessionProbeTimeout); probeErr != nil {
+			fmt.Fprintf(stderr, "cli: session %q is locked but its recorder is not reachable: %v\n", opts.sessionID, probeErr)
+			return exitFailure
+		}
 		return 0
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailure
 	}
-	inbox := newSessionInbox(listener)
+	inbox := newSessionInbox(listener, opts.sessionID)
 	// release ends this recorder's claim on the session: the socket is closed
 	// and the lock let go, so a hook arriving afterwards finds no recorder and
 	// starts a fresh one — which is what a resumed session needs while this
@@ -445,18 +455,20 @@ type delivery struct {
 // provider runs its hooks in parallel, and a delivery is acknowledged as soon
 // as it is in this process's memory.
 type sessionInbox struct {
-	listener net.Listener
-	queue    chan delivery
-	stopped  chan struct{}
-	done     chan struct{}
+	listener  net.Listener
+	sessionID string
+	queue     chan delivery
+	stopped   chan struct{}
+	done      chan struct{}
 }
 
-func newSessionInbox(listener net.Listener) *sessionInbox {
+func newSessionInbox(listener net.Listener, sessionID string) *sessionInbox {
 	in := &sessionInbox{
-		listener: listener,
-		queue:    make(chan delivery, sessionInboxDepth),
-		stopped:  make(chan struct{}),
-		done:     make(chan struct{}),
+		listener:  listener,
+		sessionID: sessionID,
+		queue:     make(chan delivery, sessionInboxDepth),
+		stopped:   make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 	go in.run()
 	return in
@@ -481,6 +493,10 @@ func (in *sessionInbox) run() {
 		}
 		d := readDelivery(conn)
 		if len(d.raw) == 0 && d.err == nil {
+			// Empty is protocol control, not a provider event. The response is
+			// distinct from a hook acknowledgement and bound to this session, so
+			// legacy or wrong-session listeners cannot produce a false success.
+			conn.Write(sessionProbeAck(in.sessionID))
 			conn.Close()
 			continue
 		}
@@ -505,8 +521,8 @@ func (in *sessionInbox) close() {
 
 // readDelivery reads one payload to its end. The connection is left open for
 // the acknowledgement, which the caller sends once the delivery is queued. A
-// connection that says nothing — a liveness probe, a hook that died before
-// writing — yields an empty delivery: there is nothing to file.
+// connection that says nothing yields an empty delivery. The inbox treats that
+// as its private liveness exchange; provider hooks always send a JSON envelope.
 func readDelivery(conn net.Conn) delivery {
 	conn.SetDeadline(time.Now().Add(sessionDeliveryTimeout))
 	raw, err := io.ReadAll(io.LimitReader(conn, sessionReadLimit+1))
@@ -521,6 +537,41 @@ func readDelivery(conn net.Conn) delivery {
 		raw = raw[:sessionReadLimit]
 	}
 	return delivery{raw: raw, truncated: truncated, at: time.Now()}
+}
+
+func sessionProbeAck(sessionID string) []byte {
+	sum := sha256.Sum256([]byte(sessionID))
+	return []byte(fmt.Sprintf("agentrec-session-probe-v1:%x\n", sum))
+}
+
+// probeSession verifies that the process holding a session lock is also
+// accepting and acknowledging connections for the same session at its socket.
+// Its empty write side is never provider evidence, including for legacy peers.
+func probeSession(socket, sessionID string, timeout time.Duration) error {
+	conn, err := net.DialTimeout("unix", socket, timeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	unixConn, ok := conn.(*net.UnixConn)
+	if !ok {
+		return fmt.Errorf("session socket is not a Unix connection")
+	}
+	if err := unixConn.CloseWrite(); err != nil {
+		return err
+	}
+	expected := sessionProbeAck(sessionID)
+	ack := make([]byte, len(expected))
+	if _, err := io.ReadFull(conn, ack); err != nil {
+		return err
+	}
+	if !bytes.Equal(ack, expected) {
+		return fmt.Errorf("unexpected answer %q from the recorder", ack)
+	}
+	return nil
 }
 
 // sessionRecorder turns deliveries into the bundle's streams. It is used from
