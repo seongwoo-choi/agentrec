@@ -388,6 +388,9 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 	if closed.Incomplete || rec.storageErr != nil {
 		return exitFailure
 	}
+	if closed.Verified && closed.Verification.Status != evidence.VerificationPassed {
+		return exitFailure
+	}
 	return 0
 }
 
