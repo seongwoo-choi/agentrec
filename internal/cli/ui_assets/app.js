@@ -1129,9 +1129,21 @@
     localizeStatic();
   }
 
+  async function readJSONBody(response) {
+    try {
+      return await response.json();
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      if (!response.ok) return { error: `HTTP ${response.status}` };
+      const invalid = new Error(`Invalid JSON response (HTTP ${response.status})`);
+      invalid.name = 'InvalidJSONError';
+      throw invalid;
+    }
+  }
+
   async function getJSON(path, signal) {
     const response = await fetch(path, { headers: { Accept: 'application/json' }, signal });
-    const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    const body = await readJSONBody(response);
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     return body;
   }
@@ -3154,7 +3166,7 @@ function shortID(id) {
     const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     if (response.status === 204) return undefined;
     if (response.status === 403) state.token = '';
-    const parsed = await response.json().catch(() => ({}));
+    const parsed = await readJSONBody(response);
     if (response.ok) return parsed;
     const error = new Error(parsed.error || `HTTP ${response.status}`);
     error.status = response.status;
@@ -4298,7 +4310,9 @@ function shortID(id) {
       await refreshSelectedRun();
       await autoSelect(list);
     } catch (error) {
-      // ponytail: poll failures stay quiet; the next tick retries and user-initiated loads still surface errors.
+      // Transport failures stay quiet until the next tick. A successful response
+      // with a broken contract is persistent and must not leave a false-green view.
+      if (error?.name === 'InvalidJSONError') showError(error);
     } finally {
       state.pollController = null;
     }
