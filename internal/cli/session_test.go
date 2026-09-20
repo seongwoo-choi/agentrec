@@ -572,7 +572,8 @@ func TestSessionServeFilesTheRunOnASignal(t *testing.T) {
 }
 
 // Two hooks racing to start a recorder for the same session must leave one
-// recorder and one bundle, and the loser must leave quietly.
+// recorder and one bundle. A held lock is successful only while that recorder
+// can still acknowledge the session socket.
 func TestSessionServeLeavesASessionAlreadyServed(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
@@ -580,16 +581,21 @@ func TestSessionServeLeavesASessionAlreadyServed(t *testing.T) {
 
 	socket, done, stderr := serveInProcess(t, "session-dup", repo)
 	var second bytes.Buffer
+	if code := Run([]string{"session", "serve", "--session-id", "other-session", "--cwd", repo, "--socket", socket}, io.Discard, &second); code != exitFailure || !strings.Contains(second.String(), "not reachable") {
+		t.Errorf("wrong-session recorder exit code = %d, stderr %q; want %d and a reachability diagnostic", code, second.String(), exitFailure)
+	}
+	second.Reset()
 	if code := Run([]string{"session", "serve", "--session-id", "session-dup", "--cwd", repo, "--socket", socket}, io.Discard, &second); code != 0 || second.Len() != 0 {
 		t.Errorf("second recorder exit code = %d, stderr %q; want 0 and silence", code, second.String())
 	}
-	// A socket file removed under a live recorder does not let a second one in
-	// either: the lock, not the file, says who holds the session.
+	// Removing a live recorder's socket must not let a second recorder in, but
+	// the held lock alone is no longer reported as a healthy recorder.
 	if err := os.Remove(socket); err != nil {
 		t.Fatal(err)
 	}
-	if code := Run([]string{"session", "serve", "--session-id", "session-dup", "--cwd", repo, "--socket", socket}, io.Discard, &second); code != 0 || second.Len() != 0 {
-		t.Errorf("recorder after socket removal exit code = %d, stderr %q; want 0 and silence", code, second.String())
+	second.Reset()
+	if code := Run([]string{"session", "serve", "--session-id", "session-dup", "--cwd", repo, "--socket", socket}, io.Discard, &second); code != exitFailure || !strings.Contains(second.String(), "not reachable") {
+		t.Errorf("recorder after socket removal exit code = %d, stderr %q; want %d and a reachability diagnostic", code, second.String(), exitFailure)
 	}
 	// The first recorder can no longer be reached, so it is ended by its own
 	// listener closing rather than by a delivery.
@@ -602,7 +608,41 @@ func TestSessionServeLeavesASessionAlreadyServed(t *testing.T) {
 	if code := waitExit(t, done); code != 0 {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
 	}
-	onlyRunDir(t, root)
+	dir := onlyRunDir(t, root)
+	if got := countLines(t, filepath.Join(dir, "provider-events.sanitized.jsonl")); got != 0 {
+		t.Errorf("provider events = %d, want no evidence record for the liveness probe", got)
+	}
+	if got := len(readActionsFile(t, dir)); got != 0 {
+		t.Errorf("actions = %d, want no evidence record for the liveness probe", got)
+	}
+	if got := readManifestFile(t, dir).WarningCount; got != 0 {
+		t.Errorf("warning count = %d, want none for the liveness probe", got)
+	}
+}
+
+func TestSessionProbeRejectsALegacyGenericAcknowledgement(t *testing.T) {
+	dir := sessionSocketHome(t)
+	socket := filepath.Join(dir, "legacy.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.ReadAll(conn)
+		_, _ = conn.Write([]byte(hookAck))
+	}()
+	if err := probeSession(socket, "session-new", time.Second); err == nil {
+		t.Error("legacy generic acknowledgement passed as an exact-session probe")
+	}
+	<-done
 }
 
 // Once the session has ended, the recorder gives the session up before it
