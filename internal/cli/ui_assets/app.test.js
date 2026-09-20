@@ -4199,6 +4199,56 @@ test('overview group activation keeps focus and remembers the project like the s
   assert.equal(w.localStorage.getItem('agentrec.project'), 'etf-trading');
 });
 
+test('overview groups expose the active run-list filters', async (t) => {
+  const data = overviewFixture([
+    { provider: 'claude', verification: 'PASS', project: 'agentrec' },
+    { provider: 'codex', verification: 'FAIL', project: 'etf-trading' },
+  ]);
+  data.configure = (w) => w.history.replaceState(null, '', '/?project=agentrec&verification=PASS');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  let list = data.list;
+  const originalFetch = w.fetch;
+  w.fetch = (input, init) => {
+    const url = new w.URL(String(input), w.location.href);
+    if (url.pathname === '/api/runs') return response(list);
+    return originalFetch(input, init);
+  };
+  const group = (kind, value) => [...d.querySelectorAll(`[data-overview-kind="${kind}"] .overview-group`)]
+    .find((node) => node.querySelector('.overview-group-name').textContent === value);
+
+  assert.equal(group('verification', 'PASS').getAttribute('aria-pressed'), 'true');
+  assert.equal(group('verification', 'FAIL').getAttribute('aria-pressed'), 'false');
+  assert.equal(group('project', 'agentrec').getAttribute('aria-pressed'), 'true');
+  assert.equal(group('project', 'etf-trading').getAttribute('aria-pressed'), 'false');
+
+  group('verification', 'FAIL').click();
+  await settle();
+  assert.equal(group('verification', 'PASS').getAttribute('aria-pressed'), 'false');
+  assert.equal(group('verification', 'FAIL').getAttribute('aria-pressed'), 'true');
+
+  group('project', 'etf-trading').click();
+  await settle();
+  assert.equal(group('project', 'agentrec').getAttribute('aria-pressed'), 'false');
+  assert.equal(group('project', 'etf-trading').getAttribute('aria-pressed'), 'true');
+
+  group('project', 'etf-trading').focus();
+  d.querySelector('#lang').value = 'ko';
+  d.querySelector('#lang').dispatchEvent(new w.Event('change'));
+  await settle();
+  assert.equal(d.activeElement.querySelector('.overview-group-name')?.textContent, 'etf-trading');
+
+  list = {
+    ...data.list,
+    runs: data.list.runs.map((run, index) => index === 1 ? { ...run, warningCount: 1 } : run),
+  };
+  d.dispatchEvent(new w.Event('visibilitychange'));
+  await settle();
+  assert.match(d.querySelector('.run-warning-count').textContent, /1/);
+  assert.equal(d.activeElement.querySelector('.overview-group-name')?.textContent, 'etf-trading');
+});
+
 // --- Discoverable later verification (DESIGN.md section 12) ---
 
 
