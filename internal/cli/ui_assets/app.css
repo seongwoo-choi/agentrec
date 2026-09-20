@@ -65,7 +65,8 @@ button { cursor: pointer; }
 /* skip links: the first tab stops, invisible until focused */
 .skip-link { position: absolute; left: 12px; top: -100px; z-index: 20; padding: 6px 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 13px; text-decoration: none; }
 .skip-link:focus { top: 8px; outline: 2px solid var(--accent); outline-offset: 2px; }
-#run-list:focus, #run-view:focus { outline: none; }
+#run-list:focus { outline-color: var(--accent); outline-style: solid; outline-width: 2px; outline-offset: 2px; }
+#run-view:focus { outline: none; }
 .eyebrow, .section-label, .metric-label, .payload-label { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 html:lang(ko) .eyebrow, html:lang(ko) .section-label, html:lang(ko) .metric-label, html:lang(ko) .payload-label,
 html:lang(ja) .eyebrow, html:lang(ja) .section-label, html:lang(ja) .metric-label, html:lang(ja) .payload-label,
@@ -161,6 +162,7 @@ button.overview-group:focus-visible { outline: 2px solid var(--accent); outline-
 .overview-group-name { min-width: 0; overflow-wrap: anywhere; }
 .overview-group-count { flex-shrink: 0; color: var(--muted); font: 11px var(--mono); font-variant-numeric: tabular-nums; }
 .run-overview-note { margin: 12px 0 0; color: var(--quiet); font-size: 10px; line-height: 1.6; word-break: keep-all; overflow-wrap: anywhere; }
+.run-list-return { display: none; }
 .run-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
 .run-kicker { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 12px var(--mono); text-transform: uppercase; letter-spacing: .04em; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
@@ -458,6 +460,7 @@ html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
   .run-list { flex: none; min-height: 144px; height: clamp(144px,32vh,320px); }
   .run-list:not(:has(.run-item)) { min-height: 0; height: auto; }
   .workspace { padding: 20px 16px 40px; }
+  .run-list-return { display: inline-flex; align-self: flex-start; align-items: center; min-height: 36px; margin-bottom: 12px; }
   .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .metric-primary, .metric:nth-child(3) { grid-column: auto; }
   .metric { border-top: 1px solid var(--border-subtle); }

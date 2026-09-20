@@ -771,6 +771,48 @@ test('mobile run-list activation reveals and focuses each freshly loaded run', a
   assert.equal(document.activeElement.id, 'run-view');
 });
 
+test('mobile run view returns to the run list without manual scrolling', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const runs = ['run-a', 'run-b', 'run-c'].map((id) => ({ ...data.list.runs[0], id, title: `Run ${id}` }));
+  data.list = { ...data.list, runs, total: runs.length };
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id, title: `Run ${id}` } });
+  const scrolled = [];
+  data.configure = (window) => {
+    window.HTMLElement.prototype.scrollIntoView = function scrollIntoView(options) {
+      scrolled.push({ id: this.id, block: options.block });
+    };
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const button = document.querySelector('#run-list-return');
+  assert.ok(button, 'run evidence should expose a return control on narrow layouts');
+
+  for (const id of ['run-b', 'run-c']) {
+    document.querySelector(`.run-item[data-run-id="${id}"]`).click();
+    await settle();
+    button.click();
+    assert.equal(document.activeElement.id, 'run-list');
+  }
+  assert.deepEqual(scrolled, [
+    { id: 'run-list', block: 'start' },
+    { id: 'run-list', block: 'start' },
+  ]);
+
+  for (const [lang, label] of [
+    ['en', 'Back to runs'],
+    ['ko', '실행 목록으로'],
+    ['ja', '実行一覧へ戻る'],
+    ['zh-CN', '返回运行列表'],
+  ]) {
+    document.querySelector('#lang').value = lang;
+    document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.equal(button.textContent, label, lang);
+  }
+});
+
 test('desktop run-list activation preserves page position', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const second = { ...data.list.runs[0], id: 'run-b', title: 'Run B' };
@@ -1654,12 +1696,27 @@ test('responsive CSS keeps navigation reachable and reflows dense controls', () 
   assert.doesNotMatch(tablet, /max-height:\s*280px/);
   assert.doesNotMatch(tablet, /overflow-x:\s*hidden/);
   assert.match(tablet, /\.run-list\s*\{[^}]*min-height:\s*144px[^}]*height:/);
+  assert.match(css, /\.run-list-return\s*\{[^}]*display:\s*none/);
+  assert.match(tablet, /\.run-list-return\s*\{[^}]*display:\s*inline-flex[^}]*align-self:\s*flex-start[^}]*min-height:\s*36px/);
   assert.match(mobile, /\.topbar\s*\{[^}]*grid-template-areas:\s*"brand controls"\s*"search search"/);
   assert.match(mobile, /\.global-search\s*\{[^}]*grid-area:\s*search[^}]*max-width:\s*none/);
   assert.match(mobile, /\.run-header-side\s*\{[^}]*align-items:\s*flex-start/);
   assert.match(mobile, /\.evidence-fields\s*\{[^}]*grid-template-columns:\s*1fr/);
   assert.match(css, /\.metrics\s*\{[^}]*border:\s*1px solid var\(--border\)[^}]*background:\s*var\(--panel\)/);
   assert.match(css, /\.metric\s*\{[^}]*border:\s*0/);
+});
+
+test('run-list return control follows the breakpoint and leaves visible focus', (t) => {
+  for (const width of [375, 768, 1024, 1440]) {
+    const dom = responsiveFixture(html, width);
+    t.after(() => dom.window.close());
+    const { document } = dom.window;
+    const style = (element) => dom.window.getComputedStyle(element);
+    assert.equal(style(document.querySelector('#run-list-return')).display, width < 1024 ? 'inline-flex' : 'none', `${width}px`);
+    document.querySelector('#run-list').focus();
+    assert.equal(style(document.querySelector('#run-list')).outlineStyle, 'solid', `${width}px focus`);
+    assert.equal(style(document.querySelector('#run-list')).outlineWidth, '2px', `${width}px focus`);
+  }
 });
 
 test('new-run polling moves focused cutoff row to earlier toggle without expanding the list', async (t) => {

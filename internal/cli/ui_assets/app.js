@@ -103,6 +103,7 @@
       'Loaded runs at a glance': '불러온 실행 한눈에 보기',
       'Skip to run list': '실행 목록으로 건너뛰기',
       'Skip to run evidence': '실행 증거로 건너뛰기',
+      'Back to runs': '실행 목록으로',
       'Provider': '프로바이더',
       'Verification result': '검증 결과',
       'Project': '프로젝트',
@@ -444,6 +445,7 @@
       'Loaded runs at a glance': '読み込んだ実行の概要',
       'Skip to run list': 'run 一覧へ移動',
       'Skip to run evidence': '実行の証拠へ移動',
+      'Back to runs': '実行一覧へ戻る',
       'Provider': 'プロバイダー',
       'Verification result': '検証結果',
       'Project': 'プロジェクト',
@@ -785,6 +787,7 @@
       'Loaded runs at a glance': '已加载运行一览',
       'Skip to run list': '跳到运行列表',
       'Skip to run evidence': '跳到运行证据',
+      'Back to runs': '返回运行列表',
       'Provider': '提供方',
       'Verification result': '验证结果',
       'Project': '项目',
@@ -4402,6 +4405,11 @@ function shortID(id) {
       target.focus({ preventScroll: false });
     });
   }
+  $('run-list-return').addEventListener('click', () => {
+    const list = $('run-list');
+    list.scrollIntoView({ block: 'start' });
+    list.focus({ preventScroll: true });
+  });
   $('run-project-filter').addEventListener('change', () => {
     try { localStorage.setItem('agentrec.project', $('run-project-filter').value); } catch (_) { /* storage may be blocked */ }
     changeRunFilters();

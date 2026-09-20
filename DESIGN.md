@@ -220,3 +220,13 @@ Measured on the real local store at 375×812: the run list occupies y=349–609 
 - Focus the run view together with the scroll so keyboard and assistive-technology users do not remain focused on an off-screen row replaced during rendering. The existing selected row, URL, list filters and evidence content remain unchanged.
 - Use the existing responsive breakpoint and native `scrollIntoView`; add no animation, sticky control or second mobile layout.
 - Acceptance: two consecutive row activations at 375×812 each place the selected run view at the top and focus it; at 1024 px the same activation does not request scrolling; the initial load and a failed selection do not request scrolling; browser captures at 375/768/1440 in EN/KO/JA/ZH show no clipping or horizontal overflow.
+
+## 26. Mobile evidence returns to the run list
+
+Measured on the same 375×812 local view after section 25: two consecutive run selections each place the evidence at y≈0 with document scroll y=678, while the run list is entirely above the viewport at y≈−329…−69. The only list-targeting skip link is intentionally hidden until focused at the document start, so choosing another run still requires a manual page scroll after every inspection.
+
+- On narrow layouts (<1024 px), the run view starts with one ordinary **Back to runs** button. It is not sticky and does not create another navigation surface.
+- Activating it scrolls the existing `#run-list` to the viewport start and moves focus to that navigation landmark. The selected run, filters, URL and loaded evidence do not change.
+- Desktop keeps the control hidden because its sidebar is already persistent.
+- Localized in EN/KO/JA/ZH with the existing native button and focus styles.
+- Acceptance: two select → return cycles at 375 and 768 px each expose and focus the existing run list; at 1024 and 1440 px the button is not rendered visually; no horizontal overflow, clipped label, runtime exception or failed request is introduced.
