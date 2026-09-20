@@ -230,3 +230,13 @@ Measured on the same 375×812 local view after section 25: two consecutive run s
 - Desktop keeps the control hidden because its sidebar is already persistent.
 - Localized in EN/KO/JA/ZH with the existing native button and focus styles.
 - Acceptance: two select → return cycles at 375 and 768 px each expose and focus the existing run list; at 1024 and 1440 px the button is not rendered visually; no horizontal overflow, clipped label, runtime exception or failed request is introduced.
+
+## 27. Truncated conversation controls identify their message
+
+Measured on two real runs (`20260918T075702.265224000Z-701791a9` and `20260918T042440.242400000Z-f61066a6`): each exposes two truncated conversation controls in Chromium's accessibility tree, and both controls in each run have only the same accessible name, **Show more** (`더 보기`). In the second run they belong to different visible speakers, **나** and **codex**, but that context is lost when controls are navigated out of visual context.
+
+- Keep the visible **Show more** / **Show less** copy and conversation layout unchanged.
+- Give each truncation control an accessible name that combines its localized action with that row's existing localized speaker and prompt-position label. Do not derive a new speaker, turn, or provenance label.
+- Expose the native expanded state with `aria-expanded`, synchronized with the preview.
+- The stored action, full inspector text, preview limits, selection and evidence links remain unchanged.
+- Acceptance: controls for distinct speakers or prompt positions have distinct accessible names in EN/KO/JA/ZH; collapsed controls expose `aria-expanded="false"`; activation changes the action phrase and exposes `aria-expanded="true"`; collapsing restores both values; visible button text remains the existing localized copy.

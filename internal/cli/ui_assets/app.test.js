@@ -4546,6 +4546,61 @@ test('the run heading and sidebar preserve the complete loaded title', async (t)
   }
 });
 
+// --- Truncated conversation controls keep their row context (DESIGN.md section 27) ---
+
+test('conversation expand controls expose localized row context and expanded state', async (t) => {
+  const cases = [
+    ['en', ['Show more — You · 1 of 2', 'Show more — You · 2 of 2', 'Show more — codex'], ['Show less — You · 1 of 2', 'Show less — You · 2 of 2', 'Show less — codex'], 'Show more', 'Show less'],
+    ['ko', ['더 보기 — 나 · 1 / 2', '더 보기 — 나 · 2 / 2', '더 보기 — codex'], ['접기 — 나 · 1 / 2', '접기 — 나 · 2 / 2', '접기 — codex'], '더 보기', '접기'],
+    ['ja', ['もっと見る — 自分 · 1 / 2', 'もっと見る — 自分 · 2 / 2', 'もっと見る — codex'], ['閉じる — 自分 · 1 / 2', '閉じる — 自分 · 2 / 2', '閉じる — codex'], 'もっと見る', '閉じる'],
+    ['zh-CN', ['展开 — 我 · 1 / 2', '展开 — 我 · 2 / 2', '展开 — codex'], ['收起 — 我 · 1 / 2', '收起 — 我 · 2 / 2', '收起 — codex'], '展开', '收起'],
+  ];
+  for (const [lang, collapsedLabels, expandedLabels, visibleCollapsed, visibleExpanded] of cases) {
+    const data = fixture('completed', 'pass', 'PASS');
+    const long = (prefix) => `${prefix} first line\nsecond line\nthird line`;
+    data.actions = [
+      { id: 'p1', type: 'user.prompt', provider: 'codex', status: 'completed', input: { prompt: long('first') }, promptRank: 1 },
+      { id: 'p2', type: 'user.prompt', provider: 'codex', status: 'completed', input: { prompt: long('second') }, promptRank: 2 },
+      { id: 'm1', type: 'agent.message', provider: 'codex', status: 'completed', input: { text: long('reply') } },
+    ];
+    data.details.actionCount = 3;
+    data.details.promptCount = 2;
+    data.configure = (w) => w.localStorage.setItem('agentrec.lang', lang);
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const controls = [...dom.window.document.querySelectorAll('.conversation-row .show-more')];
+    assert.deepEqual(controls.map((button) => button.getAttribute('aria-label')), collapsedLabels, lang);
+    assert.deepEqual(controls.map((button) => button.getAttribute('aria-expanded')), ['false', 'false', 'false'], lang);
+    assert.deepEqual(controls.map((button) => button.textContent), [visibleCollapsed, visibleCollapsed, visibleCollapsed], `${lang}: visible copy stays compact`);
+    controls.forEach((button) => button.click());
+    assert.deepEqual(controls.map((button) => button.getAttribute('aria-label')), expandedLabels, `${lang}: every expanded control keeps row context`);
+    assert.deepEqual(controls.map((button) => button.getAttribute('aria-expanded')), ['true', 'true', 'true'], lang);
+    assert.deepEqual(controls.map((button) => button.textContent), [visibleExpanded, visibleExpanded, visibleExpanded], `${lang}: visible expanded copy stays compact`);
+    controls.forEach((button) => button.click());
+    assert.deepEqual(controls.map((button) => button.getAttribute('aria-label')), collapsedLabels, `${lang}: collapse restores accessible names`);
+    assert.deepEqual(controls.map((button) => button.getAttribute('aria-expanded')), ['false', 'false', 'false'], lang);
+  }
+});
+
+test('conversation expand context localizes after a run re-render', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ id: 'p1', type: 'user.prompt', provider: 'codex', status: 'completed', input: { prompt: 'first line\nsecond line\nthird line' } }];
+  data.details.actionCount = 1;
+  data.details.promptCount = 1;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const oldControl = document.querySelector('.conversation-row .show-more');
+  oldControl.click();
+  document.querySelector('#lang').value = 'ko';
+  document.querySelector('#lang').dispatchEvent(new Event('change', { bubbles: true }));
+  const current = document.querySelector('.conversation-row .show-more');
+  assert.equal(oldControl.isConnected, false, 'the localized run render replaces the old disclosure');
+  assert.equal(current.textContent, '더 보기');
+  assert.equal(current.getAttribute('aria-label'), '더 보기 — 나');
+  assert.equal(current.getAttribute('aria-expanded'), 'false');
+});
+
 // --- Notification-shaped prompts do not assert an operator (DESIGN.md section 22) ---
 
 test('a user.prompt with notification-shaped text uses a cautious shape label', async (t) => {
