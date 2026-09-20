@@ -240,3 +240,12 @@ Measured on two real runs (`20260918T075702.265224000Z-701791a9` and `20260918T0
 - Expose the native expanded state with `aria-expanded`, synchronized with the preview.
 - The stored action, full inspector text, preview limits, selection and evidence links remain unchanged.
 - Acceptance: controls for distinct speakers or prompt positions have distinct accessible names in EN/KO/JA/ZH; collapsed controls expose `aria-expanded="false"`; activation changes the action phrase and exposes `aria-expanded="true"`; collapsing restores both values; visible button text remains the existing localized copy.
+
+## 28. Session verification verdicts reach the recorder exit
+
+Two isolated session recordings with committed failing checks (exit 3 and exit 7) were acknowledged, persisted as **FAIL**, and still ended `agentrec session serve --verify` with exit 0. The same non-passing verdict already fails `trace`, `verify`, and each `shadow` leg; only hook-driven session recording loses it at the process boundary.
+
+- A session recorder that pinned and ran verification exits successfully only when that verification passed. Failed, timed-out, errored, tainted, or cancelled verification exits with the ordinary failure code after all available evidence and the report have been filed.
+- A session with no pinned verification keeps its current neutral exit, including when `--verify` was requested but the configuration was absent, uncommitted, or changed before it could be pinned. Session end reasons also remain separate from provider process exit because the recorder did not supervise that process.
+- The stored manifest, verification result, report, warnings, hook acknowledgements, and session availability behavior are unchanged.
+- Acceptance: committed failing checks with two distinct nonzero exits both persist **FAIL** and make the recorder exit 1; a passing committed check exits 0; an unpinned session keeps its existing exit behavior.

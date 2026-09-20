@@ -396,6 +396,33 @@ func TestSessionServeVerifiesOnlyWhenAskedAndOnlyCommittedChecks(t *testing.T) {
 	}
 }
 
+func TestSessionServeReportsAFailedVerification(t *testing.T) {
+	for _, checkExit := range []string{"3", "7"} {
+		t.Run("exit-"+checkExit, func(t *testing.T) {
+			root := home(t)
+			repo := cleanRepo(t)
+			sessionSocketHome(t)
+			stubProviders(t, verifyHelperName)
+			commitVerifyConfig(t, repo, verifyHelperName, "fail", checkExit)
+			const sessionID = "session-verification-failed"
+
+			socket, done, stderr := serveInProcess(t, sessionID, repo, verifyFlag)
+			deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, nil))
+			deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, nil))
+			if code := waitExit(t, done); code != exitFailure {
+				t.Fatalf("exit code = %d, want %d for failed verification (stderr %q)", code, exitFailure, stderr.String())
+			}
+
+			if _, stdout, _ := run(t, "show", "latest"); !strings.Contains(stdout, "VERIFICATION-OBSERVED RESULT\n  Status       FAIL") {
+				t.Errorf("failed verification was not persisted:\n%s", stdout)
+			}
+			if got := len(runDirs(t, root)); got != 1 {
+				t.Errorf("runs = %d, want 1", got)
+			}
+		})
+	}
+}
+
 // One delivery must never cost the rest of the session: whatever its size or
 // shape, it is filed as far as the bundle allows, and recording goes on.
 func TestSessionServeKeepsRecordingAfterHostileDeliveries(t *testing.T) {
