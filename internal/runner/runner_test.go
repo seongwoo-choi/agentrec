@@ -998,6 +998,98 @@ func TestRunFinalizesWhenStorageFails(t *testing.T) {
 	}
 }
 
+type recordingProviderStream struct {
+	writeCalls int
+	failFirst  error
+	failAll    error
+}
+
+func (w *recordingProviderStream) WriteProviderEvent([]byte) error {
+	w.writeCalls++
+	if w.failAll != nil {
+		return w.failAll
+	}
+	if w.writeCalls == 1 {
+		return w.failFirst
+	}
+	return nil
+}
+
+func (w *recordingProviderStream) WriteUnparsedLine([]byte) error { return nil }
+
+func parserLineCount(r io.Reader) <-chan int {
+	seen := make(chan int, 1)
+	go func() {
+		sc := bufio.NewScanner(r)
+		count := 0
+		for sc.Scan() {
+			count++
+		}
+		seen <- count
+	}()
+	return seen
+}
+
+func TestTeeStopsFeedingTheParserAfterStorageRejectsAnEvent(t *testing.T) {
+	b := newBundle(t)
+	depth := storage.MaxProviderEventDepth + 1
+	rejected := strings.Repeat(`{"value":`, depth) + `0` + strings.Repeat(`}`, depth)
+	stdout := strings.NewReader(rejected + "\n" + `{"id":"after-storage-failure"}` + "\n")
+	pr, pw := io.Pipe()
+	seen := parserLineCount(pr)
+
+	got := tee(stdout, pw, b)
+
+	if got.err == nil {
+		t.Fatal("tee error = nil, want the storage rejection surfaced")
+	}
+	if count := <-seen; count != 0 {
+		t.Errorf("parser received %d lines, want 0 after the first event was not stored", count)
+	}
+	if events := readLines(t, filepath.Join(b.Dir(), "provider-events.sanitized.jsonl")); len(events) != 0 {
+		t.Errorf("provider events = %q, want none", events)
+	}
+}
+
+func TestTeeParsesAStoredEventAfterARecoverableLineRefusal(t *testing.T) {
+	stream := &recordingProviderStream{failFirst: storage.ErrLineTooLarge}
+	pr, pw := io.Pipe()
+	seen := parserLineCount(pr)
+
+	got := tee(strings.NewReader("{\"id\":\"refused\"}\n{\"id\":\"stored\"}\n"), pw, stream)
+
+	if !errors.Is(got.err, storage.ErrLineTooLarge) {
+		t.Fatalf("tee error = %v, want ErrLineTooLarge", got.err)
+	}
+	if stream.writeCalls != 2 {
+		t.Errorf("storage writes = %d, want 2", stream.writeCalls)
+	}
+	if count := <-seen; count != 1 {
+		t.Errorf("parser received %d lines, want the later stored event", count)
+	}
+}
+
+func TestTeeDrainsProviderOutputAfterATerminalStorageFailure(t *testing.T) {
+	terminalErr := errors.New("terminal storage failure")
+	stream := &recordingProviderStream{failAll: terminalErr}
+	const lines = 10000
+	pr, pw := io.Pipe()
+	seen := parserLineCount(pr)
+	stdout := strings.NewReader(strings.Repeat("{\"id\":\"after-failure\"}\n", lines))
+
+	got := tee(stdout, pw, stream)
+
+	if !errors.Is(got.err, terminalErr) {
+		t.Fatalf("tee error = %v, want terminal storage failure", got.err)
+	}
+	if stream.writeCalls != lines {
+		t.Errorf("storage writes = %d, want all %d lines drained", stream.writeCalls, lines)
+	}
+	if count := <-seen; count != 0 {
+		t.Errorf("parser received %d unstored lines, want 0", count)
+	}
+}
+
 // A line that is not a provider event is not a failure of the run. Agent CLIs
 // print update banners and warnings beside their event streams, and a recorder
 // that threw a completed run away over one of them would be destroying the
