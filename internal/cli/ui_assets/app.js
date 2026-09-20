@@ -81,6 +81,7 @@
       'Session ended': '세션 종료',
       'Filter timeline': '타임라인 필터',
       'Evidence inspector': '증거 인스펙터',
+      'Currently shown in inspector': '현재 인스펙터에 표시됨',
       'Select an action, change, or provider event to inspect its sanitized evidence.': '액션, 변경, 프로바이더 이벤트를 선택하면 정제된 증거를 확인할 수 있습니다.',
       Language: '언어',
       'unknown project': '알 수 없는 프로젝트',
@@ -423,6 +424,7 @@
       'Session ended': 'セッション終了',
       'Filter timeline': 'タイムラインを絞り込む',
       'Evidence inspector': '証跡インスペクター',
+      'Currently shown in inspector': '現在インスペクターに表示中',
       'Select an action, change, or provider event to inspect its sanitized evidence.': 'アクション、変更、プロバイダーイベントを選択すると、サニタイズ済みの証跡を確認できます。',
       Language: '言語',
       'unknown project': '不明なプロジェクト',
@@ -765,6 +767,7 @@
       'Session ended': '会话结束',
       'Filter timeline': '筛选时间线',
       'Evidence inspector': '证据检视器',
+      'Currently shown in inspector': '当前显示在检视器中',
       'Select an action, change, or provider event to inspect its sanitized evidence.': '选择一个操作、变更或提供方事件即可查看其脱敏后的证据。',
       Language: '语言',
       'unknown project': '未知项目',
@@ -2494,6 +2497,8 @@ function shortID(id) {
       state.selected.value = selectedFile;
       revealGroupedRow(selectedRow);
       selectedRow.classList.add('selected');
+      selectedRow.setAttribute('aria-current', 'true');
+      selectedRow.setAttribute('aria-description', t('Currently shown in inspector'));
     } else if (selectedPath) {
       state.selected = null;
     }
@@ -2615,6 +2620,8 @@ function shortID(id) {
     if (selectedRow) {
       revealGroupedRow(selectedRow);
       selectedRow.classList.add('selected');
+      selectedRow.setAttribute('aria-current', 'true');
+      selectedRow.setAttribute('aria-description', t('Currently shown in inspector'));
       state.selected = selected;
     } else {
       state.selected = null;
@@ -2636,9 +2643,13 @@ function shortID(id) {
   function selectItem(row, selected) {
     document.querySelectorAll('.action-row.selected').forEach((el) => {
       el.classList.remove('selected');
+      el.removeAttribute('aria-current');
+      el.removeAttribute('aria-description');
     });
     revealGroupedRow(row);
     row.classList.add('selected');
+    row.setAttribute('aria-current', 'true');
+    row.setAttribute('aria-description', t('Currently shown in inspector'));
     selected.generation = state.loadGeneration;
     selected.runID = state.run?.run.id;
     state.selected = selected;

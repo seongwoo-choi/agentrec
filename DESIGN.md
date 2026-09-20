@@ -286,3 +286,12 @@ The supervisor stores provider stdout and parses the same lines concurrently. In
 - Values outside that range make the run unreadable instead of becoming fabricated duration evidence in the CLI or Viewer.
 - Recorder output, valid historical bundles, duration precedence, manifest fallback, and open-run handling remain unchanged.
 - Acceptance: missing, null, negative and conversion-overflowing process durations make `show` exit 1 without rendering a report; list and Viewer surfaces mark the run unreadable instead of projecting it; the largest convertible millisecond value decodes successfully; ordinary CLI and Viewer tests remain green.
+
+## 33. Timeline selection is exposed to assistive technology
+
+On a real 106-row action timeline, selecting a row changed only its CSS class. Every row was exposed as a button controlling the inspector, but neither the DOM nor Chromium's accessibility tree identified which recorded item currently populated that inspector.
+
+- The action, change, live-change, or provider-event button currently shown in the inspector exposes `aria-current="true"` and a localized `aria-description`; other rows omit both attributes. Changing selection transfers that state without introducing toggle-button semantics.
+- Selection restored by an exact link, history navigation, filtering, polling, locale changes, or live refresh retains the same accessible current state as pointer or keyboard selection.
+- Roles, focus, URL state, canonical evidence, inspector content, visible selection styling, and row density remain unchanged. An empty inspector has no current row.
+- Acceptance: each supported timeline mode exposes at most one current row, selecting another clears the old state, rerendered/restored selection keeps it, and the real browser accessibility tree reports the current item without adding visible UI.
