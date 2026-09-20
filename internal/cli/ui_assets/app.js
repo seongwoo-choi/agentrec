@@ -2264,7 +2264,7 @@ function shortID(id) {
   // speechBlock shows a capped two-line preview that expands in place up to a cap; the inspector carries the full text.
   const PREVIEW_CHARS = 280;
   const EXPANDED_CHARS = 20000;
-  function speechBlock(text) {
+  function speechBlock(text, label) {
     const block = node('div', 'speech');
     const preview = text.split('\n').slice(0, 2).join('\n').slice(0, PREVIEW_CHARS);
     const quote = node('div', 'speech-text', preview);
@@ -2273,12 +2273,19 @@ function shortID(id) {
     const more = node('button', 'show-more', t('Show more'));
     more.type = 'button';
     let expanded = false;
+    const updateToggle = () => {
+      const action = t(expanded ? 'Show less' : 'Show more');
+      more.textContent = action;
+      more.setAttribute('aria-label', `${action} — ${label}`);
+      more.setAttribute('aria-expanded', String(expanded));
+    };
+    updateToggle();
     more.addEventListener('click', (event) => {
       event.stopPropagation();
       expanded = !expanded;
       quote.textContent = expanded ? (text.length > EXPANDED_CHARS ? `${text.slice(0, EXPANDED_CHARS)}\n${t('… full text in the inspector')}` : text) : preview;
       quote.classList.toggle('expanded', expanded);
-      more.textContent = t(expanded ? 'Show less' : 'Show more');
+      updateToggle();
     });
     block.append(more);
     return block;
@@ -2327,7 +2334,7 @@ function shortID(id) {
       const total = state.run?.promptCount || 0;
       const rank = type === 'user.prompt' ? byID?.promptRank?.get(action) : undefined;
       if (rank && total > 1) speaker = `${speaker} · ${t('{n} of {total}', { n: rank, total })}`;
-      body.append(node('div', 'speaker', speaker), speechBlock(speech));
+      body.append(node('div', 'speaker', speaker), speechBlock(speech, speaker));
       row.append(time, body);
       return row;
     }
