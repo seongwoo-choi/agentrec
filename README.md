@@ -41,7 +41,7 @@ Each comes from a different observer and the bundle keeps them apart — so a co
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.15.1.md) ·
+[Release notes](docs/releases/v0.15.2.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -63,14 +63,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.15.1_darwin_arm64.tar.gz
+archive=agentrec_0.15.2_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.15.1_darwin_arm64/agentrec version
+./agentrec_0.15.2_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.15.1
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.15.2
 ```
 
 Each release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -335,7 +335,7 @@ wait in `trash/`. `AGENTREC_HOME` must lie outside the repository being recorded
 
 ## Documentation
 
-- [Release notes](docs/releases/) — one file per release, latest [v0.15.1](docs/releases/v0.15.1.md)
+- [Release notes](docs/releases/) — one file per release, latest [v0.15.2](docs/releases/v0.15.2.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [Viewer design contract](DESIGN.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
@@ -350,7 +350,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.15.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.15.2 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the archives locally and publishes nothing.
