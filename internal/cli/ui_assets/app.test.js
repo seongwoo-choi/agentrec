@@ -14,7 +14,7 @@ const response = (body) => Promise.resolve({
   json: async () => body,
 });
 
-async function renderFixture({ list, details, actions = [], changes = [], events = [], live = null, search = { hits: [], truncated: false }, configure = () => {} }) {
+async function renderFixture({ list, details, actions = [], changes = [], events = [], live = null, search = { hits: [], truncated: false }, configure = () => {}, intercept = () => null }) {
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
     url: 'http://localhost:42817/',
@@ -31,6 +31,8 @@ async function renderFixture({ list, details, actions = [], changes = [], events
   window.fetch = (input, init = {}) => {
     const url = new URL(String(input), window.location.href);
     window.__fetchPaths.push(`${url.pathname}${url.search}`);
+    const intercepted = intercept(url, init);
+    if (intercepted) return intercepted;
     if (url.pathname === '/api/shadow') return response({ allowRun: false });
     if (url.pathname === '/api/token') return response({ token: 'test-token' });
     if (init.method === 'DELETE' && /^\/api\/runs\/[^/]+$/.test(url.pathname)) {
@@ -87,6 +89,79 @@ function actionLinkFixture() {
 }
 
 const settle = async () => { for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
+
+const malformedJSON = (error = new SyntaxError('Unexpected token')) => Promise.resolve({
+  ok: true,
+  status: 200,
+  json: async () => { throw error; },
+});
+
+test('successful malformed run-list JSON is reported instead of rendered as an empty store', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => url.pathname === '/api/runs' ? malformedJSON() : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(document.querySelector('#workspace-empty-title').textContent, 'Could not load recorded runs');
+  assert.equal(document.querySelector('#workspace-empty-body').textContent, 'Invalid JSON response (HTTP 200)');
+  assert.equal(document.querySelector('#error').textContent, 'Invalid JSON response (HTTP 200)');
+});
+
+test('successful malformed action JSON is reported instead of rendered as no recorded actions', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => url.pathname.endsWith('/actions') ? malformedJSON() : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(document.querySelector('#error').textContent, 'Invalid JSON response (HTTP 200)');
+  assert.match(document.querySelector('.stream-error').textContent, /Could not load actions: Invalid JSON response \(HTTP 200\)/);
+  assert.doesNotMatch(document.querySelector('#timeline').textContent, /No actions were recorded/);
+});
+
+test('successful malformed mutation JSON does not report a completed delete', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url, init) => init.method === 'DELETE' ? malformedJSON() : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const runID = data.details.run.id;
+  document.querySelector('#delete-run').click();
+  document.querySelector('#run-actions .danger-button').click();
+  await settle();
+  assert.ok(document.querySelector(`.run-item[data-run-id="${runID}"]`), 'failed mutation keeps the run');
+  assert.equal(document.querySelector('#error').textContent, 'Cannot delete: Invalid JSON response (HTTP 200)');
+  assert.equal(document.querySelector('#toast').classList.contains('hidden'), true);
+});
+
+test('malformed run-list JSON during polling is visible while transient failures stay quiet', async (t) => {
+  let poll;
+  let malformed = false;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.configure = (w) => {
+    w.setInterval = (callback) => { poll = callback; return 1; };
+    w.clearInterval = () => {};
+  };
+  data.intercept = (url) => malformed && url.pathname === '/api/runs' && !url.search ? malformedJSON() : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  malformed = true;
+  await poll();
+  assert.equal(dom.window.document.querySelector('#error').textContent, 'Invalid JSON response (HTTP 200)');
+  assert.equal(dom.window.document.querySelectorAll('.run-item').length, 1, 'last valid list remains visible');
+});
+
+test('response-body cancellation remains an AbortError instead of a JSON failure', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const aborted = new DOMException('The operation was aborted.', 'AbortError');
+  data.configure = (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}`);
+  data.intercept = (url) => url.pathname === `/api/runs/${data.details.run.id}` ? malformedJSON(aborted) : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(document.querySelector('#error').textContent, '');
+  assert.doesNotMatch(document.querySelector('#workspace-empty-body').textContent, /Invalid JSON response/);
+});
+
 async function openActionHit(window, index = 0) {
   const input = window.document.querySelector('#search-all');
   input.value = 'test';
