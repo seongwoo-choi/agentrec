@@ -259,3 +259,12 @@ A process holding the per-session lock with no reachable socket currently makes 
 - If the socket is absent, stale, belongs to a different session, or does not acknowledge before the bound, the second recorder exits with the ordinary failure code and an operator-visible diagnostic. It never removes the lock or starts a competing recorder.
 - Healthy racing recorders keep the existing quiet exit 0. Hook delivery, stored evidence, session IDs, socket permissions, and lock lifetime are unchanged.
 - Acceptance: a healthy first recorder acknowledges the second and leaves exactly one bundle; removing the first recorder's socket makes the second exit 1 with a diagnostic while the first keeps the lock; the probe does not add a provider event or warning.
+
+## 30. Repository finalization bounds untracked-file reads
+
+Repository evidence finalization has a bounded caller context, but untracked regular files were read to EOF without consulting it. A large file could therefore outlive the advertised close-out deadline, and a file growing faster than it was read could keep moving EOF indefinitely.
+
+- Untracked-file reads check cancellation between bounded chunks and propagate cancellation as a collection failure rather than disguising it as one unreadable file. This does not claim to preempt a filesystem syscall already blocked inside the kernel.
+- Each read stops at the size observed from the opened file. Bytes appended later belong outside that finalization snapshot and cannot extend its lifetime.
+- Existing text storage limits, binary hashes, sanitization, symlink/device refusal, and per-file unreadable fallback remain unchanged when collection is not cancelled.
+- Acceptance: cancellation before a read and between read chunks returns `context.Canceled`; ordinary text, binary, and storage-limit coverage remains green.

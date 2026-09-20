@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -302,6 +303,88 @@ func TestFinalizeRecordsBinaryWithoutItsBody(t *testing.T) {
 	}
 	if bodies := storedBodies(t, run); len(bodies) != 0 {
 		t.Errorf("stored bodies = %v, want none", bodies)
+	}
+}
+
+type cancelAfterContextChecks struct {
+	context.Context
+	remaining int
+}
+
+func (c *cancelAfterContextChecks) Err() error {
+	if c.remaining == 0 {
+		return context.Canceled
+	}
+	c.remaining--
+	return nil
+}
+
+func TestDescribeUntrackedFileStopsWhenCollectionIsCancelled(t *testing.T) {
+	repo, run := gitRepo(t), runDir(t)
+	c := start(t, repo, run)
+	write(t, repo, "cancelled.txt", strings.Repeat("x", 1<<20))
+
+	root, err := os.OpenRoot(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	t.Run("before reading", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, _, err := c.describe(ctx, root, "cancelled.txt"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("describe error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("after deadline", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		if _, _, err := c.describe(ctx, root, "cancelled.txt"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("describe error = %v, want context.DeadlineExceeded", err)
+		}
+	})
+	t.Run("between bounded reads", func(t *testing.T) {
+		ctx := &cancelAfterContextChecks{Context: context.Background(), remaining: 2}
+		if _, _, err := c.describe(ctx, root, "cancelled.txt"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("describe error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+func TestCaptureUntrackedPropagatesCancellationInsteadOfMarkingAFileUnreadable(t *testing.T) {
+	repo, run := gitRepo(t), runDir(t)
+	c := start(t, repo, run)
+	write(t, repo, "cancelled.txt", "evidence")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c.opts.Sanitize = func(s string) (string, error) {
+		cancel()
+		return s, nil
+	}
+	var res Result
+	if err := c.captureUntracked(ctx, &res); !errors.Is(err, context.Canceled) {
+		t.Fatalf("captureUntracked error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(filepath.Join(gitDirOf(run), untrackedFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("untracked evidence error = %v, want no false-readable document", err)
+	}
+}
+
+func TestCopyUntrackedFileStopsAtTheOpenedSize(t *testing.T) {
+	const opened = "text before append"
+	src := strings.NewReader(opened + "\x00binary bytes appended later")
+	var dst bytes.Buffer
+
+	size, err := copyUntrackedFile(context.Background(), &dst, src, int64(len(opened)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != int64(len(opened)) || dst.String() != opened {
+		t.Fatalf("copied %d bytes %q, want the %d opened bytes %q", size, dst.String(), len(opened), opened)
+	}
+	if isBinary(dst.Bytes()) {
+		t.Fatal("bytes appended after the opened size changed text classification")
 	}
 }
 

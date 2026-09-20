@@ -882,8 +882,11 @@ func (c *Capture) captureUntracked(ctx context.Context, res *Result) error {
 		if err != nil {
 			return fmt.Errorf("evidence: sanitize an untracked path: %w", err)
 		}
-		entry, raw, err := c.describe(root, path)
+		entry, raw, err := c.describe(ctx, root, path)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
 			// A file that vanished, changed identity or could not be read costs
 			// that file's evidence, not the run's. The error itself is not
 			// written down: it holds the repository path it failed on, which
@@ -938,7 +941,10 @@ func (c *Capture) captureUntracked(ctx context.Context, res *Result) error {
 // is described from its own metadata and never opened: following it would read a
 // file the run never had, possibly outside the repository altogether. Every
 // error here is one file's own — the caller records it as such and carries on.
-func (c *Capture) describe(root *os.Root, path string) (untrackedEntry, []byte, error) {
+func (c *Capture) describe(ctx context.Context, root *os.Root, path string) (untrackedEntry, []byte, error) {
+	if err := ctx.Err(); err != nil {
+		return untrackedEntry{}, nil, err
+	}
 	info, err := root.Lstat(path)
 	if err != nil {
 		return untrackedEntry{}, nil, err
@@ -979,7 +985,10 @@ func (c *Capture) describe(root *os.Root, path string) (untrackedEntry, []byte, 
 	// answer turns out to be binary.
 	buf := &capWriter{limit: max(c.opts.MaxTextFileBytes+1, sniffBytes)}
 	sum := sha256.New()
-	size, err := io.Copy(io.MultiWriter(sum, buf), f)
+	// Read at most the size of the file that was opened. A writer appending to
+	// it cannot move EOF away forever, and cancellation is checked between
+	// bounded reads rather than only after the complete file.
+	size, err := copyUntrackedFile(ctx, io.MultiWriter(sum, buf), f, opened.Size())
 	if err != nil {
 		return untrackedEntry{}, nil, err
 	}
@@ -1067,6 +1076,30 @@ func isBinary(prefix []byte) bool {
 type capWriter struct {
 	buf   []byte
 	limit int64
+}
+
+const contextReadChunkSize = 64 << 10
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func copyUntrackedFile(ctx context.Context, dst io.Writer, src io.Reader, size int64) (int64, error) {
+	return io.Copy(dst, contextReader{
+		ctx:    ctx,
+		reader: io.LimitReader(src, size),
+	})
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(p) > contextReadChunkSize {
+		p = p[:contextReadChunkSize]
+	}
+	return r.reader.Read(p)
 }
 
 func (w *capWriter) Write(p []byte) (int, error) {
