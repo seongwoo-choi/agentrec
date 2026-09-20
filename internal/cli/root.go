@@ -4,6 +4,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -42,7 +43,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
-	if len(args) >= 2 && (args[len(args)-1] == "-h" || args[len(args)-1] == "--help") {
+	if trailingHelpRequested(args) {
 		if commandUsage := usageForCommand(args[:len(args)-1]); commandUsage != "" {
 			fmt.Fprint(stdout, commandUsage)
 			return 0
@@ -93,6 +94,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
+func trailingHelpRequested(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	last := args[len(args)-1]
+	return (last == "-h" || last == "--help") && !slices.Contains(args[:len(args)-1], "--")
+}
+
 func usageForCommand(command []string) string {
 	var lines []string
 	for _, line := range strings.Split(usage, "\n") {
@@ -100,22 +109,27 @@ func usageForCommand(command []string) string {
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) < len(command)+1 {
+		prefix := usageCommandPrefix(fields[1:])
+		matchLen := len(command)
+		if len(prefix) < matchLen {
+			matchLen = len(prefix)
+		}
+		if matchLen == 0 || !slices.Equal(command[:matchLen], prefix[:matchLen]) {
 			continue
 		}
-		matches := true
-		for i, token := range command {
-			if fields[i+1] != token {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			lines = append(lines, line)
-		}
+		lines = append(lines, line)
 	}
 	if len(lines) == 0 {
 		return ""
 	}
 	return "Usage:\n" + strings.Join(lines, "\n") + "\n"
+}
+
+func usageCommandPrefix(fields []string) []string {
+	for i, field := range fields {
+		if strings.ContainsAny(field, "<[|") || strings.HasPrefix(field, "-") {
+			return fields[:i]
+		}
+	}
+	return fields
 }

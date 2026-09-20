@@ -127,6 +127,102 @@ func TestRunPublicNestedCommandHelpSucceedsWithoutSideEffects(t *testing.T) {
 	}
 }
 
+func TestRunTrailingHelpAfterArgumentsSucceedsWithoutSideEffects(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantOutput string
+	}{
+		{name: "show operand", args: []string{"show", "latest", "--help"}, wantOutput: "Usage:\n  agentrec show <run-id>|latest [--failures-only] [--json]\n"},
+		{name: "events operand short flag", args: []string{"events", "latest", "-h"}, wantOutput: "Usage:\n  agentrec events <run-id>|latest [--json]\n"},
+		{name: "list option", args: []string{"list", "--json", "--help"}, wantOutput: "Usage:\n  agentrec list [--cwd <path>] [--exit-reason <reason>] [--verification-status <status>] [--failures-only] [--json]\n"},
+		{name: "nested operand", args: []string{"trash", "restore", "run-123", "--help"}, wantOutput: "Usage:\n  agentrec trash restore <run-id>\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("AGENTREC_HOME", home)
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := Run(tt.args, &stdout, &stderr)
+
+			if exitCode != 0 {
+				t.Errorf("exit code = %d, want 0", exitCode)
+			}
+			if stdout.String() != tt.wantOutput {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tt.wantOutput)
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("stderr = %q, want empty", stderr.String())
+			}
+			entries, err := os.ReadDir(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("help created files under AGENTREC_HOME: %v", entries)
+			}
+		})
+	}
+}
+
+func TestRunHelpTakesPriorityAfterResolvedCommand(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"show", "latest", "--bogus", "--help"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	want := "Usage:\n  agentrec show <run-id>|latest [--failures-only] [--json]\n"
+	if stdout.String() != want {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestTrailingHelpRequestedStopsAtArgumentSeparator(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "long help before separator", args: []string{"show", "latest", "--help"}, want: true},
+		{name: "short help before separator", args: []string{"events", "latest", "-h"}, want: true},
+		{name: "long help after separator", args: []string{"trace", "claude", "--", "--help"}, want: false},
+		{name: "short help after separator", args: []string{"trace", "claude", "--", "-h"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := trailingHelpRequested(tt.args); got != tt.want {
+				t.Fatalf("trailingHelpRequested(%q) = %t, want %t", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunDoesNotInterceptHelpAfterArgumentSeparator(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"show", "latest", "--", "--help"}, &stdout, &stderr)
+
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("stderr is empty, want show usage error")
+	}
+}
+
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
