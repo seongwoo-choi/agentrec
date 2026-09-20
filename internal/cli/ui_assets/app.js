@@ -1735,10 +1735,11 @@ function shortID(id) {
   // Selecting a group drives the run list's own filters, so the two surfaces
   // cannot disagree and the loaded-scope note keeps its meaning.
   function selectOverviewGroup(filter, value, kind) {
-    setRunFilterValue(filter, value);
+    const next = $(filter).value === value ? '' : value;
+    setRunFilterValue(filter, next);
     // Same side effect as choosing the project in the select: the preference is remembered.
     if (filter === 'run-project-filter') {
-      try { localStorage.setItem('agentrec.project', value); } catch (_) { /* storage may be blocked */ }
+      try { localStorage.setItem('agentrec.project', next); } catch (_) { /* storage may be blocked */ }
     }
     changeRunFilters();
     // changeRunFilters re-renders the group buttons; put the keyboard back on the same one.

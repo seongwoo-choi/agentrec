@@ -4199,6 +4199,34 @@ test('overview group activation keeps focus and remembers the project like the s
   assert.equal(w.localStorage.getItem('agentrec.project'), 'etf-trading');
 });
 
+test('pressing an active overview group clears the same filter without losing focus', async (t) => {
+  const data = overviewFixture([
+    { provider: 'claude', verification: 'PASS', project: 'agentrec' },
+    { provider: 'codex', verification: 'FAIL', project: 'etf-trading' },
+  ]);
+  data.configure = (w) => w.history.replaceState(null, '', '/?project=agentrec&verification=PASS');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const group = (kind, value) => [...d.querySelectorAll(`[data-overview-kind="${kind}"] .overview-group`)]
+    .find((node) => node.querySelector('.overview-group-name').textContent === value);
+
+  group('verification', 'PASS').click();
+  await settle();
+  assert.equal(d.querySelector('#run-verification-filter').value, '');
+  assert.equal(new w.URL(w.location.href).searchParams.has('verification'), false);
+  assert.equal(group('verification', 'PASS').getAttribute('aria-pressed'), 'false');
+  assert.equal(d.activeElement, group('verification', 'PASS'));
+
+  group('project', 'agentrec').click();
+  await settle();
+  assert.equal(d.querySelector('#run-project-filter').value, '');
+  assert.equal(new w.URL(w.location.href).searchParams.get('project'), '');
+  assert.equal(w.localStorage.getItem('agentrec.project'), '');
+  assert.equal(group('project', 'agentrec').getAttribute('aria-pressed'), 'false');
+  assert.equal(d.activeElement, group('project', 'agentrec'));
+});
+
 test('overview groups expose the active run-list filters', async (t) => {
   const data = overviewFixture([
     { provider: 'claude', verification: 'PASS', project: 'agentrec' },
