@@ -90,6 +90,64 @@ function actionLinkFixture() {
 
 const settle = async () => { for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
 
+test('timeline rows expose the one item currently shown in the inspector', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 2;
+  data.details.eventCount = 2;
+  const dom = await renderFixture({
+    ...data,
+    actions: [
+      { id: 'action-1', type: 'tool.call', status: 'success', input: { command: 'first' } },
+      { id: 'action-2', type: 'tool.call', status: 'success', input: { command: 'second' } },
+    ],
+    changes: [
+      { path: 'first.go', kind: 'modified', tracked: false },
+      { path: 'second.go', kind: 'modified', tracked: false },
+    ],
+    events: [
+      { hook_event_name: 'PreToolUse', tool_name: 'Read' },
+      { hook_event_name: 'Stop', stop_hook_active: false },
+    ],
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+
+  for (const [tab, selector, firstEvidence, secondEvidence] of [
+    ['actions', '.action-row', 'first', 'second'],
+    ['changes', '.change-row', 'first.go', 'second.go'],
+    ['events', '.event-row', 'Read', 'Stop'],
+  ]) {
+    document.querySelector(`#timeline-tab-${tab}`).click();
+    await settle();
+    const rows = [...document.querySelectorAll(selector)];
+    assert.equal(rows.length, 2, tab);
+    assert.deepEqual(rows.map((row) => row.getAttribute('aria-current')), [null, null], tab);
+    rows[0].dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.deepEqual(rows.map((row) => row.getAttribute('aria-current')), ['true', null], tab);
+    assert.deepEqual(rows.map((row) => row.getAttribute('aria-description')), ['Currently shown in inspector', null], tab);
+    assert.match(document.querySelector('#inspector').textContent, new RegExp(firstEvidence), `${tab} first inspector`);
+    rows[1].dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+    assert.deepEqual(rows.map((row) => row.getAttribute('aria-current')), [null, 'true'], tab);
+    assert.deepEqual(rows.map((row) => row.getAttribute('aria-description')), [null, 'Currently shown in inspector'], tab);
+    assert.match(document.querySelector('#inspector').textContent, new RegExp(secondEvidence), `${tab} second inspector`);
+    document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.equal(document.querySelectorAll(`${selector}[aria-current="true"]`).length, 1, `${tab} rerender`);
+  }
+  for (const [lang, description] of [
+    ['en', 'Currently shown in inspector'],
+    ['ko', '현재 인스펙터에 표시됨'],
+    ['ja', '現在インスペクターに表示中'],
+    ['zh-CN', '当前显示在检视器中'],
+  ]) {
+    document.querySelector('#lang').value = lang;
+    document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    const current = document.querySelector('.event-row[aria-current="true"]');
+    assert.equal(current.getAttribute('aria-description'), description, lang);
+    assert.equal(current.dataset.index, '1', `${lang} current row`);
+    assert.match(document.querySelector('#inspector').textContent, /Stop/, `${lang} inspector`);
+  }
+});
+
 const malformedJSON = (error = new SyntaxError('Unexpected token')) => Promise.resolve({
   ok: true,
   status: 200,
@@ -523,6 +581,7 @@ test('action search records exact byte link and reload restores selection', asyn
   const reloaded = await renderFixture({ ...data, configure: (w) => w.history.replaceState(null, '', url) });
   t.after(() => reloaded.window.close());
   assert.match(reloaded.window.document.querySelector('.action-row.selected').textContent, /go test/);
+  assert.equal(reloaded.window.document.querySelector('.action-row.selected').getAttribute('aria-current'), 'true');
   assert.match(reloaded.window.document.querySelector('#inspector').textContent, /go test/);
 });
 
@@ -551,6 +610,7 @@ test('action tab and history roundtrip clears exact params and restores page zer
   w.history.back();
   await settle();
   assert.match(w.document.querySelector('.action-row.selected').textContent, /go test/);
+  assert.equal(w.document.querySelector('.action-row.selected').getAttribute('aria-current'), 'true');
   w.history.forward();
   await settle();
   assert.equal(w.document.querySelector('#timeline-tab-events').getAttribute('aria-selected'), 'true');
@@ -1071,6 +1131,7 @@ test('changed-file deep link restores the exact paginated row and inspector', as
   const row = document.querySelector(`.change-row[data-path="${path}"]`);
   assert.ok(row);
   assert.match(row.className, /\bselected\b/);
+  assert.equal(row.getAttribute('aria-current'), 'true');
   assert.equal(document.querySelector('.inspector-title').textContent, path);
   assert.equal(location.hash, '#kept');
 });
@@ -3813,17 +3874,21 @@ test('live Folder view clears a disappearing selection and never invents stored 
   const row = d.querySelector('.change-row[data-path="src/live.js"]');
   row.click();
   row.focus();
+  assert.equal(row.getAttribute('aria-current'), 'true');
   assert.equal(d.querySelector('.copy-evidence-link'), null);
   assert.equal(d.querySelector('.diff-patch'), null);
   liveFiles = [...liveFiles, { path: 'src/new.js', status: 'A' }];
   await tick();
   await settle();
   assert.match(d.querySelector('.change-row[data-path="src/live.js"]').className, /selected/);
+  assert.equal(d.querySelector('.change-row[data-path="src/live.js"]').getAttribute('aria-current'), 'true');
+  assert.equal(d.querySelectorAll('.change-row[aria-current="true"]').length, 1);
   assert.equal(d.activeElement, d.querySelector('.change-row[data-path="src/live.js"]'));
   liveFiles = [{ path: 'src/peer.js', status: '??' }];
   await tick();
   await settle();
   assert.equal(d.querySelector('.change-row.selected'), null);
+  assert.equal(d.querySelector('.change-row[aria-current="true"]'), null);
   assert.match(d.querySelector('#inspector').textContent, /Select an action/);
 });
 
