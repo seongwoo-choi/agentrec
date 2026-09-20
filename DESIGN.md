@@ -268,3 +268,12 @@ Repository evidence finalization has a bounded caller context, but untracked reg
 - Each read stops at the size observed from the opened file. Bytes appended later belong outside that finalization snapshot and cannot extend its lifetime.
 - Existing text storage limits, binary hashes, sanitization, symlink/device refusal, and per-file unreadable fallback remain unchanged when collection is not cancelled.
 - Acceptance: cancellation before a read and between read chunks returns `context.Canceled`; ordinary text, binary, and storage-limit coverage remains green.
+
+## 31. Parser retention stops at the storage boundary
+
+The supervisor stores provider stdout and parses the same lines concurrently. In a minimal reproduction, the first event exceeded the bundle's JSON-depth contract and was rejected, yet the parser still received that rejected event and the event after it. A terminal stream-limit failure therefore left the recorder draining safely but allowed the in-memory parser to keep retaining actions that could never be persisted, outside the bundle's 64 MiB / 100,000-entry bounds.
+
+- A nonblank stdout record reaches the provider parser only after that exact record was stored as a sanitized provider event or retained as sanitized unparsed provider output. A record the bundle refuses is drained but not parsed. Blank lines remain parser input but are discarded by both supported provider parsers and retain no actions.
+- A terminal bundle failure makes subsequent writes fail and therefore bounds parser retention at the same evidence boundary. A recoverable refusal of one line does not suppress later lines that the bundle does store.
+- Storage errors, exit reasons, provider draining, raw stream limits, redaction and action ordering remain unchanged. This adds no truncation claim: rejected bytes remain rejected and the run still fails closed.
+- Acceptance: after a terminal event-contract rejection, neither that event nor later unstored events reach the parser; a 10,000-line suffix is still drained; a recoverable one-line refusal still admits the next stored event; the storage failure remains surfaced; ordinary event and unparsed-line parsing stays green.

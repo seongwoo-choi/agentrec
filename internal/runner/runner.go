@@ -418,6 +418,12 @@ type teeOutcome struct {
 	err      error
 }
 
+// providerStreamStore is the append boundary tee needs from a run bundle.
+type providerStreamStore interface {
+	WriteProviderEvent([]byte) error
+	WriteUnparsedLine([]byte) error
+}
+
 // tee records every complete stdout line as a provider event and passes it on
 // to the parser reading the other end of pw. The stream is read to the end even
 // once something has gone wrong, so the provider never blocks writing into a
@@ -430,10 +436,11 @@ type teeOutcome struct {
 // threw the whole run away over it would be destroying the evidence it exists
 // to keep. What does fail is the recorder being unable to store that line
 // either: at that point something the provider said is being lost.
-func tee(stdout io.Reader, pw *io.PipeWriter, b *storage.Bundle) teeOutcome {
+func tee(stdout io.Reader, pw *io.PipeWriter, b providerStreamStore) teeOutcome {
 	defer pw.Close()
 
 	var out teeOutcome
+	parserOpen := true
 	keep := func(err error) {
 		if err != nil && out.err == nil {
 			out.err = err
@@ -452,12 +459,24 @@ func tee(stdout io.Reader, pw *io.PipeWriter, b *storage.Bundle) teeOutcome {
 				}
 			}
 			keep(err)
+			if err != nil {
+				// The parser must not retain an event the bundle could not keep.
+				// A terminal bundle failure makes every later write fail here too,
+				// while a recoverable one-line refusal still lets later stored
+				// events reach the parser.
+				continue
+			}
+		}
+		if !parserOpen {
+			continue
 		}
 		// A write that fails here means the parser stopped reading, which is
 		// already reported as the parser's own error; the loop carries on so the
 		// provider keeps draining.
 		if _, err := pw.Write(line); err == nil {
 			pw.Write(newline)
+		} else {
+			parserOpen = false
 		}
 	}
 	if err := sc.Err(); err != nil {
