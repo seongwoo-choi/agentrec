@@ -869,6 +869,38 @@ function fixture(exitReason, statusClass, statusLabel) {
   };
 }
 
+test('selected run row exposes its current destination and exact ID', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const runs = ['run-a', 'run-b'].map((id) => ({ ...data.list.runs[0], id, title: `Run ${id}` }));
+  data.list = { ...data.list, runs, total: runs.length };
+  const details = data.details;
+  data.details = (id) => ({ ...details, run: { ...details.run, id, title: `Run ${id}` } });
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+
+  assert.equal(document.querySelector('.run-item[data-run-id="run-a"]').getAttribute('aria-description'), 'Currently shown run: run-a');
+  assert.equal(document.querySelector('.run-item[data-run-id="run-b"]').getAttribute('aria-description'), null);
+
+  document.querySelector('.run-item[data-run-id="run-b"]').click();
+  await settle();
+  assert.equal(document.querySelector('.run-item[data-run-id="run-a"]').getAttribute('aria-description'), null);
+  assert.equal(document.querySelector('.run-item[data-run-id="run-b"]').getAttribute('aria-description'), 'Currently shown run: run-b');
+
+  for (const [lang, description] of [
+    ['ko', '현재 표시 중인 실행: run-b'],
+    ['en', 'Currently shown run: run-b'],
+    ['ja', '現在表示中の実行: run-b'],
+    ['zh-CN', '当前显示的运行: run-b'],
+  ]) {
+    document.querySelector('#lang').value = lang;
+    document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.equal(document.querySelector('.run-item[data-run-id="run-a"]').getAttribute('aria-description'), null, `${lang} old run`);
+    assert.equal(document.querySelector('.run-item[data-run-id="run-b"]').getAttribute('aria-description'), description, lang);
+  }
+});
+
 test('mobile run-list activation reveals and focuses each freshly loaded run by title', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const runs = ['run-a', 'run-b', 'run-c'].map((id) => ({ ...data.list.runs[0], id, title: `Run ${id}` }));
