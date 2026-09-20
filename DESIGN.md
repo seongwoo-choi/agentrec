@@ -295,3 +295,11 @@ On a real 106-row action timeline, selecting a row changed only its CSS class. E
 - Selection restored by an exact link, history navigation, filtering, polling, locale changes, or live refresh retains the same accessible current state as pointer or keyboard selection.
 - Roles, focus, URL state, canonical evidence, inspector content, visible selection styling, and row density remain unchanged. An empty inspector has no current row.
 - Acceptance: each supported timeline mode exposes at most one current row, selecting another clears the old state, rerendered/restored selection keeps it, and the real browser accessibility tree reports the current item without adding visible UI.
+
+## 34. Run-list selection is exposed to assistive technology
+
+On two real run selections, the selected row carried `aria-current="true"`, but Chromium exposed neither a current nor selected property in its accessibility tree. Its description contained only the exact run ID, so the currently displayed run was indistinguishable from the other run buttons outside visual context.
+
+- The run button whose evidence is currently displayed keeps `aria-current="true"` and adds a localized `aria-description` naming it as the currently shown run plus its exact run ID. Other run buttons omit both current-state attributes.
+- Selection changes and locale rerenders transfer the description with the existing current state. The tooltip, visible selection, title, URL, focus behavior, row density and canonical evidence remain unchanged.
+- Acceptance: two consecutive real run selections expose the localized current state and exact ID in Chromium's accessibility tree; automated coverage checks initial selection, transfer and EN/KO/JA/ZH rerenders.
