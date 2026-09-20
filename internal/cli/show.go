@@ -57,9 +57,10 @@ const (
 	maxEvidenceItems = 1000
 	// Counts and durations are arithmetic inputs below, not merely strings to
 	// display. Refuse values no recorder run can produce before they overflow.
-	maxRepositoryCount      = 1_000_000_000
-	maxVerificationDuration = 2 * time.Hour
-	maxVerificationExitCode = 255
+	maxRepositoryCount       = 1_000_000_000
+	maxProcessDurationMillis = int64((1<<63 - 1) / time.Millisecond)
+	maxVerificationDuration  = 2 * time.Hour
+	maxVerificationExitCode  = 255
 )
 
 // latestRun names the newest run instead of one particular run.
@@ -698,9 +699,26 @@ func decodeProcessResult(raw []byte, err error) (*processResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	var result processResult
-	if err := json.Unmarshal(raw, &result); err != nil {
+	var stored struct {
+		DurationMillis *int64 `json:"durationMillis"`
+		ExitCode       *int   `json:"exitCode"`
+		Signal         string `json:"signal"`
+		ExitReason     string `json:"exitReason"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil {
 		return nil, fmt.Errorf("cli: read %s: %w", resultFile, err)
+	}
+	if stored.DurationMillis == nil {
+		return nil, fmt.Errorf("cli: %s has no durationMillis", filepath.Join(processDir, resultFile))
+	}
+	result := processResult{
+		DurationMillis: *stored.DurationMillis,
+		ExitCode:       stored.ExitCode,
+		Signal:         stored.Signal,
+		ExitReason:     stored.ExitReason,
+	}
+	if result.DurationMillis < 0 || result.DurationMillis > maxProcessDurationMillis {
+		return nil, fmt.Errorf("cli: %s reports durationMillis %d outside the recorded range", filepath.Join(processDir, resultFile), result.DurationMillis)
 	}
 	return &result, nil
 }

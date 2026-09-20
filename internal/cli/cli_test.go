@@ -2259,10 +2259,35 @@ func TestShowReportsVerificationWarningsApartFromCheckResults(t *testing.T) {
 // so a document that is not the one this run wrote is refused rather than
 // summarized: a report is only worth reading if what it quotes is real.
 func TestShowRefusesEvidenceItCannotTrust(t *testing.T) {
+	maxDurationMillis := int64(^uint64(0)>>1) / int64(time.Millisecond)
 	tests := []struct {
 		name  string
 		plant func(t *testing.T, root, id string)
 	}{
+		{"missing process duration", func(t *testing.T, root, id string) {
+			path := filepath.Join(root, id, processDir, resultFile)
+			if err := os.WriteFile(path, mustJSON(t, map[string]any{"exitReason": "completed"}), 0o600); err != nil {
+				t.Fatalf("rewrite process result: %v", err)
+			}
+		}},
+		{"null process duration", func(t *testing.T, root, id string) {
+			path := filepath.Join(root, id, processDir, resultFile)
+			if err := os.WriteFile(path, []byte(`{"durationMillis":null}`), 0o600); err != nil {
+				t.Fatalf("rewrite process result: %v", err)
+			}
+		}},
+		{"negative process duration", func(t *testing.T, root, id string) {
+			path := filepath.Join(root, id, processDir, resultFile)
+			if err := os.WriteFile(path, mustJSON(t, map[string]any{"durationMillis": int64(-1)}), 0o600); err != nil {
+				t.Fatalf("rewrite process result: %v", err)
+			}
+		}},
+		{"process duration overflows time duration", func(t *testing.T, root, id string) {
+			path := filepath.Join(root, id, processDir, resultFile)
+			if err := os.WriteFile(path, mustJSON(t, map[string]any{"durationMillis": maxDurationMillis + 1}), 0o600); err != nil {
+				t.Fatalf("rewrite process result: %v", err)
+			}
+		}},
 		{"malformed git", func(t *testing.T, root, id string) {
 			writeGit(t, root, id, []byte(`{"status":`))
 		}},
@@ -2395,6 +2420,35 @@ func TestShowRefusesEvidenceItCannotTrust(t *testing.T) {
 				t.Errorf("stderr is empty, want an explanation")
 			}
 		})
+	}
+}
+
+func TestListFailuresOnlyCountsInvalidProcessDurationAsUnreadable(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-invalid-duration", "claude", late, "completed")
+	path := filepath.Join(root, "run-invalid-duration", processDir, resultFile)
+	if err := os.WriteFile(path, []byte(`{"durationMillis":null}`), 0o600); err != nil {
+		t.Fatalf("rewrite process result: %v", err)
+	}
+
+	code, stdout, stderr := run(t, "list", "--failures-only", "--json")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	const want = "{\"schemaVersion\":1,\"runs\":[],\"unreadableRuns\":1}\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestDecodeProcessResultAcceptsLargestConvertibleDuration(t *testing.T) {
+	maxDurationMillis := int64(^uint64(0)>>1) / int64(time.Millisecond)
+	result, err := decodeProcessResult(mustJSON(t, map[string]any{"durationMillis": maxDurationMillis}), nil)
+	if err != nil {
+		t.Fatalf("decodeProcessResult() error = %v", err)
+	}
+	if result.DurationMillis != maxDurationMillis {
+		t.Errorf("durationMillis = %d, want %d", result.DurationMillis, maxDurationMillis)
 	}
 }
 

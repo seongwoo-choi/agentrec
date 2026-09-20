@@ -277,3 +277,12 @@ The supervisor stores provider stdout and parses the same lines concurrently. In
 - A terminal bundle failure makes subsequent writes fail and therefore bounds parser retention at the same evidence boundary. A recoverable refusal of one line does not suppress later lines that the bundle does store.
 - Storage errors, exit reasons, provider draining, raw stream limits, redaction and action ordering remain unchanged. This adds no truncation claim: rejected bytes remain rejected and the run still fails closed.
 - Acceptance: after a terminal event-contract rejection, neither that event nor later unstored events reach the parser; a 10,000-line suffix is still drained; a recoverable one-line refusal still admits the next stored event; the storage failure remains surfaced; ordinary event and unparsed-line parsing stays green.
+
+## 32. Process durations remain convertible evidence
+
+`process/result.json` is untrusted when a stored run is read back. A missing or null `durationMillis` was rendered as `0s`, a negative value as `-1ms`, and a value one millisecond above `time.Duration`'s conversion-safe range overflowed into a large negative duration. These malformed runs still made `agentrec show` exit successfully, and the same decoded value fed Viewer summaries.
+
+- A stored process result must contain a non-null duration that is non-negative and no greater than the largest whole-millisecond value representable by `time.Duration`. The exact upper boundary remains accepted.
+- Values outside that range make the run unreadable instead of becoming fabricated duration evidence in the CLI or Viewer.
+- Recorder output, valid historical bundles, duration precedence, manifest fallback, and open-run handling remain unchanged.
+- Acceptance: missing, null, negative and conversion-overflowing process durations make `show` exit 1 without rendering a report; list and Viewer surfaces mark the run unreadable instead of projecting it; the largest convertible millisecond value decodes successfully; ordinary CLI and Viewer tests remain green.
