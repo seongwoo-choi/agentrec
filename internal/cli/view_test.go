@@ -2382,6 +2382,38 @@ func TestViewRunSummaryCarriesDurationLikeTheDetailPage(t *testing.T) {
 	}
 }
 
+func TestViewRejectsRunWhoseProcessDurationIsMissing(t *testing.T) {
+	root := home(t)
+	runID := "20260918T100000.000000000Z-aaaaaaaa"
+	writeRun(t, root, runID, "claude", time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC), "completed")
+	path := filepath.Join(root, runID, processDir, resultFile)
+	if err := os.WriteFile(path, []byte(`{"exitReason":"completed"}`), 0o600); err != nil {
+		t.Fatalf("rewrite process result: %v", err)
+	}
+
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var page struct {
+		Unreadable int              `json:"unreadable"`
+		Runs       []viewRunSummary `json:"runs"`
+	}
+	viewJSONRequest(t, handler, "/api/runs", &page)
+	if page.Unreadable != 1 || len(page.Runs) != 0 {
+		t.Fatalf("run page = unreadable %d, runs %d; want 1, 0", page.Unreadable, len(page.Runs))
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/runs/"+runID, nil)
+	request.Host = "127.0.0.1"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("detail status = %d, want 404", response.Code)
+	}
+	if !strings.Contains(response.Body.String(), "durationMillis") {
+		t.Errorf("detail body = %q, want duration error", response.Body.String())
+	}
+}
+
 func TestViewRunDetailCarriesLastAgentMessage(t *testing.T) {
 	root := home(t)
 	startedAt := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
