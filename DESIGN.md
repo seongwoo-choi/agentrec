@@ -42,7 +42,7 @@ Flat layered dark surfaces, 1px subtle boundaries, 8px controls/rows and 10–12
 
 ## 8. Accessibility Constraints & Accepted Debt
 
-Preserve focus order, status/live regions, tab/tabpanel ARIA, search semantics, and full evidence access. EN/KO/JA/ZH labels must remain coherent. Test1440/768/375 with realistic long titles and CJK, loaded list, selected action, advanced filters expanded, request expanded/collapsed, empty/loading/error states and compare overlay. Assert list height as well as width: zero-height content is not a responsive pass.
+Preserve focus order, status/live regions, tab/tabpanel ARIA, search semantics, and full evidence access. EN/KO/JA/ZH labels must remain coherent. When narrow-layout run activation moves focus to the run evidence container, that container is labelled by the current run title; do not make assistive technology derive its focus name from the entire descendant evidence tree. Test1440/768/375 with realistic long titles and CJK, loaded list, selected action, advanced filters expanded, request expanded/collapsed, empty/loading/error states and compare overlay. Assert list height as well as width: zero-height content is not a responsive pass.
 
 ## 9. Reading-first Action Timeline
 

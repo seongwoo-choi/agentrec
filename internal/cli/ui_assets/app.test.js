@@ -869,7 +869,7 @@ function fixture(exitReason, statusClass, statusLabel) {
   };
 }
 
-test('mobile run-list activation reveals and focuses each freshly loaded run', async (t) => {
+test('mobile run-list activation reveals and focuses each freshly loaded run by title', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const runs = ['run-a', 'run-b', 'run-c'].map((id) => ({ ...data.list.runs[0], id, title: `Run ${id}` }));
   data.list = { ...data.list, runs, total: runs.length };
@@ -887,6 +887,8 @@ test('mobile run-list activation reveals and focuses each freshly loaded run', a
   const dom = await renderFixture(data);
   t.after(() => dom.window.close());
   const { document } = dom.window;
+  const runView = document.querySelector('#run-view');
+  assert.equal(runView.getAttribute('aria-labelledby'), 'run-title');
   assert.deepEqual(scrolled, [], 'initial auto-selection must not move the page');
 
   document.querySelector('.run-item[data-run-id="run-b"]').click();
