@@ -1688,6 +1688,13 @@ function shortID(id) {
   function renderRunOverview() {
     const overview = $('run-overview');
     if (!overview) return;
+    const active = document.activeElement;
+    const focused = active && active.matches('button.overview-group') && overview.contains(active)
+      ? {
+          kind: active.closest('[data-overview-kind]').dataset.overviewKind,
+          value: active.querySelector('.overview-group-name').textContent,
+        }
+      : null;
     // Nothing loaded is not a shape worth summarizing; the empty-store guidance
     // in the list already says so.
     overview.classList.toggle('hidden', state.runs.length === 0);
@@ -1705,16 +1712,23 @@ function shortID(id) {
       const list = facet.querySelector('.overview-group-list');
       list.replaceChildren();
       const groups = overviewCounts(state.runs, field);
+      const selected = filter ? $(filter).value : '';
       for (const [value, count] of groups) {
         const group = node(filter ? 'button' : 'div', 'overview-group');
         group.append(node('span', 'overview-group-name', value), node('span', 'overview-group-count', String(count)));
         if (filter) {
           group.type = 'button';
+          group.setAttribute('aria-pressed', String(selected === value));
           group.addEventListener('click', () => selectOverviewGroup(filter, value, kind));
         }
         list.append(group);
       }
       facet.classList.toggle('hidden', groups.length === 0);
+    }
+    if (focused) {
+      const again = [...overview.querySelectorAll(`[data-overview-kind="${focused.kind}"] button.overview-group`)]
+        .find((group) => group.querySelector('.overview-group-name').textContent === focused.value);
+      if (again) again.focus({ preventScroll: true });
     }
   }
 
