@@ -318,3 +318,14 @@ Injected stdout failures made both `agentrec version` and plain-text `agentrec l
 A successful Viewer API response with a missing mandatory collection is a broken contract, not an empty result. The run list requires `runs`, global search requires `hits`, and snapshot action/event/change pages require `items` to be arrays before their flow mutates UI state. Missing or non-array fields surface through the existing load, search, stream, or comparison error states; they must never become **No runs recorded yet**, **No matches for this search**, or an empty evidence timeline/comparison. Intentionally empty arrays, additive fields, transport failures, cancellation, canonical evidence, and API schemas remain unchanged.
 
 Acceptance: missing collections fail closed in initial, polling, pagination, search, timeline, and run-comparison flows while preserving the last valid evidence where one exists.
+
+## 37. Comparison overview failures preserve known capability evidence
+
+Two executable Viewer reproductions showed the comparison overview failure fallback inventing healthy runner capability. After a valid response marked `claude` unavailable, a failed refresh replaced it with fabricated available `claude` and `codex` entries and enabled **Run**. Before any valid response, the same failure invented both available runners instead of keeping capability unknown.
+
+- A failed comparison overview request keeps the last valid overview when one exists. It must not change known runner availability, job identity, or execution permission, and retained job listings are not replayed as a fresh response.
+- Before any valid overview, failure uses a disabled empty capability state. It does not infer runner names or availability from built-in defaults.
+- Only the newest overview request may commit state, so a delayed initialization or reopen request cannot overwrite a newer capability snapshot, and starting a job supersedes an overview already in flight.
+- An unavailable runner is not selectable and keeps comparison execution disabled; an empty capability set is also non-runnable.
+- The existing visible comparison error remains. Valid overview responses, canonical evidence, server authorization, copyable command syntax, and comparison job polling remain unchanged.
+- Acceptance: failure after a valid unavailable-runner response preserves and disables that runner; failure or a delayed successful overview after starting a newer job preserves that job; repeated failure before any valid response renders no invented runners and keeps execution disabled; reversed initialization/reopen completion keeps the newest response.

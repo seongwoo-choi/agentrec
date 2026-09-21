@@ -3356,7 +3356,7 @@ function shortID(id) {
   // `agentrec shadow run` from the viewer: the form posts a job, the panel polls it once a second and appends its output.
   // Only the last job is kept, in memory; reopening the panel (or reloading) adopts the newest job the server lists.
   const COMPARE_LOG_LIMIT = 1024 * 1024;
-  const compare = { info: null, job: null, poll: null, cwdTouched: false, returnFocus: null };
+  const compare = { info: null, infoGeneration: 0, job: null, poll: null, cwdTouched: false, returnFocus: null };
   const errorText = (error) => (error instanceof Error ? error.message : String(error));
 
   function compareRunners() {
@@ -3367,7 +3367,8 @@ function shortID(id) {
     const names = compareRunners();
     $('compare-command').textContent = ['agentrec shadow run task.md', ...names.map((name) => `--runner ${name}`)].join(' ');
     // shadow run compares, so it needs every runner the server knows; a partial set only shapes the copyable command.
-    const all = ((compare.info && compare.info.runners) || []).every((runner) => names.includes(runner.name));
+    const runners = (compare.info && compare.info.runners) || [];
+    const all = runners.length > 0 && runners.every((runner) => runner.available && names.includes(runner.name));
     $('compare-runner-hint').classList.toggle('hidden', all);
     const running = Boolean(compare.job && compare.job.status === 'running');
     $('compare-run').disabled = !(compare.info && compare.info.allowRun) || running || !all;
@@ -3390,7 +3391,8 @@ function shortID(id) {
       const box = node('input');
       box.type = 'checkbox';
       box.value = runner.name;
-      box.checked = checked.has(runner.name);
+      box.checked = runner.available && checked.has(runner.name);
+      box.disabled = !runner.available;
       box.addEventListener('change', renderCompareCommand);
       label.append(box, node('span', '', runner.name));
       if (!runner.available) label.append(node('span', 'hint', t('unavailable')));
@@ -3487,16 +3489,23 @@ function shortID(id) {
   }
 
   async function loadShadow() {
+    const generation = ++compare.infoGeneration;
+    let refreshed = false;
     try {
-      compare.info = await getJSON('/api/shadow');
+      const info = await getJSON('/api/shadow');
+      if (generation !== compare.infoGeneration) return;
+      compare.info = info;
+      refreshed = true;
     } catch (error) {
-      // What the viewer allows is not known from a failed request: the last
-      // answer stands, so a moment's trouble does not hide the controls.
-      compare.info = { allowRun: state.allowRun, runners: [{ name: 'claude', available: true }, { name: 'codex', available: true }], jobs: [] };
+      if (generation !== compare.infoGeneration) return;
+      // A failed request says nothing new about execution permission or runner
+      // availability. Keep the last valid answer, or a disabled empty state
+      // before the first one, instead of inventing healthy runners.
+      if (!compare.info) compare.info = { allowRun: false, runners: [], jobs: [] };
       showCompareError(t('Could not load comparison status: {error}', { error: errorText(error) }));
     }
     setAllowRun(compare.info.allowRun);
-    const latest = (compare.info.jobs || [])[0];
+    const latest = refreshed ? (compare.info.jobs || [])[0] : null;
     if (latest && (!compare.job || compare.job.id !== latest.id)) adoptCompareJob(latest);
     else if (compare.job && compare.job.status === 'running' && !compare.poll) pollCompareJob();
     renderCompareForm();
@@ -3504,11 +3513,15 @@ function shortID(id) {
   }
 
   async function runCompare() {
+    // A newly started job is newer than any overview already in flight.
+    compare.infoGeneration += 1;
     $('compare-error').classList.add('hidden');
     const body = { cwd: $('compare-cwd').value.trim(), task: $('compare-task').value, runners: compareRunners() };
     $('compare-run').disabled = true;
     try {
       const { id } = await mutate('POST', '/api/shadow/jobs', body);
+      // This job is newer than an overview opened while its request was pending.
+      compare.infoGeneration += 1;
       adoptCompareJob({ id, status: 'running', cwd: body.cwd, runners: body.runners, startedAt: new Date().toISOString(), runIds: [] });
       renderCompareForm();
     } catch (error) {
@@ -4431,7 +4444,12 @@ function shortID(id) {
     $('top-meta').textContent = t('Loading recorded evidence…');
     $('workspace-empty-title').textContent = t('Loading recorded evidence…');
     // ponytail: the overview says whether --allow-run is on; a failure leaves the Verify now button hidden.
-    getJSON('/api/shadow').then((info) => setAllowRun(info.allowRun)).catch(() => {});
+    const shadowGeneration = ++compare.infoGeneration;
+    getJSON('/api/shadow').then((info) => {
+      if (shadowGeneration !== compare.infoGeneration) return;
+      compare.info = info;
+      setAllowRun(info.allowRun);
+    }).catch(() => {});
     try {
       const list = await getJSON('/api/runs');
       requireArrayField(list, 'runs');
