@@ -3188,12 +3188,13 @@ function shortID(id) {
       const page = await getJSON(`/api/snapshots/${encodeURIComponent(state.run.snapshotId)}/${streamName}?cursor=${cursor}`, signal);
       // A page for a cursor this stream no longer waits on is stale and dropped.
       if (generation !== state.loadGeneration || cursor !== stream.currentCursor) return;
+      const items = requireArrayField(page, 'items');
       if (!append) stream.startCursor = cursor;
       if (streamName === 'actions' || streamName === 'events') {
-        const cursors = (page.items || []).map(() => cursor);
+        const cursors = items.map(() => cursor);
         stream.pageCursors = append ? (stream.pageCursors || []).concat(cursors) : cursors;
       }
-      stream.items = append ? stream.items.concat(page.items || []) : (page.items || []);
+      stream.items = append ? stream.items.concat(items) : items;
       stream.error = '';
       stream.nextCursor = page.nextCursor === undefined ? null : page.nextCursor;
       if (page.endCursor !== undefined) stream.endCursor = page.endCursor;
@@ -3216,7 +3217,9 @@ function shortID(id) {
       if (generation === state.loadGeneration && streamName === state.mode) {
         // Removing the initiating button leaves BODY focused. A user's new focus wins.
         const restoreManualFocus = ownsFocus && document.activeElement === document.body;
-        if (append && from > 0 && !groupedStream(streamName)) {
+        if (stream.error) {
+          renderTimeline();
+        } else if (append && from > 0 && !groupedStream(streamName)) {
           appendTimeline(streamName, from, false);
         } else {
           renderTimeline();
@@ -3729,7 +3732,7 @@ function shortID(id) {
     let cursor = 0;
     for (let n = 0; n < maxPages && cursor !== null; n += 1) {
       page = await getJSON(`${path}?cursor=${cursor}`);
-      items.push(...(page.items || []));
+      items.push(...requireArrayField(page, 'items'));
       cursor = page.nextCursor === undefined ? null : page.nextCursor;
     }
     return { items, page, truncated: cursor !== null };

@@ -315,4 +315,6 @@ Injected stdout failures made both `agentrec version` and plain-text `agentrec l
 
 ## 36. Successful JSON must preserve collection evidence
 
-A successful Viewer API response with a missing mandatory collection is a broken contract, not an empty result. The run list requires `runs` and global search requires `hits` to be arrays before either flow mutates UI state. Missing or non-array fields surface through the existing load/search error states; they must never become **No runs recorded yet** or **No matches for this search**. Intentionally empty arrays, additive fields, transport failures, cancellation, canonical evidence, and API schemas remain unchanged.
+A successful Viewer API response with a missing mandatory collection is a broken contract, not an empty result. The run list requires `runs`, global search requires `hits`, and snapshot action/event/change pages require `items` to be arrays before their flow mutates UI state. Missing or non-array fields surface through the existing load, search, stream, or comparison error states; they must never become **No runs recorded yet**, **No matches for this search**, or an empty evidence timeline/comparison. Intentionally empty arrays, additive fields, transport failures, cancellation, canonical evidence, and API schemas remain unchanged.
+
+Acceptance: missing collections fail closed in initial, polling, pagination, search, timeline, and run-comparison flows while preserving the last valid evidence where one exists.

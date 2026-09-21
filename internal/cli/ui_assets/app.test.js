@@ -287,6 +287,55 @@ test('successful malformed action JSON is reported instead of rendered as no rec
   assert.doesNotMatch(document.querySelector('#timeline').textContent, /No actions were recorded/);
 });
 
+for (const [stream, countField, errorSubject, emptyCopy, validEmptyCopy] of [
+  ['actions', 'actionCount', 'actions', 'No actions were recorded', 'No actions were recorded'],
+  ['events', 'eventCount', 'provider events', 'This run has no sanitized provider-event artifact', 'This run has no sanitized provider-event artifact'],
+  ['changes', 'changeCount', 'repository changes', 'No loaded changes match this filter', 'No repository changes were observed'],
+]) {
+  test(`successful ${stream} JSON without items is reported instead of rendered as empty evidence`, async (t) => {
+    const data = fixture('completed', 'pass', 'PASS');
+    data.details[countField] = 1;
+    data.intercept = (url) => url.pathname.endsWith(`/${stream}`)
+      ? response(stream === 'changes' ? { total: 1, status: 'available', nextCursor: null } : { nextCursor: null })
+      : null;
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const { document } = dom.window;
+    if (stream !== 'actions') {
+      document.querySelector(`#timeline-tab-${stream}`).click();
+      await settle();
+    }
+    assert.equal(document.querySelector('#error').textContent, 'Invalid response: expected "items" array');
+    assert.match(document.querySelector('.stream-error').textContent, new RegExp(`Could not load ${errorSubject}: Invalid response: expected "items" array`));
+    assert.doesNotMatch(document.querySelector('#timeline').textContent, new RegExp(emptyCopy));
+  });
+
+  test(`successful ${stream} JSON distinguishes non-array items from an intentional empty array`, async (t) => {
+    const invalid = fixture('completed', 'pass', 'PASS');
+    invalid.details[countField] = 1;
+    invalid.intercept = (url) => url.pathname.endsWith(`/${stream}`)
+      ? response({ items: {}, total: 0, status: 'available', nextCursor: null })
+      : null;
+    const invalidDOM = await renderFixture(invalid);
+    t.after(() => invalidDOM.window.close());
+    if (stream !== 'actions') {
+      invalidDOM.window.document.querySelector(`#timeline-tab-${stream}`).click();
+      await settle();
+    }
+    assert.equal(invalidDOM.window.document.querySelector('#error').textContent, 'Invalid response: expected "items" array');
+
+    const empty = fixture('completed', 'pass', 'PASS');
+    const emptyDOM = await renderFixture(empty);
+    t.after(() => emptyDOM.window.close());
+    if (stream !== 'actions') {
+      emptyDOM.window.document.querySelector(`#timeline-tab-${stream}`).click();
+      await settle();
+    }
+    assert.equal(emptyDOM.window.document.querySelector('#error').classList.contains('hidden'), true);
+    assert.match(emptyDOM.window.document.querySelector('#timeline').textContent, new RegExp(validEmptyCopy));
+  });
+}
+
 test('successful malformed mutation JSON does not report a completed delete', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.intercept = (url, init) => init.method === 'DELETE' ? malformedJSON() : null;
@@ -965,9 +1014,32 @@ test('manual selection after append stores byte page cursor not row index', asyn
   assert.match(reload.window.document.querySelector('.action-row.selected').textContent, /git status/);
 });
 
+test('malformed all-actions append keeps valid evidence and renders the stream error', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const first = { id: 'action-1', type: 'tool.call', status: 'success', input: { command: 'first command' } };
+  data.details.actionCount = 2;
+  data.actions = (cursor) => cursor === 0
+    ? { items: [first], nextCursor: 98765 }
+    : { nextCursor: null };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  const toggle = document.querySelector('#all-actions-toggle');
+  toggle.checked = true;
+  toggle.dispatchEvent(new Event('change', { bubbles: true }));
+  document.querySelector('.action-row').click();
+  document.querySelector('.stream-tail .load-more').click();
+  await settle();
+
+  assert.equal(document.querySelectorAll('.action-row').length, 1, 'valid action remains visible');
+  assert.match(document.querySelector('.action-row').textContent, /first command/);
+  assert.match(document.querySelector('.stream-error').textContent, /Invalid response: expected "items" array/);
+  assert.equal(document.querySelector('.stream-tail .load-more').classList.contains('hidden'), false, 'failed cursor remains retryable');
+});
+
 // Defer one real fixture response, ignoring abort deliberately so stale results
 // still exercise the application's generation checks when explicitly released.
-function deferFetch(window, matches) {
+function deferFetch(window, matches, deferredBody) {
   const original = window.fetch;
   let release;
   let pending = false;
@@ -975,7 +1047,7 @@ function deferFetch(window, matches) {
     const result = original(input, init);
     if (!pending && matches(String(input))) {
       pending = true;
-      return new Promise((resolve) => { release = () => resolve(result); });
+      return new Promise((resolve) => { release = () => resolve(deferredBody === undefined ? result : response(deferredBody)); });
     }
     return result;
   };
@@ -1013,6 +1085,26 @@ for (const destination of ['same-run search', 'cross-run search', 'history']) te
   assert.match(w.document.querySelector('.action-row.selected')?.textContent || '', /git status/);
   assert.match(w.document.querySelector('#inspector').textContent, /git status/);
   assert.match(w.document.querySelector('.action-row').textContent, /git status/);
+});
+
+test('a stale malformed action page cannot surface an error over newer exact evidence', async (t) => {
+  const data = actionLinkFixture();
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  await openActionHit(w);
+  const release = deferFetch(w, (url) => url.endsWith('/actions?cursor=0'), {});
+  w.document.querySelector('#timeline-tab-actions').click();
+  await settle();
+  await openActionHit(w, 1);
+  const expectedURL = w.location.href;
+  release();
+  await settle();
+
+  assert.equal(w.location.href, expectedURL);
+  assert.match(w.document.querySelector('.action-row.selected').textContent, /git status/);
+  assert.equal(w.document.querySelector('.stream-error'), null);
+  assert.equal(w.document.querySelector('#error').classList.contains('hidden'), true);
 });
 
 for (const pending of ['exact page', 'same-run detail', 'cross-run detail', 'append', 'reset']) {
@@ -2676,6 +2768,49 @@ test('comparison startup canonicalizes its primary run', async (t) => {
   assert.equal(dom.window.document.querySelector('#diff-panel').classList.contains('hidden'), false);
 });
 
+test('comparison rejects stream pages without items instead of rendering empty evidence', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const details = data.details;
+  data.list.runs = ['compare-a', 'compare-b'].map((id) => ({ ...data.list.runs[0], id }));
+  data.list.total = data.list.runs.length;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.intercept = (url) => url.pathname.endsWith('/changes')
+    ? response({ total: 1, status: 'available', nextCursor: null })
+    : null;
+  data.configure = (window) => window.history.replaceState(null, '', '/?run=compare-a#compare=compare-a,compare-b');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.equal(dom.window.document.querySelector('#diff-error').textContent, 'Could not load comparison: Invalid response: expected "items" array');
+  assert.equal(dom.window.document.querySelector('#diff-error').classList.contains('hidden'), false);
+  assert.equal(dom.window.document.querySelector('#diff-result').classList.contains('hidden'), true);
+});
+
+test('comparison rejects a later action page without items instead of rendering partial counts', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const details = { ...data.details, actionCount: 2 };
+  data.list.runs = ['compare-a', 'compare-b'].map((id) => ({ ...data.list.runs[0], id }));
+  data.list.total = data.list.runs.length;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.intercept = (url) => {
+    if (url.pathname.endsWith('/changes')) return response({ items: [], total: 0, status: 'available', nextCursor: null });
+    if (url.pathname.endsWith('/actions')) return response(url.searchParams.get('cursor') === '0'
+      ? { items: [{ id: 'action-1', type: 'tool.call' }], nextCursor: 98765 }
+      : { nextCursor: null });
+    return null;
+  };
+  data.configure = (window) => window.history.replaceState(null, '', '/?run=compare-a#compare=compare-a,compare-b');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.equal(dom.window.document.querySelector('#diff-error').textContent, 'Could not load comparison: Invalid response: expected "items" array');
+  assert.equal(dom.window.document.querySelector('#diff-error').classList.contains('hidden'), false);
+  assert.equal(dom.window.document.querySelector('#diff-result').classList.contains('hidden'), true);
+  assert.doesNotMatch(dom.window.document.querySelector('#diff-panel').textContent, /tool\.call 1/);
+});
+
 test('comparison startup does not override a missing linked run', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const details = data.details;
@@ -4036,7 +4171,7 @@ test('Changes and Events view labels localize independently in all supported lan
   assert.equal(d.querySelector('#all-events-toggle').checked, false);
 });
 
-for (const mode of ['changes', 'events']) for (const outcome of ['success', 'error', 'moved-success', 'moved-error']) {
+for (const mode of ['changes', 'events']) for (const outcome of ['success', 'error', 'contract-error', 'moved-success', 'moved-error']) {
   test(`keyboard manual paging ${mode} ${outcome} keeps visible focus`, async (t) => {
     const data = fixture('completed', 'pass', 'PASS');
     const items = mode === 'changes'
@@ -4058,14 +4193,19 @@ for (const mode of ['changes', 'events']) for (const outcome of ['success', 'err
     assert.ok(resolvePage);
     const other = d.querySelector('#search-all');
     if (outcome.startsWith('moved')) other.focus();
-    if (outcome.endsWith('error')) rejectPage(new Error('keyboard page failure'));
+    if (outcome === 'contract-error') resolvePage(await response({ nextCursor: null, total: 4, status: 'available' }));
+    else if (outcome.endsWith('error')) rejectPage(new Error('keyboard page failure'));
     else resolvePage(await response({ items: mode === 'changes' ? items.map((item) => ({ ...item, path: item.path.replace('old/', 'new/') })) : items, nextCursor: null, total: 4, status: 'available' }));
     await settle();
     assert.ok(d.querySelector('.action-row.selected'), 'selected evidence survives');
     if (outcome.startsWith('moved')) assert.equal(d.activeElement, other, 'pending request must not steal focus');
-    else if (outcome === 'error') {
+    else if (outcome === 'error' || outcome === 'contract-error') {
       assert.equal(d.activeElement, d.querySelector('.stream-tail .load-more'));
       assert.equal(d.activeElement.classList.contains('hidden'), false);
+      if (outcome === 'contract-error') {
+        assert.match(d.querySelector('.stream-error').textContent, /Invalid response: expected "items" array/);
+        assert.equal(d.querySelectorAll('.action-row').length, items.length, 'valid evidence remains visible');
+      }
     } else {
       const row = d.querySelector('.action-row[data-index="2"]');
       assert.ok(d.activeElement === row || d.activeElement === row.closest('details')?.querySelector('summary'), 'new evidence receives focus');
