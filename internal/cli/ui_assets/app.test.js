@@ -2024,6 +2024,82 @@ test('live failure transition updates a persistent triage status region', async 
   assert.match(status.textContent, /Verify FAIL/);
 });
 
+test('live refresh failures qualify stale evidence until a successful tick', async (t) => {
+  let liveTick, detailReads = 0, failRefresh = true;
+  const data = fixture('running', '', 'RUNNING');
+  const runPath = `/api/runs/${data.details.run.id}`;
+  data.intercept = (url) => {
+    if (url.pathname !== runPath || ++detailReads === 1 || !failRefresh) return null;
+    return malformedJSON();
+  };
+  data.configure = (window) => {
+    window.setTimeout = (callback, delay) => {
+      if (delay === 3000) liveTick = callback;
+      return delay;
+    };
+    window.clearTimeout = () => {};
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const pill = document.querySelector('#live-pill');
+  const status = document.querySelector('#live-status');
+  assert.equal(typeof liveTick, 'function');
+  assert.equal(status.getAttribute('role'), 'status');
+  assert.equal(status.getAttribute('aria-live'), 'polite');
+  assert.equal(status.getAttribute('aria-atomic'), 'true');
+  assert.match(pill.textContent, /^Live · updated /);
+
+  await liveTick();
+  assert.match(pill.textContent, /^Live · refresh failed · last updated /);
+  assert.match(status.textContent, /^Live refresh failed; displayed evidence was last updated /);
+  const firstAnnouncement = status.textContent;
+
+  await liveTick();
+  assert.match(pill.textContent, /^Live · refresh failed · last updated /);
+  assert.equal(status.textContent, firstAnnouncement, 'repeated failure does not chatter');
+  assert.equal(detailReads, 3);
+
+  document.querySelector('#lang').value = 'ko';
+  document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.match(status.textContent, /^실시간 새로고침에 실패했습니다/);
+  document.querySelector('#lang').value = 'en';
+  document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+
+  failRefresh = false;
+  await liveTick();
+  assert.match(pill.textContent, /^Live · updated /);
+  assert.doesNotMatch(pill.textContent, /refresh failed/);
+  assert.equal(status.textContent, 'Live refresh recovered.');
+});
+
+test('live working-tree refresh failure qualifies the otherwise current run detail', async (t) => {
+  let liveTick, failChanges = false;
+  const data = fixture('running', '', 'RUNNING');
+  data.live = { measuredAt: '2026-09-03T00:00:05Z', files: [{ path: 'src/live.js', status: 'M' }] };
+  data.intercept = (url) => url.pathname.endsWith('/live') && failChanges ? malformedJSON() : null;
+  data.configure = (window) => {
+    window.setTimeout = (callback, delay) => {
+      if (delay === 3000) liveTick = callback;
+      return delay;
+    };
+    window.clearTimeout = () => {};
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#timeline-tab-changes').click();
+  await settle();
+  failChanges = true;
+  await liveTick();
+
+  assert.match(document.querySelector('#live-pill').textContent, /^Live · refresh failed · last updated /);
+  assert.match(document.querySelector('#live-status').textContent, /^Live refresh failed;/);
+  assert.match(document.querySelector('.stream-error').textContent, /Could not load repository changes: Invalid JSON response/);
+});
+
 function recentRunsFixture() {
   const data = fixture('completed', 'pass', 'PASS');
   const base = data.list.runs[0], detail = data.details;
