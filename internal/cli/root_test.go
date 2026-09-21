@@ -2,10 +2,87 @@ package cli
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
 )
+
+type failingOutputWriter struct {
+	err error
+}
+
+func (w failingOutputWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+type shortOutputWriter struct{}
+
+func (shortOutputWriter) Write(p []byte) (int, error) {
+	return len(p) - 1, nil
+}
+
+func TestRunFailsWhenStandardOutputCannotBeWritten(t *testing.T) {
+	wantErr := errors.New("injected stdout failure")
+	for _, args := range [][]string{{"version"}, {"list"}} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			t.Setenv("AGENTREC_HOME", t.TempDir())
+			var stderr bytes.Buffer
+
+			exitCode := Run(args, failingOutputWriter{err: wantErr}, &stderr)
+
+			if exitCode != 1 {
+				t.Fatalf("exit code = %d, want 1", exitCode)
+			}
+			if !strings.Contains(stderr.String(), "write stdout: "+wantErr.Error()) {
+				t.Errorf("stderr = %q, want contextual stdout error", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunFailsOnShortStandardOutputWrite(t *testing.T) {
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"version"}, shortOutputWriter{}, &stderr)
+
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), io.ErrShortWrite.Error()) {
+		t.Errorf("stderr = %q, want %q", stderr.String(), io.ErrShortWrite)
+	}
+}
+
+func TestRunPreservesCommandFailureAndReportsStandardOutputFailure(t *testing.T) {
+	t.Setenv("AGENTREC_HOME", t.TempDir())
+	wantErr := errors.New("injected stdout failure")
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"list", "--json"}, failingOutputWriter{err: wantErr}, &stderr)
+
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want existing command failure 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "write stdout: "+wantErr.Error()) {
+		t.Errorf("stderr = %q, want contextual stdout error", stderr.String())
+	}
+}
+
+func TestFinalizeOutputPreservesExistingNonzeroExitCode(t *testing.T) {
+	wantErr := errors.New("injected stdout failure")
+	var stderr bytes.Buffer
+
+	exitCode := finalizeOutput(2, wantErr, &stderr)
+
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want existing command failure 2", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "write stdout: "+wantErr.Error()) {
+		t.Errorf("stderr = %q, want contextual stdout error", stderr.String())
+	}
+}
 
 func TestRunHelpListsCoreCommands(t *testing.T) {
 	for _, args := range [][]string{nil, {"--help"}, {"-h"}} {
