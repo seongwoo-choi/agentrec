@@ -38,7 +38,13 @@ first hook), neither of which is meant to be typed by hand.
 `
 
 // Run executes the CLI with args (os.Args[1:]) and returns the process exit code.
-func Run(args []string, stdout, stderr io.Writer) int {
+func Run(args []string, stdout, stderr io.Writer) (exitCode int) {
+	output := &errorTrackingWriter{writer: stdout}
+	stdout = output
+	defer func() {
+		exitCode = finalizeOutput(exitCode, output.err, stderr)
+	}()
+
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -92,6 +98,36 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stderr, "unknown command: %q\nrun 'agentrec --help' to see the available commands\n", args[0])
 	return 2
+}
+
+func finalizeOutput(exitCode int, err error, stderr io.Writer) int {
+	if err == nil {
+		return exitCode
+	}
+	fmt.Fprintf(stderr, "write stdout: %v\n", err)
+	if exitCode == 0 {
+		return 1
+	}
+	return exitCode
+}
+
+type errorTrackingWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func (w *errorTrackingWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.writer.Write(p)
+	if err == nil && n < len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+	return n, err
 }
 
 func trailingHelpRequested(args []string) bool {

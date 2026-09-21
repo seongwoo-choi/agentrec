@@ -303,3 +303,12 @@ On two real run selections, the selected row carried `aria-current="true"`, but 
 - The run button whose evidence is currently displayed keeps `aria-current="true"` and adds a localized `aria-description` naming it as the currently shown run plus its exact run ID. Other run buttons omit both current-state attributes.
 - Selection changes and locale rerenders transfer the description with the existing current state. The tooltip, visible selection, title, URL, focus behavior, row density and canonical evidence remain unchanged.
 - Acceptance: two consecutive real run selections expose the localized current state and exact ID in Chromium's accessibility tree; automated coverage checks initial selection, transfer and EN/KO/JA/ZH rerenders.
+
+## 35. CLI success requires stdout delivery
+
+Injected stdout failures made both `agentrec version` and plain-text `agentrec list` return exit 0 after delivering no usable output. Structured renderers already failed the command for the same boundary, so success depended on output format rather than delivery.
+
+- Track the first error returned by the CLI's stdout writer, including a short write with no explicit error. If the command would otherwise succeed, return the ordinary failure code and report the stdout error on stderr.
+- Preserve an existing nonzero command exit while still reporting the independent stdout failure. Process-level `SIGPIPE` behavior remains platform-owned; the contract applies when the writer returns control to `Run`.
+- Command formatting, stdout content, side effects, and handler-specific failure semantics remain unchanged when output succeeds.
+- Acceptance: returned writer errors fail `version` and plain-text `list`; a short write fails with `io.ErrShortWrite`; a JSON renderer's existing nonzero status is preserved and the stdout failure remains diagnosed.
