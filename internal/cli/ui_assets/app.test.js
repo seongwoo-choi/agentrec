@@ -4699,6 +4699,279 @@ test('overview groups expose the active run-list filters', async (t) => {
   assert.equal(d.activeElement.querySelector('.overview-group-name')?.textContent, 'etf-trading');
 });
 
+// --- Compare overview failure state ---
+
+test('comparison overview failure preserves known unavailable runners and disables execution', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let shadowReads = 0;
+  data.intercept = (url) => {
+    if (url.pathname !== '/api/shadow') return null;
+    shadowReads += 1;
+    if (shadowReads <= 2) {
+      return response({
+        allowRun: true,
+        runners: [
+          { name: 'claude', available: false },
+          { name: 'codex', available: true },
+        ],
+        jobs: [],
+      });
+    }
+    return Promise.reject(new Error('synthetic overview failure'));
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.window.document.querySelector('#compare-open').click();
+  await settle();
+  dom.window.document.querySelector('#compare-close').click();
+  dom.window.document.querySelector('#compare-open').click();
+  await settle();
+
+  const runners = [...dom.window.document.querySelectorAll('#compare-runners .compare-runner')];
+  assert.deepEqual(runners.map((runner) => runner.textContent.trim()), ['claudeunavailable', 'codex']);
+  assert.equal(runners[0].querySelector('input').disabled, true);
+  runners[0].querySelector('input').click();
+  assert.equal(dom.window.document.querySelector('#compare-run').disabled, true);
+  assert.equal(dom.window.document.querySelector('#compare-allow-note').classList.contains('hidden'), true);
+  assert.match(dom.window.document.querySelector('#compare-error').textContent, /synthetic overview failure/);
+});
+
+test('comparison overview failure preserves a valid initialization capability snapshot', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let shadowReads = 0;
+  data.intercept = (url) => {
+    if (url.pathname !== '/api/shadow') return null;
+    shadowReads += 1;
+    if (shadowReads === 1) return response({
+      allowRun: true,
+      runners: [{ name: 'claude', available: false }],
+      jobs: [],
+    });
+    return Promise.reject(new Error('synthetic panel failure'));
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#compare-open').click();
+  await settle();
+
+  const runner = document.querySelector('#compare-runners .compare-runner');
+  assert.equal(runner.textContent.trim(), 'claudeunavailable');
+  assert.equal(runner.querySelector('input').disabled, true);
+  assert.equal(document.querySelector('#compare-allow-note').classList.contains('hidden'), true);
+  assert.match(document.querySelector('#compare-error').textContent, /synthetic panel failure/);
+});
+
+test('a runner becoming unavailable is removed from the copyable command', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let shadowReads = 0;
+  data.intercept = (url) => {
+    if (url.pathname !== '/api/shadow') return null;
+    shadowReads += 1;
+    return response({
+      allowRun: true,
+      runners: [{ name: 'claude', available: shadowReads <= 2 }],
+      jobs: [],
+    });
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#compare-open').click();
+  await settle();
+  assert.match(document.querySelector('#compare-command').textContent, /--runner claude/);
+  document.querySelector('#compare-close').click();
+  document.querySelector('#compare-open').click();
+  await settle();
+
+  const runner = document.querySelector('#compare-runners input');
+  assert.equal(runner.disabled, true);
+  assert.equal(runner.checked, false);
+  assert.doesNotMatch(document.querySelector('#compare-command').textContent, /--runner claude/);
+  assert.equal(document.querySelector('#compare-run').disabled, true);
+});
+
+test('comparison overview failure does not invent runner availability before any valid answer', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => url.pathname === '/api/shadow'
+    ? Promise.reject(new Error('synthetic initial failure'))
+    : null;
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  dom.window.document.querySelector('#compare-open').click();
+  await settle();
+
+  assert.equal(dom.window.document.querySelectorAll('#compare-runners .compare-runner').length, 0);
+  assert.equal(dom.window.document.querySelector('#compare-run').disabled, true);
+  assert.match(dom.window.document.querySelector('#compare-error').textContent, /synthetic initial failure/);
+});
+
+test('comparison overview failure cannot replace a newly started job with the retained older job', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let shadowReads = 0;
+  data.intercept = (url, init) => {
+    if (url.pathname === '/api/shadow') {
+      shadowReads += 1;
+      if (shadowReads <= 2) return response({
+        allowRun: true,
+        runners: [{ name: 'claude', available: true }, { name: 'codex', available: true }],
+        jobs: [{ id: 'job-a', status: 'completed', startedAt: '2026-09-21T00:00:00Z', endedAt: '2026-09-21T00:00:01Z', exitCode: 0, runIds: [] }],
+      });
+      return Promise.reject(new Error('synthetic overview failure'));
+    }
+    if (url.pathname === '/api/shadow/jobs' && init.method === 'POST') return response({ id: 'job-b' });
+    if (url.pathname.startsWith('/api/shadow/jobs/job-a')) return response({ id: 'job-a', status: 'completed', startedAt: '2026-09-21T00:00:00Z', endedAt: '2026-09-21T00:00:01Z', exitCode: 0, runIds: [], offset: 0 });
+    if (url.pathname.startsWith('/api/shadow/jobs/job-b')) return response({ id: 'job-b', status: 'running', startedAt: '2026-09-21T00:00:02Z', runIds: [], offset: 0 });
+    return null;
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#compare-open').click();
+  await settle();
+  document.querySelector('#compare-cwd').value = '/tmp/repo';
+  document.querySelector('#compare-task').value = 'run the comparison';
+  document.querySelector('#compare-run').click();
+  await settle();
+  document.querySelector('#compare-close').click();
+  document.querySelector('#compare-open').click();
+  await settle();
+
+  assert.equal(document.querySelector('#compare-status').textContent, 'running');
+  assert.equal(document.querySelector('#compare-cancel').classList.contains('hidden'), false);
+  assert.match(document.querySelector('#compare-error').textContent, /synthetic overview failure/);
+});
+
+test('an older comparison overview response cannot overwrite a newer reopen response', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let shadowReads = 0;
+  let resolveOlder;
+  data.intercept = (url) => {
+    if (url.pathname !== '/api/shadow') return null;
+    shadowReads += 1;
+    if (shadowReads === 1) return response({ allowRun: false, runners: [], jobs: [] });
+    if (shadowReads === 2) return new Promise((resolve) => { resolveOlder = resolve; });
+    return response({ allowRun: true, runners: [{ name: 'newer', available: false }], jobs: [] });
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#compare-open').click();
+  document.querySelector('#compare-close').click();
+  document.querySelector('#compare-open').click();
+  await settle();
+  resolveOlder({ ok: true, status: 200, json: async () => ({ allowRun: true, runners: [{ name: 'older', available: true }], jobs: [] }) });
+  await settle();
+
+  const runners = [...document.querySelectorAll('#compare-runners .compare-runner')];
+  assert.deepEqual(runners.map((runner) => runner.textContent.trim()), ['newerunavailable']);
+  assert.equal(document.querySelector('#compare-run').disabled, true);
+});
+
+test('a delayed successful overview cannot replace a job started after the request', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let shadowReads = 0;
+  let resolveOverview;
+  data.intercept = (url, init) => {
+    if (url.pathname === '/api/shadow') {
+      shadowReads += 1;
+      const info = { allowRun: true, runners: [{ name: 'claude', available: true }, { name: 'codex', available: true }], jobs: [{ id: 'job-a', status: 'completed', startedAt: '2026-09-21T00:00:00Z', endedAt: '2026-09-21T00:00:01Z', exitCode: 0, runIds: [] }] };
+      if (shadowReads <= 2) return response(info);
+      return new Promise((resolve) => { resolveOverview = () => resolve({ ok: true, status: 200, json: async () => info }); });
+    }
+    if (url.pathname === '/api/shadow/jobs' && init.method === 'POST') return response({ id: 'job-b' });
+    if (url.pathname.startsWith('/api/shadow/jobs/job-a')) return response({ id: 'job-a', status: 'completed', startedAt: '2026-09-21T00:00:00Z', endedAt: '2026-09-21T00:00:01Z', exitCode: 0, runIds: [], offset: 0 });
+    if (url.pathname.startsWith('/api/shadow/jobs/job-b')) return response({ id: 'job-b', status: 'running', startedAt: '2026-09-21T00:00:02Z', runIds: [], offset: 0 });
+    return null;
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#compare-open').click();
+  await settle();
+  document.querySelector('#compare-close').click();
+  document.querySelector('#compare-open').click();
+  document.querySelector('#compare-cwd').value = '/tmp/repo';
+  document.querySelector('#compare-task').value = 'run the comparison';
+  document.querySelector('#compare-run').click();
+  await settle();
+  resolveOverview();
+  await settle();
+
+  assert.equal(document.querySelector('#compare-status').textContent, 'running');
+  assert.equal(document.querySelector('#compare-cancel').classList.contains('hidden'), false);
+});
+
+test('a delayed reopen overview cannot replace a job whose start was already pending', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let shadowReads = 0;
+  let resolvePost;
+  let resolveOverview;
+  data.intercept = (url, init) => {
+    if (url.pathname === '/api/shadow') {
+      shadowReads += 1;
+      const info = { allowRun: true, runners: [{ name: 'claude', available: true }, { name: 'codex', available: true }], jobs: [{ id: 'job-a', status: 'completed', startedAt: '2026-09-21T00:00:00Z', endedAt: '2026-09-21T00:00:01Z', exitCode: 0, runIds: [] }] };
+      if (shadowReads <= 2) return response(info);
+      return new Promise((resolve) => { resolveOverview = () => resolve({ ok: true, status: 200, json: async () => info }); });
+    }
+    if (url.pathname === '/api/shadow/jobs' && init.method === 'POST') {
+      return new Promise((resolve) => { resolvePost = () => resolve(response({ id: 'job-b' })); });
+    }
+    if (url.pathname.startsWith('/api/shadow/jobs/job-a')) return response({ id: 'job-a', status: 'completed', startedAt: '2026-09-21T00:00:00Z', endedAt: '2026-09-21T00:00:01Z', exitCode: 0, runIds: [], offset: 0 });
+    if (url.pathname.startsWith('/api/shadow/jobs/job-b')) return response({ id: 'job-b', status: 'running', startedAt: '2026-09-21T00:00:02Z', runIds: [], offset: 0 });
+    return null;
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#compare-open').click();
+  await settle();
+  document.querySelector('#compare-cwd').value = '/tmp/repo';
+  document.querySelector('#compare-task').value = 'run the comparison';
+  document.querySelector('#compare-run').click();
+  document.querySelector('#compare-close').click();
+  document.querySelector('#compare-open').click();
+  await settle();
+  resolvePost();
+  await settle();
+  resolveOverview();
+  await settle();
+
+  assert.equal(document.querySelector('#compare-status').textContent, 'running');
+  assert.equal(document.querySelector('#compare-cancel').classList.contains('hidden'), false);
+});
+
+test('a delayed initialization overview cannot overwrite newer execution permission', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let shadowReads = 0;
+  let resolveInitial;
+  data.intercept = (url) => {
+    if (url.pathname !== '/api/shadow') return null;
+    shadowReads += 1;
+    if (shadowReads === 1) return new Promise((resolve) => { resolveInitial = resolve; });
+    return response({ allowRun: false, runners: [], jobs: [] });
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#compare-open').click();
+  await settle();
+  resolveInitial({ ok: true, status: 200, json: async () => ({ allowRun: true, runners: [], jobs: [] }) });
+  await settle();
+
+  assert.equal(document.querySelector('#verify-now'), null);
+  assert.equal(document.querySelector('#compare-run').disabled, true);
+});
+
 // --- Discoverable later verification (DESIGN.md section 12) ---
 
 
