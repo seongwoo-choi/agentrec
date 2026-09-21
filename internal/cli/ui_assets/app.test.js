@@ -165,6 +165,117 @@ test('successful malformed run-list JSON is reported instead of rendered as an e
   assert.equal(document.querySelector('#error').textContent, 'Invalid JSON response (HTTP 200)');
 });
 
+test('successful run-list JSON without runs is reported instead of rendered as an empty store', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => url.pathname === '/api/runs' ? response({ storeBytes: 8192 }) : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(document.querySelector('#workspace-empty-title').textContent, 'Could not load recorded runs');
+  assert.equal(document.querySelector('#workspace-empty-body').textContent, 'Invalid response: expected "runs" array');
+  assert.equal(document.querySelector('#error').textContent, 'Invalid response: expected "runs" array');
+  assert.doesNotMatch(document.querySelector('#workspace-empty-title').textContent, /No runs recorded yet/);
+  document.querySelector('#lang').value = 'ja';
+  document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(document.querySelector('#workspace-empty-title').textContent, '記録された実行を読み込めませんでした');
+  assert.equal(document.querySelector('#workspace-empty-body').textContent, 'Invalid response: expected "runs" array');
+  assert.equal(document.querySelector('#store-size').textContent, '');
+});
+
+test('successful search JSON without hits is reported instead of rendered as no matches', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => url.pathname === '/api/search' ? response({}) : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, KeyboardEvent } = dom.window;
+  const input = document.querySelector('#search-all');
+  input.value = 'target';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.equal(document.querySelector('#search-results .search-status').textContent, 'Search failed: Invalid response: expected "hits" array');
+  assert.doesNotMatch(document.querySelector('#search-results').textContent, /No matches for this search/);
+  document.querySelector('#lang').value = 'ja';
+  document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(document.querySelector('#search-results .search-status').textContent, '検索に失敗しました: Invalid response: expected "hits" array');
+});
+
+test('non-array collections fail while intentional empty search hits remain empty evidence', async (t) => {
+  const invalid = fixture('completed', 'pass', 'PASS');
+  invalid.intercept = (url) => url.pathname === '/api/runs' ? response({ runs: {} }) : null;
+  const invalidDOM = await renderFixture(invalid);
+  t.after(() => invalidDOM.window.close());
+  assert.equal(invalidDOM.window.document.querySelector('#error').textContent, 'Invalid response: expected "runs" array');
+
+  const invalidSearch = fixture('completed', 'pass', 'PASS');
+  invalidSearch.search = { hits: {}, truncated: false };
+  const invalidSearchDOM = await renderFixture(invalidSearch);
+  t.after(() => invalidSearchDOM.window.close());
+  const invalidSearchInput = invalidSearchDOM.window.document.querySelector('#search-all');
+  invalidSearchInput.value = 'invalid';
+  invalidSearchInput.dispatchEvent(new invalidSearchDOM.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.equal(invalidSearchDOM.window.document.querySelector('#search-results .search-status').textContent, 'Search failed: Invalid response: expected "hits" array');
+
+  const empty = fixture('completed', 'pass', 'PASS');
+  empty.search = { hits: [], truncated: false };
+  const emptyDOM = await renderFixture(empty);
+  t.after(() => emptyDOM.window.close());
+  const input = emptyDOM.window.document.querySelector('#search-all');
+  input.value = 'absent';
+  input.dispatchEvent(new emptyDOM.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.equal(emptyDOM.window.document.querySelector('#search-results .search-status').textContent, 'No matches for this search.');
+  assert.doesNotMatch(emptyDOM.window.document.querySelector('#search-results').textContent, /Search failed/);
+});
+
+test('a failed search contract cannot re-label hits from a previous query', async (t) => {
+  let queryCount = 0;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => {
+    if (url.pathname !== '/api/search') return null;
+    queryCount += 1;
+    return queryCount === 1
+      ? response({ hits: [{ runId: data.details.run.id, kind: 'action', snippet: 'first result' }], truncated: false })
+      : response({});
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, KeyboardEvent, Event } = dom.window;
+  const input = document.querySelector('#search-all');
+  input.value = 'first';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.match(document.querySelector('#search-results').textContent, /first result/);
+  input.value = 'second';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  document.querySelector('#lang').value = 'ja';
+  document.querySelector('#lang').dispatchEvent(new Event('change', { bubbles: true }));
+  assert.match(document.querySelector('#search-results .search-status').textContent, /^検索に失敗しました:/);
+  assert.doesNotMatch(document.querySelector('#search-results').textContent, /first result|No matches for this search/);
+});
+
+test('typing a newer debounced query invalidates the older request immediately', async (t) => {
+  let resolveFirst;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => url.pathname === '/api/search'
+    ? new Promise((resolve) => { resolveFirst = (body) => resolve({ ok: true, status: 200, json: async () => body }); })
+    : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, KeyboardEvent, Event } = dom.window;
+  const input = document.querySelector('#search-all');
+  input.value = 'first';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  input.value = 'second';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  resolveFirst({ hits: [{ runId: data.details.run.id, kind: 'action', snippet: 'first result' }], truncated: false });
+  await settle();
+  assert.equal(input.value, 'second');
+  assert.doesNotMatch(document.querySelector('#search-results').textContent, /first result/);
+});
+
 test('successful malformed action JSON is reported instead of rendered as no recorded actions', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.intercept = (url) => url.pathname.endsWith('/actions') ? malformedJSON() : null;
@@ -206,6 +317,145 @@ test('malformed run-list JSON during polling is visible while transient failures
   await poll();
   assert.equal(dom.window.document.querySelector('#error').textContent, 'Invalid JSON response (HTTP 200)');
   assert.equal(dom.window.document.querySelectorAll('.run-item').length, 1, 'last valid list remains visible');
+});
+
+test('run-list JSON without runs during polling is visible and preserves the last valid list', async (t) => {
+  let poll;
+  let incomplete = false;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.configure = (w) => {
+    w.setInterval = (callback) => { poll = callback; return 1; };
+    w.clearInterval = () => {};
+  };
+  data.intercept = (url) => incomplete && url.pathname === '/api/runs' && !url.search ? response({}) : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  incomplete = true;
+  await poll();
+  assert.equal(dom.window.document.querySelector('#error').textContent, 'Invalid response: expected "runs" array');
+  assert.equal(dom.window.document.querySelectorAll('.run-item').length, 1, 'last valid list remains visible');
+});
+
+test('a polling contract failure stays visible until a valid poll recovers', async (t) => {
+  let poll;
+  let invalid = false;
+  let foregroundMissing = false;
+  let hideError;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list = { ...data.list, total: 2, nextCursor: 'next-page', generation: 'generation-1' };
+  data.configure = (w) => {
+    const setTimeout = w.setTimeout.bind(w);
+    w.setTimeout = (callback, delay, ...args) => {
+      if (delay === 7000) {
+        hideError = callback;
+        return 2;
+      }
+      return setTimeout(callback, delay, ...args);
+    };
+    w.setInterval = (callback) => { poll = callback; return 1; };
+    w.clearInterval = () => {};
+  };
+  data.intercept = (url) => {
+    if (url.pathname !== '/api/runs') return null;
+    if (url.search) return foregroundMissing ? response({}) : malformedJSON();
+    return invalid ? response({}) : null;
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  invalid = true;
+  await poll();
+  assert.equal(dom.window.document.querySelector('#error').classList.contains('hidden'), false);
+  dom.window.document.querySelector('#run-load-more').click();
+  await settle();
+  assert.equal(dom.window.document.querySelector('#error').textContent, 'Invalid JSON response (HTTP 200)');
+  hideError?.();
+  assert.equal(dom.window.document.querySelector('#error').textContent, 'Invalid response: expected "runs" array');
+  assert.equal(dom.window.document.querySelector('#error').classList.contains('hidden'), false, 'contract error remains visible');
+  invalid = false;
+  await poll();
+  assert.equal(dom.window.document.querySelector('#error').classList.contains('hidden'), true, 'valid poll clears the contract error');
+
+  invalid = true;
+  await poll();
+  foregroundMissing = true;
+  dom.window.document.querySelector('#run-load-more').click();
+  await settle();
+  invalid = false;
+  await poll();
+  assert.equal(dom.window.document.querySelector('#error').classList.contains('hidden'), false, 'valid poll preserves an active foreground error with the same text');
+  hideError?.();
+  assert.equal(dom.window.document.querySelector('#error').classList.contains('hidden'), true, 'foreground timer hides after poll recovery');
+});
+
+test('a valid poll recovers from an initial run-list contract error', async (t) => {
+  let poll;
+  let invalid = true;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.configure = (w) => {
+    w.setInterval = (callback) => { poll = callback; return 1; };
+    w.clearInterval = () => {};
+  };
+  data.intercept = (url) => invalid && url.pathname === '/api/runs' && !url.search ? response({}) : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('#workspace-empty-title').textContent, 'Could not load recorded runs');
+  invalid = false;
+  await poll();
+  assert.equal(dom.window.document.querySelectorAll('.run-item').length, 1);
+  assert.notEqual(dom.window.document.querySelector('#workspace-empty-title').textContent, 'Could not load recorded runs');
+});
+
+test('a valid search recovers from a prior collection contract error', async (t) => {
+  let invalid = true;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => url.pathname === '/api/search'
+    ? response(invalid ? {} : { hits: [{ runId: data.details.run.id, kind: 'action', snippet: 'recovered result' }], truncated: false })
+    : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const input = dom.window.document.querySelector('#search-all');
+  input.value = 'first';
+  input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.match(dom.window.document.querySelector('#search-results').textContent, /Search failed/);
+  invalid = false;
+  input.value = 'second';
+  input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.match(dom.window.document.querySelector('#search-results').textContent, /recovered result/);
+  assert.doesNotMatch(dom.window.document.querySelector('#search-results').textContent, /Search failed/);
+});
+
+test('run-list JSON without runs during polling cannot replace valid store metadata', async (t) => {
+  let poll;
+  let incomplete = false;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.storeBytes = 4096;
+  data.configure = (w) => {
+    w.setInterval = (callback) => { poll = callback; return 1; };
+    w.clearInterval = () => {};
+  };
+  data.intercept = (url) => incomplete && url.pathname === '/api/runs' && !url.search ? response({ storeBytes: 0 }) : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  assert.match(dom.window.document.querySelector('#store-size').textContent, /4\.0 KB on disk/);
+  incomplete = true;
+  await poll();
+  dom.window.document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.match(dom.window.document.querySelector('#store-size').textContent, /4\.0 KB on disk/);
+});
+
+test('load-more JSON without runs surfaces the contract error and preserves loaded runs', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list = { ...data.list, total: 2, nextCursor: 'next-page', generation: 'generation-1' };
+  data.intercept = (url) => url.pathname === '/api/runs' && url.search ? response({}) : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#run-load-more').click();
+  await settle();
+  assert.equal(document.querySelector('#error').textContent, 'Invalid response: expected "runs" array');
+  assert.equal(document.querySelectorAll('.run-item').length, 1);
 });
 
 test('response-body cancellation remains an AbortError instead of a JSON failure', async (t) => {
