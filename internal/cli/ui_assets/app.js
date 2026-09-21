@@ -8,7 +8,7 @@
   const MAX_EXPANDED_ACTION_GROUPS = 250;
   let earlierRunsExpanded = false;
   let requestRunId = '';
-  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, runsSignature: '', toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -1154,6 +1154,13 @@
     return body;
   }
 
+  function requireArrayField(body, field) {
+    if (Array.isArray(body?.[field])) return body[field];
+    const invalid = new Error(`Invalid response: expected "${field}" array`);
+    invalid.name = 'InvalidResponseError';
+    throw invalid;
+  }
+
   // getJSONRetrying re-asks a few times when the server says its snapshot lost a race with the recorder ("…; retry"):
   // a run that is still being written changes under the capture, and the next attempt usually lands between writes.
   async function getJSONRetrying(path, signal, attempts = 3) {
@@ -1167,11 +1174,43 @@
     }
   }
 
-  function showError(error) {
+  function showError(error, persistent = false) {
     const toast = $('error');
-    toast.textContent = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    if (persistent) {
+      state.pollError = message;
+      if (state.errorOwner === 'foreground') return;
+      window.clearTimeout(state.errorTimer);
+      state.errorTimer = null;
+      state.errorOwner = 'poll';
+      toast.textContent = message;
+      toast.classList.remove('hidden');
+      return;
+    }
+    window.clearTimeout(state.errorTimer);
+    state.errorOwner = 'foreground';
+    toast.textContent = message;
     toast.classList.remove('hidden');
-    window.setTimeout(() => toast.classList.add('hidden'), 7000);
+    state.errorTimer = window.setTimeout(() => {
+      state.errorTimer = null;
+      if (state.pollError) {
+        state.errorOwner = 'poll';
+        toast.textContent = state.pollError;
+        toast.classList.remove('hidden');
+      } else {
+        state.errorOwner = '';
+        toast.classList.add('hidden');
+      }
+    }, 7000);
+  }
+
+  function clearPollingError() {
+    if (!state.pollError) return;
+    state.pollError = '';
+    if (state.errorOwner === 'poll') {
+      state.errorOwner = '';
+      $('error').classList.add('hidden');
+    }
   }
 
   function announceInspector(message) {
@@ -1658,6 +1697,11 @@ function shortID(id) {
     }
     view.classList.add('hidden');
     empty.classList.remove('hidden');
+    if (state.runListError) {
+      $('workspace-empty-title').textContent = t('Could not load recorded runs');
+      $('workspace-empty-body').textContent = state.runListError.message;
+      return;
+    }
     if (state.runError) {
       $('workspace-empty-title').textContent = t('Could not load selected run');
       $('workspace-empty-body').textContent = state.runError.message;
@@ -4000,7 +4044,7 @@ function shortID(id) {
   // ── Search all runs ───────────────────────────────────────────────────────
   // The newest query wins: a keystroke restarts the idle timer and aborts the request in flight. Hits stay grouped by run
   // in the server's order (newest run first); the field keeps its text when the panel closes.
-  const search = { timer: null, controller: null, hits: [], query: '', truncated: false, active: -1, open: false };
+  const search = { timer: null, controller: null, hits: [], query: '', truncated: false, active: -1, open: false, error: null };
 
   function closeSearch() {
     window.clearTimeout(search.timer);
@@ -4014,6 +4058,10 @@ function shortID(id) {
   function scheduleSearch() {
     window.clearTimeout(search.timer);
     const query = $('search-all').value.trim();
+    if (search.controller) {
+      search.controller.abort();
+      search.controller = null;
+    }
     if (query.length < 2) {
       closeSearch();
       return;
@@ -4027,17 +4075,22 @@ function shortID(id) {
     const controller = new AbortController();
     search.controller = controller;
     search.query = query;
+    search.hits = [];
+    search.truncated = false;
+    search.active = -1;
+    search.error = null;
     renderSearch(t('Searching…'));
     try {
       const result = await getJSON(`/api/search?q=${encodeURIComponent(query)}&limit=100`, controller.signal);
       if (controller !== search.controller) return;
-      search.hits = result.hits || [];
+      search.hits = requireArrayField(result, 'hits');
       search.truncated = Boolean(result.truncated);
       search.active = -1;
       renderSearch();
     } catch (error) {
       if (error.name === 'AbortError' || controller !== search.controller) return;
-      renderSearch(t('Search failed: {error}', { error: errorText(error) }));
+      search.error = error;
+      renderSearch();
     } finally {
       if (controller === search.controller) search.controller = null;
     }
@@ -4065,6 +4118,10 @@ function shortID(id) {
     search.open = true;
     if (message) {
       panel.append(node('div', 'search-status', message));
+      return;
+    }
+    if (search.error) {
+      panel.append(node('div', 'search-status', t('Search failed: {error}', { error: errorText(search.error) })));
       return;
     }
     const groups = new Map();
@@ -4226,7 +4283,8 @@ function shortID(id) {
   }
 
   function applyRunList(list, append = false) {
-    const incoming = list.runs || [];
+    const incoming = requireArrayField(list, 'runs');
+    state.runListError = null;
     const previousRuns = state.runs;
     const previousCursor = state.runNextCursor;
     const previousTotal = state.runTotal;
@@ -4277,7 +4335,9 @@ function shortID(id) {
     button.disabled = true;
     try {
       const list = await getJSON(`/api/runs?cursor=${encodeURIComponent(cursor)}`);
-      if (cursor !== state.runNextCursor || generation !== state.runGeneration || (list.generation || '') !== generation) return;
+      if (cursor !== state.runNextCursor || generation !== state.runGeneration) return;
+      requireArrayField(list, 'runs');
+      if ((list.generation || '') !== generation) return;
       applyRunList(list, true);
     } catch (error) {
       showError(error);
@@ -4336,15 +4396,17 @@ function shortID(id) {
     state.pollController = new AbortController();
     try {
       const list = await getJSON('/api/runs', state.pollController.signal);
+      requireArrayField(list, 'runs');
       state.storeBytes = list.storeBytes || 0;
       state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
+      clearPollingError();
       await refreshSelectedRun();
       await autoSelect(list);
     } catch (error) {
       // Transport failures stay quiet until the next tick. A successful response
       // with a broken contract is persistent and must not leave a false-green view.
-      if (error?.name === 'InvalidJSONError') showError(error);
+      if (error?.name === 'InvalidJSONError' || error?.name === 'InvalidResponseError') showError(error, true);
     } finally {
       state.pollController = null;
     }
@@ -4369,6 +4431,7 @@ function shortID(id) {
     getJSON('/api/shadow').then((info) => setAllowRun(info.allowRun)).catch(() => {});
     try {
       const list = await getJSON('/api/runs');
+      requireArrayField(list, 'runs');
       state.storeBytes = list.storeBytes || 0;
       state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
@@ -4387,8 +4450,8 @@ function shortID(id) {
         if (state.run && state.run.run.id === a) openDiff(b);
       }
     } catch (error) {
-      $('workspace-empty-title').textContent = t('Could not load recorded runs');
-      $('workspace-empty-body').textContent = error instanceof Error ? error.message : String(error);
+      state.runListError = error instanceof Error ? error : new Error(String(error));
+      renderWorkspaceState();
       showError(error);
     }
     startPolling();

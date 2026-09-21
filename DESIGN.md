@@ -312,3 +312,7 @@ Injected stdout failures made both `agentrec version` and plain-text `agentrec l
 - Preserve an existing nonzero command exit while still reporting the independent stdout failure. Process-level `SIGPIPE` behavior remains platform-owned; the contract applies when the writer returns control to `Run`.
 - Command formatting, stdout content, side effects, and handler-specific failure semantics remain unchanged when output succeeds.
 - Acceptance: returned writer errors fail `version` and plain-text `list`; a short write fails with `io.ErrShortWrite`; a JSON renderer's existing nonzero status is preserved and the stdout failure remains diagnosed.
+
+## 36. Successful JSON must preserve collection evidence
+
+A successful Viewer API response with a missing mandatory collection is a broken contract, not an empty result. The run list requires `runs` and global search requires `hits` to be arrays before either flow mutates UI state. Missing or non-array fields surface through the existing load/search error states; they must never become **No runs recorded yet** or **No matches for this search**. Intentionally empty arrays, additive fields, transport failures, cancellation, canonical evidence, and API schemas remain unchanged.
