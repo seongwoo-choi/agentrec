@@ -450,6 +450,8 @@ html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
 /* live run: the pill above the verdict, the working-tree caption on the Changes tab */
 .live-pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px 3px 8px; background: var(--accent-soft); color: var(--accent); font: 500 12px var(--sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: live-pulse 1.6s ease-in-out infinite; }
+.live-pill.error { color: var(--warn); background: var(--warn-bg); }
+.live-pill.error .live-dot { background: var(--warn); animation: none; }
 @keyframes live-pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--accent-soft); } 50% { opacity: .55; box-shadow: 0 0 0 4px var(--accent-soft); } }
 .live-caption { color: var(--warn); }
 

@@ -328,6 +328,9 @@
       run: '실행',
       change: '변경',
       'Live · updated {time}': '실시간 · {time} 갱신',
+      'Live · refresh failed · last updated {time}': '실시간 · 새로고침 실패 · 마지막 갱신 {time}',
+      'Live refresh failed; displayed evidence was last updated {time}.': '실시간 새로고침에 실패했습니다. 표시된 증거의 마지막 갱신 시각은 {time}입니다.',
+      'Live refresh recovered.': '실시간 새로고침이 복구되었습니다.',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '현재 작업 트리 — {time} 측정, 실행 중에 관측된 것으로 에이전트가 원인이라는 증명은 아닙니다',
       'Working tree': '작업 트리',
       'WORKING TREE STATUS': '작업 트리 상태',
@@ -672,6 +675,9 @@
       run: '実行',
       change: '変更',
       'Live · updated {time}': 'ライブ · {time} 更新',
+      'Live · refresh failed · last updated {time}': 'ライブ · 更新失敗 · 最終更新 {time}',
+      'Live refresh failed; displayed evidence was last updated {time}.': 'ライブ更新に失敗しました。表示中の証拠の最終更新は {time} です。',
+      'Live refresh recovered.': 'ライブ更新が復旧しました。',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '現在の作業ツリー — {time} に計測。実行中に観測されたもので、エージェントが原因であることの証明ではありません',
       'Working tree': '作業ツリー',
       'WORKING TREE STATUS': '作業ツリーの状態',
@@ -1016,6 +1022,9 @@
       change: '变更',
       run: '运行',
       'Live · updated {time}': '实时 · {time} 更新',
+      'Live · refresh failed · last updated {time}': '实时 · 刷新失败 · 上次更新 {time}',
+      'Live refresh failed; displayed evidence was last updated {time}.': '实时刷新失败；所显示证据的上次更新时间为 {time}。',
+      'Live refresh recovered.': '实时刷新已恢复。',
       'Working tree now — measured at {time}, observed during the run, not proof the agent caused it': '当前工作树 — 测量于 {time}，在运行期间观测到，并非代理造成的证明',
       'Working tree': '工作树',
       'WORKING TREE STATUS': '工作树状态',
@@ -3973,13 +3982,28 @@ function shortID(id) {
   // A run that is still recording is re-read every LIVE_MS: the header redraws when its facts changed, each fully loaded
   // stream fetches only the rows after its endCursor from the new snapshot (the files are append-only, so offsets hold),
   // and the Changes tab shows the working tree as it is now. One tick at a time; none while the tab is hidden.
-  const live = { timer: null, busy: false, updatedAt: null, signature: '', changes: null, error: '' };
+  const live = { timer: null, busy: false, updatedAt: null, signature: '', changes: null, error: '', refreshError: '' };
   const isLive = () => Boolean(state.run) && (!state.run.run.exitReason || state.run.run.exitReason === 'running');
   const runSignature = (run) => JSON.stringify([run.actionCount, run.eventCount, run.changes, run.evidence, run.run]);
 
   function renderLivePill() {
-    $('live-pill').classList.toggle('hidden', !isLive());
-    $('live-text').textContent = t('Live · updated {time}', { time: live.updatedAt ? clock(live.updatedAt.toISOString()) : '—' });
+    const pill = $('live-pill');
+    pill.classList.toggle('hidden', !isLive());
+    pill.classList.toggle('error', Boolean(live.refreshError));
+    pill.title = live.refreshError;
+    const time = live.updatedAt ? clock(live.updatedAt.toISOString()) : '—';
+    $('live-text').textContent = t(live.refreshError ? 'Live · refresh failed · last updated {time}' : 'Live · updated {time}', { time });
+    if (live.refreshError) {
+      const announcement = t('Live refresh failed; displayed evidence was last updated {time}.', { time });
+      if ($('live-status').textContent !== announcement) $('live-status').textContent = announcement;
+    }
+  }
+
+  function setLiveRefreshError(error) {
+    const failed = Boolean(error), wasFailed = Boolean(live.refreshError);
+    live.refreshError = error;
+    renderLivePill();
+    if (!failed && wasFailed) $('live-status').textContent = t('Live refresh recovered.');
   }
 
   function stopLive() {
@@ -4029,7 +4053,6 @@ function shortID(id) {
       const grew = { actions: (fresh.actionCount || 0) > (state.run.actionCount || 0), events: (fresh.eventCount || 0) > (state.run.eventCount || 0) };
       const signature = runSignature(fresh);
       state.run = fresh;
-      live.updatedAt = new Date();
       const running = isLive();
       if (signature !== live.signature) {
         live.signature = signature;
@@ -4048,9 +4071,17 @@ function shortID(id) {
         refreshRuns();
         return;
       }
-      if (state.mode === 'changes') await loadLiveChanges(generation);
+      if (state.mode === 'changes') {
+        await loadLiveChanges(generation);
+        if (!live.error) live.updatedAt = new Date();
+        setLiveRefreshError(live.error);
+      } else {
+        live.updatedAt = new Date();
+        setLiveRefreshError('');
+      }
     } catch (error) {
-      // ponytail: a failed tick stays quiet; the next one retries and user-initiated loads still surface errors.
+      if (generation !== state.loadGeneration) return;
+      setLiveRefreshError(errorText(error));
     } finally {
       live.busy = false;
       startLive();
@@ -4224,7 +4255,8 @@ function shortID(id) {
       // The comparison sheet may already be open on the run that was showing:
       // its repository path follows the run in view until someone edits it.
       if (!compare.cwdTouched && run.run.cwd) $('compare-cwd').value = run.run.cwd;
-      Object.assign(live, { updatedAt: new Date(), signature: runSignature(run), changes: null, error: '' });
+      Object.assign(live, { updatedAt: new Date(), signature: runSignature(run), changes: null, error: '', refreshError: '' });
+      $('live-status').textContent = '';
       // shown counts the rows the filter lets through, across every page loaded so far.
       state.streams = {
         actions: { items: [], currentCursor: 0, nextCursor: state.run.actionCount === 0 ? null : 0, endCursor: 0, loading: false, loaded: state.run.actionCount === 0, error: '', shown: 0 },
