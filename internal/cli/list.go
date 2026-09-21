@@ -288,6 +288,13 @@ func scanRunsFromRootContext(ctx context.Context, root *os.Root, cwd string, enr
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
+	canonicalCWD := ""
+	if cwd != "" {
+		cwd = filepath.Clean(cwd)
+		if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+			canonicalCWD = filepath.Clean(resolved)
+		}
+	}
 	dir, err := root.Open(".")
 	if err != nil {
 		return nil, 0, fmt.Errorf("cli: read runs directory: %w", err)
@@ -322,7 +329,7 @@ func scanRunsFromRootContext(ctx context.Context, root *os.Root, cwd string, enr
 			unreadable++
 			continue
 		}
-		if cwd != "" && (!filepath.IsAbs(manifest.CWD) || filepath.Clean(manifest.CWD) != cwd) {
+		if cwd != "" && !listCWDMatches(cwd, canonicalCWD, manifest.CWD, manifest.CanonicalCWD) {
 			runRoot.Close()
 			continue
 		}
@@ -357,6 +364,18 @@ func scanRunsFromRootContext(ctx context.Context, root *os.Root, cwd string, enr
 		return strings.Compare(b.ID, a.ID)
 	})
 	return runs, unreadable, nil
+}
+
+func listCWDMatches(cwd, canonicalCWD, recordedCWD, recordedCanonicalCWD string) bool {
+	if filepath.IsAbs(recordedCanonicalCWD) {
+		if canonicalCWD != "" {
+			return filepath.Clean(recordedCanonicalCWD) == canonicalCWD
+		}
+		if filepath.Clean(recordedCanonicalCWD) == cwd {
+			return true
+		}
+	}
+	return filepath.IsAbs(recordedCWD) && filepath.Clean(recordedCWD) == cwd
 }
 
 // runsRoot is where runs are recorded: under AGENTREC_HOME when the operator

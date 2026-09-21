@@ -757,6 +757,97 @@ func TestListFiltersByCleanedWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestListFiltersByRecordedCanonicalWorkingDirectory(t *testing.T) {
+	root := home(t)
+	work := t.TempDir()
+	canonical := filepath.Join(work, "project")
+	alias := filepath.Join(work, "project-link")
+	if err := os.Mkdir(canonical, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(canonical, alias); err != nil {
+		t.Fatal(err)
+	}
+	recordedCanonical, err := filepath.EvalSymlinks(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.Create(root, "run-alias", storage.Manifest{
+		Provider:     "claude",
+		Argv:         []string{"claude"},
+		CWD:          alias,
+		CanonicalCWD: recordedCanonical,
+		StartedAt:    early,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"list", "--cwd", canonical},
+		{"list", "--cwd", alias},
+		{"list", "--cwd", canonical, "--json"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 0 {
+			t.Fatalf("run(%q) exit code = %d, want 0 (stderr %q)", args, code, stderr)
+		}
+		if !strings.Contains(stdout, "run-alias") {
+			t.Errorf("run(%q) stdout = %q, want recorded run", args, stdout)
+		}
+		if stderr != "" {
+			t.Errorf("run(%q) stderr = %q, want empty", args, stderr)
+		}
+	}
+
+	other := filepath.Join(work, "other")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"list", "--cwd", alias},
+		{"list", "--cwd", alias, "--json"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 0 {
+			t.Fatalf("run(%q) after retarget exit code = %d, want 0 (stderr %q)", args, code, stderr)
+		}
+		if strings.Contains(stdout, "run-alias") {
+			t.Errorf("run(%q) after retarget stdout = %q, want old target excluded", args, stdout)
+		}
+		if stderr != "" {
+			t.Errorf("run(%q) after retarget stderr = %q, want empty", args, stderr)
+		}
+	}
+
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(canonical); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"list", "--cwd", recordedCanonical},
+		{"list", "--cwd", recordedCanonical, "--json"},
+	} {
+		code, stdout, stderr := run(t, args...)
+		if code != 0 {
+			t.Fatalf("run(%q) after deletion exit code = %d, want 0 (stderr %q)", args, code, stderr)
+		}
+		if !strings.Contains(stdout, "run-alias") {
+			t.Errorf("run(%q) after deletion stdout = %q, want recorded run", args, stdout)
+		}
+		if stderr != "" {
+			t.Errorf("run(%q) after deletion stderr = %q, want empty", args, stderr)
+		}
+	}
+}
+
 // writeRunIn records a run whose manifest names cwd as the directory it ran in.
 func writeRunIn(t *testing.T, root, id, cwd string) {
 	t.Helper()
