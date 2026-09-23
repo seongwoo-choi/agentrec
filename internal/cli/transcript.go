@@ -125,10 +125,16 @@ func openTranscript(path string) (*os.File, error) {
 	return f, nil
 }
 
-// readTranscriptUsage sums what the provider's transcript says the session
-// used since the run started, and names the model(s) and the provider's
-// version that wrote the last of it.
+// readTranscriptUsage sums what the provider's transcript says since the
+// supplied boundary. Tests and post-hoc callers use one boundary for both
+// usage and startup metadata.
 func readTranscriptUsage(provider, path string, since time.Time) (usageartifact.Report, string, error) {
+	return readTranscriptUsageWindow(provider, path, since, since)
+}
+
+// readTranscriptUsageWindow keeps the usage boundary exact while allowing
+// startup metadata written shortly before a SessionStart hook to be read.
+func readTranscriptUsageWindow(provider, path string, usageSince, metadataSince time.Time) (usageartifact.Report, string, error) {
 	report := usageartifact.Report{Schema: 1, Attribution: usageartifact.AttributionProviderReported, Provider: provider, Scope: usageartifact.ScopeSession, Source: usageartifact.SourceTranscript}
 	if provider != "claude" && provider != "codex" {
 		return report, "", fmt.Errorf("no transcript reader for provider %q", provider)
@@ -142,6 +148,7 @@ func readTranscriptUsage(provider, path string, since time.Time) (usageartifact.
 	var input, cacheCreation, cacheRead, output optSum
 	measured := false
 	models := map[string]bool{}
+	codexModel := ""
 	version := ""
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(io.LimitReader(f, transcriptReadLimit))
@@ -154,16 +161,18 @@ func readTranscriptUsage(provider, path string, since time.Time) (usageartifact.
 		switch provider {
 		case "claude":
 			var l claudeTranscriptLine
-			if json.Unmarshal(line, &l) != nil || (!l.Timestamp.IsZero() && l.Timestamp.Before(since)) {
+			if json.Unmarshal(line, &l) != nil {
 				continue
 			}
-			if l.Version != "" {
+			metadataInWindow := l.Timestamp.IsZero() || !l.Timestamp.Before(metadataSince)
+			usageInWindow := usageSince.IsZero() || (!l.Timestamp.IsZero() && !l.Timestamp.Before(usageSince))
+			if metadataInWindow && l.Version != "" {
 				version = bounded(l.Version, transcriptFieldLimit)
 			}
 			// Claude Code files its own placeholders — an API error, an
 			// interrupted turn — as assistant lines with a "<synthetic>"
 			// model and no usage worth the name. They are not the model's.
-			if l.Type != "assistant" || l.IsAPIErrorMessage || strings.HasPrefix(l.Message.Model, "<") {
+			if !usageInWindow || l.Type != "assistant" || l.IsAPIErrorMessage || strings.HasPrefix(l.Message.Model, "<") {
 				continue
 			}
 			if l.Message.Model != "" {
@@ -182,20 +191,25 @@ func readTranscriptUsage(provider, path string, since time.Time) (usageartifact.
 			output.add(l.Message.Usage.Output)
 		case "codex":
 			var l codexRolloutLine
-			if json.Unmarshal(line, &l) != nil || (!l.Timestamp.IsZero() && l.Timestamp.Before(since)) {
+			if json.Unmarshal(line, &l) != nil {
 				continue
 			}
-			if l.Type == "session_meta" && l.Payload.CLIVersion != "" {
+			metadataInWindow := l.Timestamp.IsZero() || !l.Timestamp.Before(metadataSince)
+			usageInWindow := usageSince.IsZero() || (!l.Timestamp.IsZero() && !l.Timestamp.Before(usageSince))
+			if metadataInWindow && l.Type == "session_meta" && l.Payload.CLIVersion != "" {
 				version = bounded(l.Payload.CLIVersion, transcriptFieldLimit)
 			}
-			if l.Type == "turn_context" && l.Payload.Model != "" {
-				models[bounded(l.Payload.Model, transcriptFieldLimit)] = true
+			if metadataInWindow && l.Type == "turn_context" && l.Payload.Model != "" {
+				codexModel = bounded(l.Payload.Model, transcriptFieldLimit)
 			}
 			// token_count carries the last response's usage beside a total
 			// for the whole file; the responses since the run started are
 			// what this session used.
-			if l.Type == "event_msg" && l.Payload.Type == "token_count" && l.Payload.Info != nil && l.Payload.Info.Last != nil {
+			if usageInWindow && l.Type == "event_msg" && l.Payload.Type == "token_count" && l.Payload.Info != nil && l.Payload.Info.Last != nil {
 				measured = true
+				if codexModel != "" {
+					models[codexModel] = true
+				}
 				last := l.Payload.Info.Last
 				input.add(last.Input)
 				cacheCreation.add(last.CacheWrite)

@@ -259,6 +259,10 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitFailure
 	}
+	// Capture the usage boundary before the inbox can acknowledge a hook. The
+	// bundle and repository baseline are prepared after the socket is bound, so
+	// a provider response may otherwise arrive before the recorder struct exists.
+	startedAt := time.Now()
 	inbox := newSessionInbox(listener, opts.sessionID)
 	// release ends this recorder's claim on the session: the socket is closed
 	// and the lock let go, so a hook arriving afterwards finds no recorder and
@@ -342,7 +346,7 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 		cwd:          opts.cwd,
 		canonicalCWD: manifestCWD,
 		repoRoot:     manifestRepoRoot,
-		startedAt:    time.Now(),
+		startedAt:    startedAt,
 		stderr:       stderr,
 	}
 	reason := rec.serve(inbox, opts.idle, stop)
@@ -360,9 +364,10 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 	// now that the session is over, and filed as the provider's own word.
 	version := ""
 	if rec.transcript != "" {
-		// A little before the recorder started: the provider wrote its first
-		// lines before its SessionStart hook reached here.
-		reported, transcriptVersion, err := readTranscriptUsage(rec.provider, rec.transcript, rec.startedAt.Add(-transcriptStartSkew))
+		// Startup metadata may precede the hook slightly, but usage from before
+		// this recorder started belongs to an earlier recording of a resumed
+		// provider session.
+		reported, transcriptVersion, err := readTranscriptUsageWindow(rec.provider, rec.transcript, rec.startedAt, rec.startedAt.Add(-transcriptStartSkew))
 		switch {
 		case errors.Is(err, os.ErrNotExist), errors.Is(err, errTranscriptNoUsage):
 			// No transcript, or one with nothing in it: no usage to file,
