@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,23 @@ func writeTranscript(t *testing.T, name string, lines ...string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func waitForRecordedPrompt(t *testing.T, root string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		dirs := runDirs(t, root)
+		if len(dirs) == 1 {
+			if _, err := os.Stat(filepath.Join(dirs[0], "prompt.txt")); err == nil {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recorder did not file the prompt")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // The transcript is read for numbers and names only: one API response is
@@ -62,6 +80,55 @@ func TestReadTranscriptUsageCodexTakesTheRunningTotal(t *testing.T) {
 	// file's, not the session's. cache_write was never reported: nil, not 0.
 	if version != "0.150.1" || report.Model != "gpt-5.6-sol" || *report.InputTokens != 350 || *report.CachedInputTokens != 130 || report.CacheCreationInputTokens != nil || *report.OutputTokens != 17 {
 		t.Errorf("report = in %v cached %v create %v out %v model %q version %q", report.InputTokens, report.CachedInputTokens, report.CacheCreationInputTokens, report.OutputTokens, report.Model, version)
+	}
+}
+
+func TestReadTranscriptUsageWindowSeparatesCodexMetadataFromPriorUsage(t *testing.T) {
+	path := writeTranscript(t, "resumed-rollout.jsonl",
+		`{"timestamp":"2026-09-02T08:59:55Z","type":"session_meta","payload":{"cli_version":"0.150.1"}}`,
+		`{"timestamp":"2026-09-02T08:59:56Z","type":"turn_context","payload":{"model":"gpt-5.5-old"}}`,
+		`{"timestamp":"2026-09-02T08:59:57Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":200}}}}`,
+		`{"timestamp":"2026-09-02T09:00:00Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}`,
+		`{"timestamp":"2026-09-02T09:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":3,"output_tokens":4}}}}`,
+	)
+	usageSince := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	report, version, err := readTranscriptUsageWindow("codex", path, usageSince, usageSince.Add(-transcriptStartSkew))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "0.150.1" || report.Model != "gpt-5.6-sol" || *report.InputTokens != 3 || *report.OutputTokens != 4 {
+		t.Errorf("report = in %v out %v model %q version %q; want 3, 4, gpt-5.6-sol, 0.150.1", report.InputTokens, report.OutputTokens, report.Model, version)
+	}
+}
+
+func TestReadTranscriptUsageWindowCarriesLatestCodexContextToCurrentUsage(t *testing.T) {
+	path := writeTranscript(t, "resumed-rollout-context.jsonl",
+		`{"timestamp":"2026-09-02T08:59:56Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}`,
+		`{"timestamp":"2026-09-02T08:59:57Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":200}}}}`,
+		`{"timestamp":"2026-09-02T09:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":3,"output_tokens":4}}}}`,
+	)
+	usageSince := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	report, _, err := readTranscriptUsageWindow("codex", path, usageSince, usageSince.Add(-transcriptStartSkew))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Model != "gpt-5.6-sol" || *report.InputTokens != 3 || *report.OutputTokens != 4 {
+		t.Errorf("report = in %v out %v model %q; want current usage 3/4 attributed to latest context gpt-5.6-sol", report.InputTokens, report.OutputTokens, report.Model)
+	}
+}
+
+func TestReadTranscriptUsageWindowRejectsTimestampLessPriorUsage(t *testing.T) {
+	path := writeTranscript(t, "resumed-without-timestamp.jsonl",
+		`{"type":"assistant","requestId":"old","message":{"model":"claude-old","usage":{"input_tokens":100,"output_tokens":200}}}`,
+		`{"timestamp":"2026-09-02T09:00:01Z","type":"assistant","requestId":"new","message":{"model":"claude-new","usage":{"input_tokens":3,"output_tokens":4}}}`,
+	)
+	usageSince := time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+	report, _, err := readTranscriptUsageWindow("claude", path, usageSince, usageSince.Add(-transcriptStartSkew))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Model != "claude-new" || *report.InputTokens != 3 || *report.OutputTokens != 4 {
+		t.Errorf("report = in %v out %v model %q; want only timestamped current usage 3, 4, claude-new", report.InputTokens, report.OutputTokens, report.Model)
 	}
 }
 
@@ -131,12 +198,24 @@ func TestSessionFilesTranscriptUsageAtSessionEnd(t *testing.T) {
 	repo := cleanRepo(t)
 	sessionSocketHome(t)
 	transcript := writeTranscript(t, "session.jsonl",
-		`{"type":"user","version":"2.1.300"}`,
-		`{"type":"assistant","requestId":"r1","message":{"model":"claude-opus-5","usage":{"input_tokens":12,"cache_read_input_tokens":300,"output_tokens":40}}}`,
+		fmt.Sprintf(`{"type":"user","version":"2.1.300","timestamp":%q}`, time.Now().UTC().Format(time.RFC3339Nano)),
 	)
 	const sessionID = "session-usage-0001"
 	socket, done, stderr := serveInProcess(t, sessionID, repo)
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup", "transcript_path": transcript}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "measure this response", "prompt_id": "turn-1"}))
+	waitForRecordedPrompt(t, root)
+	f, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(f, `{"type":"assistant","requestId":"r1","timestamp":%q,"message":{"model":"claude-opus-5","usage":{"input_tokens":12,"cache_read_input_tokens":300,"output_tokens":40}}}`+"\n", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other", "transcript_path": transcript}))
 	if code := waitExit(t, done); code != 0 {
 		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
@@ -155,6 +234,93 @@ func TestSessionFilesTranscriptUsageAtSessionEnd(t *testing.T) {
 		if !strings.Contains(flat, want) {
 			t.Errorf("show output lacks %q:\n%s", want, stdout)
 		}
+	}
+}
+
+// The listener accepts hooks while bundle and repository initialization are
+// still running. Usage accepted in that interval belongs to this recording.
+func TestSessionTranscriptCountsResponseAcceptedDuringRecorderInitialization(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	transcript := writeTranscript(t, "initializing-session.jsonl",
+		fmt.Sprintf(`{"type":"user","version":"2.1.300","timestamp":%q}`, time.Now().UTC().Format(time.RFC3339Nano)),
+	)
+	const sessionID = "session-initializing-usage"
+	socket, done, stderr := serveInProcess(t, sessionID, repo)
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup", "transcript_path": transcript}))
+	f, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(f, `{"type":"assistant","requestId":"first","timestamp":%q,"message":{"model":"claude-opus-5","usage":{"input_tokens":7,"output_tokens":8}}}`+"\n", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other", "transcript_path": transcript}))
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	reported, err := readProviderUsage(onlyRunDir(t, root), "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reported == nil || reported.InputTokens == nil || reported.OutputTokens == nil || *reported.InputTokens != 7 || *reported.OutputTokens != 8 {
+		t.Errorf("provider usage = %+v; want accepted initialization response 7/8", reported)
+	}
+}
+
+// A resumed provider appends to an existing transcript. An answer completed
+// just before this recorder started belongs to the earlier recording even when
+// it falls inside the metadata skew used to find startup version lines.
+func TestSessionTranscriptDoesNotCountRecentResponseFromEarlierRecording(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	oldTimestamp := time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+	transcript := writeTranscript(t, "resumed-session.jsonl",
+		fmt.Sprintf(`{"type":"user","version":"2.1.300","timestamp":%q}`, oldTimestamp),
+		fmt.Sprintf(`{"type":"assistant","requestId":"old","timestamp":%q,"message":{"model":"claude-opus-4-1","usage":{"input_tokens":100,"output_tokens":200}}}`, oldTimestamp),
+	)
+	const sessionID = "session-resumed-usage"
+	socket, done, stderr := serveInProcess(t, sessionID, repo)
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "resume", "transcript_path": transcript}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookUserPromptSubmit, map[string]any{"prompt": "continue", "prompt_id": "turn-new"}))
+	waitForRecordedPrompt(t, root)
+
+	f, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTimestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := fmt.Fprintf(f, `{"type":"assistant","requestId":"new","timestamp":%q,"message":{"model":"claude-opus-5","usage":{"input_tokens":3,"output_tokens":4}}}`+"\n", newTimestamp); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other", "transcript_path": transcript}))
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+
+	dir := onlyRunDir(t, root)
+	reported, err := readProviderUsage(dir, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reported == nil || reported.InputTokens == nil || reported.OutputTokens == nil {
+		t.Fatalf("provider usage = %+v, want this recording's response", reported)
+	}
+	if *reported.InputTokens != 3 || *reported.OutputTokens != 4 || reported.Model != "claude-opus-5" {
+		t.Errorf("provider usage = in %d out %d model %q; want 3, 4, claude-opus-5", *reported.InputTokens, *reported.OutputTokens, reported.Model)
+	}
+	if m := readManifestFile(t, dir); m.ProviderVersion != "2.1.300" {
+		t.Errorf("manifest version = %q, want startup metadata version 2.1.300", m.ProviderVersion)
 	}
 }
 
