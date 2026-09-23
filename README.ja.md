@@ -41,7 +41,7 @@
 コードレビュー、障害調査、引き継ぎ、新しいエージェントバージョンを信頼するかの判断を、
 要約ではなく観測された事実から始められます。
 
-[リリースノート](docs/releases/v0.15.3.md) ·
+[リリースノート](docs/releases/v0.15.4.md) ·
 [設計ノート](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood の証拠](docs/dogfood/2026-07-28-evidence.md) ·
@@ -63,14 +63,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.15.3_darwin_arm64.tar.gz
+archive=agentrec_0.15.4_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.15.3_darwin_arm64/agentrec version
+./agentrec_0.15.4_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.15.3
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.15.4
 ```
 
 各リリースには `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64` のアーカイブと、
@@ -327,7 +327,7 @@ agentrec が主張しないこと:
 
 ## ドキュメント
 
-- [リリースノート](docs/releases/) — リリースごとに 1 ファイル。最新は [v0.15.3](docs/releases/v0.15.3.md)
+- [リリースノート](docs/releases/) — リリースごとに 1 ファイル。最新は [v0.15.4](docs/releases/v0.15.4.md)
 - [Flight recorder の設計](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner の設計](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood の証拠 — レコーダー](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [ビューアー設計契約](DESIGN.md) · [サードパーティ通知](THIRD_PARTY_NOTICES.md)
@@ -342,7 +342,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.15.3 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.15.4 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` はアーカイブをローカルで作るだけで、何も公開しません。
