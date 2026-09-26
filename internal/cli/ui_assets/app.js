@@ -81,6 +81,7 @@
       'Session ended': '세션 종료',
       'Filter timeline': '타임라인 필터',
       'Evidence inspector': '증거 인스펙터',
+      'Loaded action {n}': '로드된 액션 {n}',
       'Currently shown in inspector': '현재 인스펙터에 표시됨',
       'Currently shown run': '현재 표시 중인 실행',
       'Select an action, change, or provider event to inspect its sanitized evidence.': '액션, 변경, 프로바이더 이벤트를 선택하면 정제된 증거를 확인할 수 있습니다.',
@@ -428,6 +429,7 @@
       'Session ended': 'セッション終了',
       'Filter timeline': 'タイムラインを絞り込む',
       'Evidence inspector': '証跡インスペクター',
+      'Loaded action {n}': '読み込み済みアクション {n}',
       'Currently shown in inspector': '現在インスペクターに表示中',
       'Currently shown run': '現在表示中の実行',
       'Select an action, change, or provider event to inspect its sanitized evidence.': 'アクション、変更、プロバイダーイベントを選択すると、サニタイズ済みの証跡を確認できます。',
@@ -775,6 +777,7 @@
       'Session ended': '会话结束',
       'Filter timeline': '筛选时间线',
       'Evidence inspector': '证据检视器',
+      'Loaded action {n}': '已加载操作 {n}',
       'Currently shown in inspector': '当前显示在检视器中',
       'Currently shown run': '当前显示的运行',
       'Select an action, change, or provider event to inspect its sanitized evidence.': '选择一个操作、变更或提供方事件即可查看其脱敏后的证据。',
@@ -2460,6 +2463,11 @@ function shortID(id) {
     if (observedPaths.length) meta.append(node('span', 'path-correlation', t('same path observed — not causal proof')));
     body.append(head, meta);
     row.append(time, rail, body);
+    const accessibleParts = [clock(action.startedAt), type, detail || action.id, action.provider || t('provider'), t(action.status || 'reported')];
+    if (elapsed) accessibleParts.push(elapsed);
+    if (action.parentId) accessibleParts.push(`↳ ${shortID(action.parentId)}`);
+    if (observedPaths.length) accessibleParts.push(t('same path observed — not causal proof'));
+    row.setAttribute('aria-label', `${t('Loaded action {n}', { n: index + 1 })} — ${accessibleParts.filter((part) => part && part !== '—').join(' · ')}`);
     return row;
   }
 

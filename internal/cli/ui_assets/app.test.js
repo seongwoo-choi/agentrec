@@ -148,6 +148,77 @@ test('timeline rows expose the one item currently shown in the inspector', async
   }
 });
 
+test('repeated action controls expose distinct loaded positions', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 3;
+  data.actions = [
+    { id: 'duplicate', type: 'file.edit', provider: 'codex', status: 'completed', input: { command: 'Update File: app.js' } },
+    { id: 'prompt', type: 'user.prompt', provider: 'codex', status: 'completed', input: { prompt: 'same prompt' } },
+    { id: 'duplicate', type: 'file.edit', provider: 'codex', status: 'completed', input: { command: 'Update File: app.js' } },
+  ];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+
+  for (const [lang, labels, conversation] of [
+    ['en', ['Loaded action 1 — file.edit · Update File: app.js · codex · completed', 'Loaded action 3 — file.edit · Update File: app.js · codex · completed'], 'You: same prompt'],
+    ['ko', ['로드된 액션 1 — file.edit · Update File: app.js · codex · 완료', '로드된 액션 3 — file.edit · Update File: app.js · codex · 완료'], '나: same prompt'],
+    ['ja', ['読み込み済みアクション 1 — file.edit · Update File: app.js · codex · 完了', '読み込み済みアクション 3 — file.edit · Update File: app.js · codex · 完了'], '自分: same prompt'],
+    ['zh-CN', ['已加载操作 1 — file.edit · Update File: app.js · codex · 已完成', '已加载操作 3 — file.edit · Update File: app.js · codex · 已完成'], '我: same prompt'],
+  ]) {
+    document.querySelector('#lang').value = lang;
+    document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    const actual = [...document.querySelectorAll('.action-row:not(.conversation-row)')].map((row) => row.getAttribute('aria-label'));
+    assert.deepEqual(actual, labels, lang);
+    assert.equal(document.querySelector('.conversation-select').getAttribute('aria-label'), conversation, `${lang} conversation`);
+  }
+});
+
+test('loaded action positions survive nonzero entry, append, and filtering', async (t) => {
+  const data = actionLinkFixture();
+  const initial = await renderFixture(data);
+  t.after(() => initial.window.close());
+  const { document } = initial.window;
+  assert.match(document.querySelector('.action-row[data-index="249"]').getAttribute('aria-label'), /^Loaded action 250 — /);
+
+  document.querySelector('#timeline .load-more').click();
+  await settle();
+  assert.match(document.querySelector('.action-row[data-index="250"]').getAttribute('aria-label'), /^Loaded action 251 — /);
+  assert.match(document.querySelector('.action-row[data-index="251"]').getAttribute('aria-label'), /^Loaded action 252 — /);
+  const search = document.querySelector('#timeline-search');
+  search.value = 'git status';
+  search.dispatchEvent(new initial.window.Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.match(document.querySelector('.action-row[data-index="251"]').getAttribute('aria-label'), /^Loaded action 252 — /);
+
+  const exact = await renderFixture({
+    ...data,
+    configure: (window) => window.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&action=action-250&actionCursor=98765`),
+  });
+  t.after(() => exact.window.close());
+  assert.match(exact.window.document.querySelector('.action-row[data-index="0"]').getAttribute('aria-label'), /^Loaded action 1 — /);
+  assert.equal(exact.window.document.querySelector('.action-row[aria-current="true"]').dataset.index, '0');
+});
+
+test('loaded action names retain recorded time, duration, and parent context', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 1;
+  data.actions = [{
+    id: 'child',
+    parentId: 'parent-1',
+    type: 'shell.exec',
+    provider: 'codex',
+    status: 'completed',
+    startedAt: '2026-09-03T00:00:01Z',
+    finishedAt: '2026-09-03T00:00:03Z',
+    input: { command: 'go test ./...' },
+  }];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const label = dom.window.document.querySelector('.action-row').getAttribute('aria-label');
+  assert.match(label, /^Loaded action 1 — \d{2}:\d{2}:\d{2} · shell\.exec · go test \.\/\.\.\. · codex · completed · 2\.00s · ↳ parent-1$/);
+});
+
 const malformedJSON = (error = new SyntaxError('Unexpected token')) => Promise.resolve({
   ok: true,
   status: 200,
