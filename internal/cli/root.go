@@ -49,6 +49,18 @@ func Run(args []string, stdout, stderr io.Writer) (exitCode int) {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
+	if args[0] == "help" {
+		if len(args) == 1 {
+			fmt.Fprint(stdout, usage)
+			return 0
+		}
+		if commandUsage := usageForHelpTopic(args[1:]); commandUsage != "" {
+			fmt.Fprint(stdout, commandUsage)
+			return 0
+		}
+		fmt.Fprintf(stderr, "unknown help topic: %q\nrun 'agentrec --help' to see the available commands\n", strings.Join(args[1:], " "))
+		return 2
+	}
 	if trailingHelpRequested(args) {
 		if commandUsage := usageForCommand(args[:len(args)-1]); commandUsage != "" {
 			fmt.Fprint(stdout, commandUsage)
@@ -154,6 +166,24 @@ func usageForCommand(command []string) string {
 			continue
 		}
 		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "Usage:\n" + strings.Join(lines, "\n") + "\n"
+}
+
+func usageForHelpTopic(topic []string) string {
+	var lines []string
+	for _, line := range strings.Split(usage, "\n") {
+		if !strings.HasPrefix(line, "  agentrec ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		prefix := usageCommandPrefix(fields[1:])
+		if slices.Equal(topic, prefix) || (len(topic) == 1 && len(prefix) > 0 && topic[0] == prefix[0]) {
+			lines = append(lines, line)
+		}
 	}
 	if len(lines) == 0 {
 		return ""

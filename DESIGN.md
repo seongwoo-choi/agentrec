@@ -355,3 +355,12 @@ On the real 375 px Viewer, scrolling a long inspector to its end and selecting t
 - Selecting a different action, change or provider event resets the inspector panel to its top after rendering the new evidence.
 - Rerendering the same selection for locale, polling or asynchronous evidence updates preserves the reader's inspector position.
 - Timeline focus, page scroll, exact links, canonical evidence and the inspector's own bounded scroll area do not change.
+
+## 41. Conventional command help is accepted
+
+Three ordinary discovery attempts—`agentrec help view`, `agentrec help list`, and `agentrec help show`—all failed with `unknown command: "help"`, even though the equivalent trailing `--help` form already works without command side effects.
+
+- `agentrec help` prints the existing root help. `agentrec help <public-command>` and nested public topics print the same command-specific usage as the existing trailing `--help` form.
+- Help remains read-only: it does not create recorder state or run the named command. Unknown topics keep the ordinary usage-error exit rather than falling back to a broader command.
+- Existing `-h`, `--help`, trailing-help, command execution, usage text and internal command visibility remain unchanged.
+- Acceptance: root, every documented public command and every documented nested command return exit 0 with empty stderr and no files under an isolated `AGENTREC_HOME`; an unknown topic returns exit 2 without stdout.
