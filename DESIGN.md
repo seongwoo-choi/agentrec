@@ -338,3 +338,12 @@ On real run `20260918T042440.242400000Z-f61066a6`, both truncated conversation r
 - The selection button retains the row's recorded speaker and bounded preview as its accessible name. The expansion button keeps section 27's localized message context and expanded state.
 - Pointer selection, native Enter/Space selection, exact evidence links, current-selection description, visible row selection, preview limits, inspector content and canonical records remain unchanged.
 - Acceptance: two real truncated rows contain no DOM or accessibility-tree button nesting; native keyboard selection updates the inspector and exact link; expansion does not change selection; desktop and narrow layouts retain visible focus with no clipping, overlap, or horizontal overflow.
+
+## 39. Repeated action controls expose their loaded position
+
+On the real 106-action timeline, eight `app.js` edits and seven `app.test.js` edits produced identical accessible button names. A screen-reader button list therefore could not distinguish fifteen controls even though each selected different recorded evidence.
+
+- Each non-conversation action control prefixes its existing accessible name with its one-based position in the loaded action stream.
+- The label says **loaded action**, not a record-wide ordinal: a deep link may begin at a nonzero byte cursor, filtering may hide rows, and more pages may append later.
+- Visible copy, row order, exact links, IDs, byte cursors, selection, inspector evidence and stored records do not change.
+- Acceptance: repeated actions have distinct localized accessible names across EN/KO/JA/ZH, and their loaded positions remain stable through filtering, appending and locale rerenders.
