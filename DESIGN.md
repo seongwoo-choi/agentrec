@@ -329,3 +329,12 @@ Two executable Viewer reproductions showed the comparison overview failure fallb
 - An unavailable runner is not selectable and keeps comparison execution disabled; an empty capability set is also non-runnable.
 - The existing visible comparison error remains. Valid overview responses, canonical evidence, server authorization, copyable command syntax, and comparison job polling remain unchanged.
 - Acceptance: failure after a valid unavailable-runner response preserves and disables that runner; failure or a delayed successful overview after starting a newer job preserves that job; repeated failure before any valid response renders no invented runners and keeps execution disabled; reversed initialization/reopen completion keeps the newest response.
+
+## 38. Conversation selection and expansion are separate controls
+
+On real run `20260918T042440.242400000Z-f61066a6`, both truncated conversation rows exposed their **Show more** button as a descendant of the row's synthetic button in Chromium's accessibility tree. A keyboard or assistive-technology user therefore encountered an interactive button nested inside another button for both the operator prompt and provider reply.
+
+- Each conversation row exposes one native selection button controlling the inspector and a separate native expansion button. Neither control contains the other.
+- The selection button retains the row's recorded speaker and bounded preview as its accessible name. The expansion button keeps section 27's localized message context and expanded state.
+- Pointer selection, native Enter/Space selection, exact evidence links, current-selection description, visible row selection, preview limits, inspector content and canonical records remain unchanged.
+- Acceptance: two real truncated rows contain no DOM or accessibility-tree button nesting; native keyboard selection updates the inspector and exact link; expansion does not change selection; desktop and narrow layouts retain visible focus with no clipping, overlap, or horizontal overflow.

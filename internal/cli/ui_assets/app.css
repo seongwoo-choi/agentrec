@@ -276,6 +276,10 @@ html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
 .event-row .action-dot { background: var(--quiet); }
 /* conversation rows: the operator's prompt and the assistant's reply as quote blocks, no dot-and-type layout */
 .conversation-row { grid-template-columns: 76px minmax(0,1fr); }
+.conversation-select { position: absolute; inset: 0; z-index: 1; width: 100%; border: 0; border-radius: 8px; background: transparent; padding: 0; cursor: pointer; }
+.conversation-row > .action-time, .conversation-row > .speech-body { position: relative; z-index: 2; }
+.conversation-row .show-more { position: relative; z-index: 3; pointer-events: auto; }
+.conversation-row:has(> .conversation-select:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .speech-body { min-width: 0; padding: 8px 12px 10px 4px; }
 .speaker { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .speech { border-left: 3px solid var(--border); background: var(--surface); border-radius: 0 8px 8px 0; padding: 8px 12px; }

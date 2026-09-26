@@ -1550,7 +1550,7 @@ function shortID(id) {
           revealActionRow(row);
           selectItem(row, { kind: 'action', value: state.streams.actions.items[index] });
           row.scrollIntoView({ block: 'center' });
-          row.focus({ preventScroll: true });
+          timelineRowControl(row).focus({ preventScroll: true });
         }
       }
       if (changedFile) {
@@ -2329,7 +2329,7 @@ function shortID(id) {
     renderTail(streamName);
     if (focusNew) {
       const target = first || timeline.querySelector('.stream-tail .load-more:not(.hidden)');
-      if (target) target.focus();
+      if (target) timelineRowControl(target).focus();
     }
   }
 
@@ -2348,6 +2348,16 @@ function shortID(id) {
       }
     });
     return row;
+  }
+
+  function timelineRowControl(row) {
+    return row.querySelector(':scope > .conversation-select') || row;
+  }
+
+  function markTimelineRowCurrent(row) {
+    const control = timelineRowControl(row);
+    control.setAttribute('aria-current', 'true');
+    control.setAttribute('aria-description', t('Currently shown in inspector'));
   }
 
   // speechBlock shows a capped two-line preview that expands in place up to a cap; the inspector carries the full text.
@@ -2396,7 +2406,7 @@ function shortID(id) {
     const generation = state.loadGeneration;
     const runID = state.run.run.id;
     const cursor = state.streams.actions.pageCursors?.[index];
-    const row = timelineRow(`action-row${speech === null ? '' : ` conversation-row ${family}`}`, () => {
+    const select = () => {
       const url = new URL(location.href);
       if (generation !== state.loadGeneration || runID !== state.run?.run.id || runID !== url.searchParams.get('run')) return;
       if (action.id && Number.isSafeInteger(cursor) && cursor >= 0) {
@@ -2408,7 +2418,10 @@ function shortID(id) {
         if (url.href !== location.href) history.pushState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
       }
       selectItem(row, { kind: 'action', value: action });
-    });
+    };
+    const row = speech === null
+      ? timelineRow('action-row', select)
+      : node('article', `action-row conversation-row ${family}`);
     row.style.setProperty('--depth', String(actionDepth(action, byID)));
     row.dataset.index = String(index);
     const time = node('div', 'action-time', clock(action.startedAt));
@@ -2423,8 +2436,14 @@ function shortID(id) {
       const total = state.run?.promptCount || 0;
       const rank = type === 'user.prompt' ? byID?.promptRank?.get(action) : undefined;
       if (rank && total > 1) speaker = `${speaker} · ${t('{n} of {total}', { n: rank, total })}`;
+      const selectButton = node('button', 'conversation-select');
+      const accessiblePreview = Array.from(speech).slice(0, 180).join('');
+      selectButton.type = 'button';
+      selectButton.setAttribute('aria-controls', 'inspector');
+      selectButton.setAttribute('aria-label', `${speaker}: ${accessiblePreview}`);
+      row.addEventListener('click', select);
       body.append(node('div', 'speaker', speaker), speechBlock(speech, speaker));
-      row.append(time, body);
+      row.append(selectButton, time, body);
       return row;
     }
     const rail = node('div', 'action-rail');
@@ -2656,7 +2675,9 @@ function shortID(id) {
     const streamName = state.mode;
     const runID = state.run.run.id;
     const sameStream = timeline.dataset.stream === streamName && timeline.dataset.runId === runID;
-    const focusedIndex = sameStream && document.activeElement?.classList.contains('action-row') ? document.activeElement.dataset.index : undefined;
+    const focusedRow = sameStream ? document.activeElement?.closest?.('.action-row') : null;
+    const focusedIndex = focusedRow ? focusedRow.dataset.index : undefined;
+    const focusedConversationControl = focusedRow && document.activeElement?.classList.contains('show-more') ? 'expand' : 'select';
     const focusedGroup = sameStream && document.activeElement?.classList.contains('action-group-summary') ? document.activeElement.dataset.groupId : undefined;
     const selectedKind = { actions: 'action', changes: 'change', events: 'event' }[streamName];
     const selected = sameStream && state.selected?.kind === selectedKind ? state.selected : null;
@@ -2694,8 +2715,7 @@ function shortID(id) {
     if (selectedRow) {
       revealGroupedRow(selectedRow);
       selectedRow.classList.add('selected');
-      selectedRow.setAttribute('aria-current', 'true');
-      selectedRow.setAttribute('aria-description', t('Currently shown in inspector'));
+      markTimelineRowCurrent(selectedRow);
       state.selected = selected;
     } else {
       state.selected = null;
@@ -2705,7 +2725,8 @@ function shortID(id) {
       const row = timeline.querySelector(`.action-row[data-index="${focusedIndex}"]`);
       if (row) {
         revealGroupedRow(row);
-        row.focus({ preventScroll: true });
+        const control = focusedConversationControl === 'expand' ? row.querySelector('.show-more') : timelineRowControl(row);
+        (control || timelineRowControl(row)).focus({ preventScroll: true });
       }
     } else if (focusedGroup !== undefined) {
       const summary = [...timeline.querySelectorAll('.action-group-summary')].find((item) => item.dataset.groupId === focusedGroup);
@@ -2717,13 +2738,13 @@ function shortID(id) {
   function selectItem(row, selected) {
     document.querySelectorAll('.action-row.selected').forEach((el) => {
       el.classList.remove('selected');
-      el.removeAttribute('aria-current');
-      el.removeAttribute('aria-description');
+      const control = timelineRowControl(el);
+      control.removeAttribute('aria-current');
+      control.removeAttribute('aria-description');
     });
     revealGroupedRow(row);
     row.classList.add('selected');
-    row.setAttribute('aria-current', 'true');
-    row.setAttribute('aria-description', t('Currently shown in inspector'));
+    markTimelineRowCurrent(row);
     selected.generation = state.loadGeneration;
     selected.runID = state.run?.run.id;
     state.selected = selected;

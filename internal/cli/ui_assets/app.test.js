@@ -5539,6 +5539,115 @@ test('the run heading and sidebar preserve the complete loaded title', async (t)
 
 // --- Truncated conversation controls keep their row context (DESIGN.md section 27) ---
 
+test('conversation rows expose selection and expansion as sibling buttons', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [
+    { id: 'p1', type: 'user.prompt', provider: 'codex', status: 'completed', input: { prompt: 'first line\nsecond line\nthird line' } },
+    { id: 'm1', type: 'agent.message', provider: 'codex', status: 'completed', input: { text: 'reply line\nsecond line\nthird line' } },
+  ];
+  data.details.actionCount = 2;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+
+  for (const row of d.querySelectorAll('.conversation-row')) {
+    const select = row.querySelector(':scope > .conversation-select');
+    const expand = row.querySelector('.show-more');
+    assert.equal(select?.tagName, 'BUTTON', 'the row has one native selection button');
+    assert.equal(select?.getAttribute('aria-controls'), 'inspector');
+    assert.equal(expand?.closest('[role="button"]'), null, 'the expansion button is not nested in another button');
+    assert.equal(select?.contains(expand), false, 'selection and expansion are sibling controls');
+  }
+  const [first, second] = d.querySelectorAll('.conversation-row');
+  second.querySelector('.conversation-select').click();
+  assert.equal(second.classList.contains('selected'), true);
+  assert.equal(second.querySelector('.conversation-select').getAttribute('aria-current'), 'true');
+  assert.equal(second.querySelector('.conversation-select').getAttribute('aria-description'), 'Currently shown in inspector');
+  assert.match(dom.window.location.search, /action=m1/);
+  const beforeExpand = {
+    href: dom.window.location.href,
+    historyLength: dom.window.history.length,
+    inspector: d.querySelector('#inspector').textContent,
+  };
+  first.querySelector('.show-more').click();
+  assert.equal(first.classList.contains('selected'), false, 'expansion does not select its row');
+  assert.equal(second.classList.contains('selected'), true, 'expansion preserves the selected evidence');
+  assert.equal(second.querySelector('.conversation-select').getAttribute('aria-current'), 'true');
+  assert.equal(dom.window.location.href, beforeExpand.href);
+  assert.equal(dom.window.history.length, beforeExpand.historyLength);
+  assert.equal(d.querySelector('#inspector').textContent, beforeExpand.inspector);
+});
+
+test('exact conversation links and locale rerenders restore the selection button focus', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [
+    { id: 'p1', type: 'user.prompt', provider: 'codex', status: 'completed', input: { prompt: 'first line\nsecond line\nthird line' } },
+    { id: 'm1', type: 'agent.message', provider: 'codex', status: 'completed', input: { text: 'reply line\nsecond line\nthird line' } },
+  ];
+  data.details.actionCount = 2;
+  const first = await renderFixture(data);
+  t.after(() => first.window.close());
+  first.window.document.querySelectorAll('.conversation-select')[1].click();
+  const exactURL = first.window.location.href;
+
+  const dom = await renderFixture({ ...data, configure: (w) => w.history.replaceState(null, '', exactURL) });
+  t.after(() => dom.window.close());
+  const { document, Event } = dom.window;
+  let expectedDescription = 'Currently shown in inspector';
+  const assertCurrent = (message) => {
+    const current = document.querySelector('.conversation-row.selected > .conversation-select');
+    assert.equal(document.activeElement, current, `${message} focuses the native selection control`);
+    assert.equal(current.getAttribute('aria-current'), 'true');
+    assert.equal(current.getAttribute('aria-description'), expectedDescription);
+    assert.equal(dom.window.location.href, exactURL);
+    assert.match(document.querySelector('#inspector').textContent, /reply line/);
+  };
+  assertCurrent('exact restoration');
+
+  document.querySelector('#lang').value = 'ko';
+  document.querySelector('#lang').dispatchEvent(new Event('change', { bubbles: true }));
+  expectedDescription = '현재 인스펙터에 표시됨';
+  assertCurrent('locale rerender');
+
+  const toggle = document.querySelector('#all-actions-toggle');
+  toggle.checked = true;
+  toggle.dispatchEvent(new Event('change', { bubbles: true }));
+  assertCurrent('All-actions rerender');
+  toggle.checked = false;
+  toggle.dispatchEvent(new Event('change', { bubbles: true }));
+  assertCurrent('Reading-view rerender');
+
+  const search = document.querySelector('#timeline-search');
+  search.value = 'reply';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  assertCurrent('search rerender');
+  const filter = [...document.querySelectorAll('#type-filters button')].find((button) => button.dataset.type === 'user.prompt');
+  filter.click();
+  assertCurrent('type-filter rerender');
+
+  document.querySelector('#timeline-tab-events').click();
+  await settle();
+  dom.window.history.back();
+  await settle();
+  assertCurrent('history restoration');
+});
+
+test('conversation selection names preserve Unicode at their preview boundary', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ id: 'p1', type: 'user.prompt', provider: 'codex', status: 'completed', input: { prompt: `${'a'.repeat(179)}😀tail` } }];
+  data.details.actionCount = 1;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  const name = dom.window.document.querySelector('.conversation-select').getAttribute('aria-label');
+  assert.equal(Array.from(name).at(-1), '😀');
+});
+
+test('expanded conversation text remains pointer-interactive above the row selection control', () => {
+  assert.doesNotMatch(css, /\.conversation-row > \.action-time, \.conversation-row > \.speech-body\s*\{[^}]*pointer-events:\s*none/);
+});
+
 test('conversation expand controls expose localized row context and expanded state', async (t) => {
   const cases = [
     ['en', ['Show more — You · 1 of 2', 'Show more — You · 2 of 2', 'Show more — codex'], ['Show less — You · 1 of 2', 'Show less — You · 2 of 2', 'Show less — codex'], 'Show more', 'Show less'],
@@ -5583,6 +5692,7 @@ test('conversation expand context localizes after a run re-render', async (t) =>
   const { document, Event } = dom.window;
   const oldControl = document.querySelector('.conversation-row .show-more');
   oldControl.click();
+  oldControl.focus();
   document.querySelector('#lang').value = 'ko';
   document.querySelector('#lang').dispatchEvent(new Event('change', { bubbles: true }));
   const current = document.querySelector('.conversation-row .show-more');
@@ -5590,6 +5700,7 @@ test('conversation expand context localizes after a run re-render', async (t) =>
   assert.equal(current.textContent, '더 보기');
   assert.equal(current.getAttribute('aria-label'), '더 보기 — 나');
   assert.equal(current.getAttribute('aria-expanded'), 'false');
+  assert.equal(document.activeElement, current, 'the corresponding disclosure retains focus across the rerender');
 });
 
 // --- Notification-shaped prompts do not assert an operator (DESIGN.md section 22) ---
