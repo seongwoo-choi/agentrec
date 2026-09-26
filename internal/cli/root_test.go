@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -105,6 +106,86 @@ func TestRunHelpListsCoreCommands(t *testing.T) {
 		if stderr.Len() != 0 {
 			t.Errorf("Run(%q) stderr = %q, want empty", args, stderr.String())
 		}
+	}
+}
+
+func TestRunHelpCommandUsesDocumentedTopicsWithoutSideEffects(t *testing.T) {
+	topics := [][]string{
+		{},
+		{"trace"}, {"shadow"}, {"verify"}, {"list"}, {"show"}, {"changes"}, {"events"},
+		{"view"}, {"setup"}, {"start"}, {"stop"}, {"status"}, {"trash"}, {"hooks"}, {"version"},
+		{"shadow", "run"}, {"shadow", "show"}, {"hooks", "print"},
+		{"trash", "restore"}, {"trash", "sweep"}, {"trash", "empty"},
+	}
+	for _, topic := range topics {
+		name := "root"
+		if len(topic) > 0 {
+			name = strings.Join(topic, "/")
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("AGENTREC_HOME", home)
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := Run(append([]string{"help"}, topic...), &stdout, &stderr)
+
+			if exitCode != 0 {
+				t.Errorf("exit code = %d, want 0", exitCode)
+			}
+			want := usage
+			if len(topic) > 0 {
+				var trailingStdout bytes.Buffer
+				var trailingStderr bytes.Buffer
+				trailingArgs := append(append([]string(nil), topic...), "--help")
+				if trailingExit := Run(trailingArgs, &trailingStdout, &trailingStderr); trailingExit != 0 {
+					t.Fatalf("trailing help exit code = %d, want 0", trailingExit)
+				}
+				if trailingStderr.Len() != 0 {
+					t.Fatalf("trailing help stderr = %q, want empty", trailingStderr.String())
+				}
+				want = trailingStdout.String()
+			}
+			if stdout.String() != want {
+				t.Errorf("stdout = %q, want exact existing help %q", stdout.String(), want)
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("stderr = %q, want empty", stderr.String())
+			}
+			entries, err := os.ReadDir(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("help created files under AGENTREC_HOME: %v", entries)
+			}
+		})
+	}
+
+	for _, topic := range [][]string{
+		{"unknown"},
+		{"view", "nonsense"},
+		{"trash", "sweep", "nonsense"},
+		{"shadow", "show", "nonsense"},
+	} {
+		t.Run("unknown/"+strings.Join(topic, "/"), func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := Run(append([]string{"help"}, topic...), &stdout, &stderr)
+
+			if exitCode != 2 {
+				t.Errorf("exit code = %d, want 2", exitCode)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			want := fmt.Sprintf("unknown help topic: %q", strings.Join(topic, " "))
+			if !strings.Contains(stderr.String(), want) {
+				t.Errorf("stderr = %q, want %q", stderr.String(), want)
+			}
+		})
 	}
 }
 
