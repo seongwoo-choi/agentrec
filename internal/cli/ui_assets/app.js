@@ -2744,6 +2744,7 @@ function shortID(id) {
   }
 
   function selectItem(row, selected) {
+    const changed = state.selected?.kind !== selected.kind || state.selected?.value !== selected.value;
     document.querySelectorAll('.action-row.selected').forEach((el) => {
       el.classList.remove('selected');
       const control = timelineRowControl(el);
@@ -2757,6 +2758,7 @@ function shortID(id) {
     selected.runID = state.run?.run.id;
     state.selected = selected;
     renderInspector();
+    if (changed) $('inspector').closest('.inspector-panel').scrollTop = 0;
     const label = selected.kind === 'change' || selected.kind === 'live' ? selected.value.path : (selected.kind === 'event' ? eventType(selected.value) : (selected.value.type || selected.kind));
     announceInspector(t('{kind} selected: {label}', { kind: selected.kind === 'live' ? 'change' : selected.kind, label }));
   }

@@ -347,3 +347,11 @@ On the real 106-action timeline, eight `app.js` edits and seven `app.test.js` ed
 - The label says **loaded action**, not a record-wide ordinal: a deep link may begin at a nonzero byte cursor, filtering may hide rows, and more pages may append later.
 - Visible copy, row order, exact links, IDs, byte cursors, selection, inspector evidence and stored records do not change.
 - Acceptance: repeated actions have distinct localized accessible names across EN/KO/JA/ZH, and their loaded positions remain stable through filtering, appending and locale rerenders.
+
+## 40. A new timeline selection starts its evidence at the top
+
+On the real 375 px Viewer, scrolling a long inspector to its end and selecting two later actions left the new titles 2,138 px and 2,118 px above the inspector viewport. The panel retained stale offsets of 2,193 px and 2,173 px, so the identity and attribution of the newly selected evidence were not visible.
+
+- Selecting a different action, change or provider event resets the inspector panel to its top after rendering the new evidence.
+- Rerendering the same selection for locale, polling or asynchronous evidence updates preserves the reader's inspector position.
+- Timeline focus, page scroll, exact links, canonical evidence and the inspector's own bounded scroll area do not change.

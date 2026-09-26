@@ -148,6 +148,51 @@ test('timeline rows expose the one item currently shown in the inspector', async
   }
 });
 
+test('a different timeline selection starts its inspector at the top without resetting same-selection rerenders', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 2;
+  data.details.eventCount = 2;
+  const dom = await renderFixture({
+    ...data,
+    actions: [
+      { id: 'action-1', type: 'tool.call', status: 'success', input: { command: 'first' } },
+      { id: 'action-2', type: 'shell.exec', status: 'success', input: { command: 'second' } },
+    ],
+    changes: [
+      { path: 'first.go', kind: 'modified', tracked: false },
+      { path: 'second.go', kind: 'modified', tracked: false },
+    ],
+    events: [
+      { hook_event_name: 'PreToolUse', tool_name: 'Read' },
+      { hook_event_name: 'Stop', stop_hook_active: false },
+    ],
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const panel = document.querySelector('.inspector-panel');
+
+  for (const [mode, selector, activation, title] of [
+    ['actions', '.action-row', 'Enter', 'shell.exec'],
+    ['changes', '.change-row', ' ', 'second.go'],
+    ['events', '.event-row', 'click', 'Stop'],
+  ]) {
+    document.querySelector(`#timeline-tab-${mode}`).click();
+    await settle();
+    const rows = [...document.querySelectorAll(selector)];
+    rows[0].click();
+    panel.scrollTop = 123;
+    if (activation === 'click') rows[1].click();
+    else rows[1].dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: activation, bubbles: true, cancelable: true }));
+    assert.equal(panel.scrollTop, 0, `${mode} evidence starts with its identity visible`);
+    assert.equal(document.querySelector('.inspector-title').textContent, title, `${mode} renders the newly selected identity`);
+
+    panel.scrollTop = 77;
+    document.querySelector('#lang').value = document.querySelector('#lang').value === 'ko' ? 'en' : 'ko';
+    document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.equal(panel.scrollTop, 77, `${mode} same-evidence rerender preserves reading position`);
+  }
+});
+
 test('repeated action controls expose distinct loaded positions', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.actionCount = 3;
@@ -762,6 +807,8 @@ test('copy evidence link rejection before tracked patch retains fallback focus a
   const input = d.querySelector('.evidence-link-url');
   assert.ok(input);
   input.setSelectionRange(7, 20, 'backward');
+  const panel = d.querySelector('.inspector-panel');
+  panel.scrollTop = 91;
   f.releasePatch();
   await settle();
   assert.match(d.querySelector('.diff-patch').textContent, /retained patch/);
@@ -771,6 +818,7 @@ test('copy evidence link rejection before tracked patch retains fallback focus a
   assert.equal(input.selectionEnd, 20);
   assert.equal(input.selectionDirection, 'backward');
   assert.equal(input.readOnly, true);
+  assert.equal(panel.scrollTop, 91, 'same-selection patch completion preserves inspector position');
   assert.match(d.querySelector('.evidence-link-status').textContent, /Clipboard unavailable or denied/);
   assert.equal(d.querySelectorAll('.evidence-link').length, 1);
 });
@@ -4445,6 +4493,8 @@ test('live Folder view clears a disappearing selection and never invents stored 
   const row = d.querySelector('.change-row[data-path="src/live.js"]');
   row.click();
   row.focus();
+  const panel = d.querySelector('.inspector-panel');
+  panel.scrollTop = 88;
   assert.equal(row.getAttribute('aria-current'), 'true');
   assert.equal(d.querySelector('.copy-evidence-link'), null);
   assert.equal(d.querySelector('.diff-patch'), null);
@@ -4455,6 +4505,7 @@ test('live Folder view clears a disappearing selection and never invents stored 
   assert.equal(d.querySelector('.change-row[data-path="src/live.js"]').getAttribute('aria-current'), 'true');
   assert.equal(d.querySelectorAll('.change-row[aria-current="true"]').length, 1);
   assert.equal(d.activeElement, d.querySelector('.change-row[data-path="src/live.js"]'));
+  assert.equal(panel.scrollTop, 88, 'same-path live polling preserves inspector position');
   liveFiles = [{ path: 'src/peer.js', status: '??' }];
   await tick();
   await settle();
