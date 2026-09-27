@@ -532,6 +532,36 @@ for (const [stream, countField, errorSubject, emptyCopy, validEmptyCopy] of [
   });
 }
 
+test('delete confirmation identifies its question to both answer controls', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event, KeyboardEvent } = dom.window;
+
+  document.querySelector('#delete-run').click();
+
+  let question = document.querySelector('#delete-confirm-question');
+  let answers = [...document.querySelectorAll('#run-actions button')];
+  assert.equal(question.textContent, 'Delete this run?');
+  assert.deepEqual(answers.map((button) => button.getAttribute('aria-describedby')), [question.id, question.id]);
+
+  document.querySelector('#lang').value = 'ko';
+  document.querySelector('#lang').dispatchEvent(new Event('change', { bubbles: true }));
+  question = document.querySelector('#delete-confirm-question');
+  answers = [...document.querySelectorAll('#run-actions button')];
+  assert.equal(question.textContent, '이 실행을 삭제하시겠습니까?');
+  assert.deepEqual(answers.map((button) => button.getAttribute('aria-describedby')), [question.id, question.id]);
+
+  answers[1].click();
+  assert.equal(document.querySelector('#delete-confirm-question'), null);
+  assert.equal(document.activeElement, document.querySelector('#delete-run'));
+
+  document.querySelector('#delete-run').click();
+  document.querySelector('#run-actions').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(document.querySelector('#delete-confirm-question'), null);
+  assert.equal(document.activeElement, document.querySelector('#delete-run'));
+});
+
 test('successful malformed mutation JSON does not report a completed delete', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.intercept = (url, init) => init.method === 'DELETE' ? malformedJSON() : null;
