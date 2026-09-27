@@ -406,3 +406,11 @@ With one readable run and one unreadable run-shaped directory, `show latest` ref
 - Every CLI path that resolves `latest` uses the same fail-closed rule: if any run is unreadable, the latest run cannot be established and the command requires an exact run ID.
 - An unreadable store causes `verify latest` to run no checks and publish no later-verification pointer or result. Explicit `verify <run-id>` remains available and unchanged.
 - Acceptance: the isolated unreadable-store regression returns a nonzero exit with the existing diagnostic, no stdout, and no mutation under the older readable run.
+
+## 47. Empty evidence pages remain valid collections
+
+A valid run with zero repository changes returned `"items": null` on seven repeated API reads. The Viewer rejects non-array stream collections by design, so three real browser loads showed a red response-contract error instead of the ordinary empty Changes state.
+
+- Every successful action, change and provider-event page represents `items` as a JSON array, including an empty first or terminal page. Missing and `null` collections remain invalid and visible rather than being normalized in the browser.
+- Stored evidence, stream totals, cursors, unavailable-change diagnostics and the Viewer's fail-closed response validation remain unchanged.
+- Acceptance: a zero-change page serializes as `"items":[]`; the exact-source Viewer loads it without an error toast and shows the existing empty Changes state.

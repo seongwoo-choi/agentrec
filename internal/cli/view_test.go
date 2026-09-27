@@ -444,6 +444,31 @@ func TestViewRunRemainsReadableWhenChangeListEvidenceIsIncomplete(t *testing.T) 
 	}
 }
 
+func TestViewChangePageSerializesEmptyItemsAsArray(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		snapshot *viewSnapshot
+		cursor   int64
+	}{
+		{name: "empty first page", snapshot: &viewSnapshot{}},
+		{name: "empty terminal page", snapshot: &viewSnapshot{changes: []viewChange{{Path: "a.txt"}}}, cursor: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			page, err := readViewChangePage(tc.snapshot, tc.cursor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(page)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(raw), `"items":[]`) {
+				t.Fatalf("empty change page = %s, want items array", raw)
+			}
+		})
+	}
+}
+
 func TestViewPatchPagesPreserveUTF8Boundaries(t *testing.T) {
 	patch := strings.Repeat("x", viewPageBytes-1) + "가rest"
 	path := filepath.Join(t.TempDir(), "tracked.patch")
