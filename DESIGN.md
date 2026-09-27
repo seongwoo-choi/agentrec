@@ -364,3 +364,11 @@ Three ordinary discovery attempts—`agentrec help view`, `agentrec help list`, 
 - Help remains read-only: it does not create recorder state or run the named command. Unknown topics keep the ordinary usage-error exit rather than falling back to a broader command.
 - Existing `-h`, `--help`, trailing-help, command execution, usage text and internal command visibility remain unchanged.
 - Acceptance: root, every documented public command and every documented nested command return exit 0 with empty stderr and no files under an isolated `AGENTREC_HOME`; an unknown topic returns exit 2 without stdout.
+
+## 42. Shared run comparisons open with focus inside the modal
+
+Opening a saved comparison URL twice in real Chromium left focus outside its visible `aria-modal` sheet. The first Tab then moved through the obscured page rather than the comparison, so the sheet's existing Escape and focus-loop handling never received the key event.
+
+- A comparison restored from `#compare=<run-a>,<run-b>` focuses its stable close control as the two bundles begin loading. Ordinary **Compare with…** opens keep focusing the run picker.
+- Existing close/hash restoration behavior, comparison evidence, loading/error behavior and visible layout remain unchanged.
+- Acceptance: initial load and reload of a valid comparison link both place focus inside the modal; Tab and Shift+Tab remain inside it; Escape closes it without changing the compared evidence.

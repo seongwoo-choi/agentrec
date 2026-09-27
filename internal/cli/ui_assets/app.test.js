@@ -2961,6 +2961,54 @@ test('comparison startup canonicalizes its primary run', async (t) => {
   assert.equal(new URLSearchParams(dom.window.location.search).get('run'), 'compare-a');
   assert.equal(dom.window.location.hash, '#compare=compare-a,compare-b');
   assert.equal(dom.window.document.querySelector('#diff-panel').classList.contains('hidden'), false);
+  assert.equal(dom.window.document.activeElement.id, 'diff-close');
+  assert.equal(dom.window.document.querySelector('#diff-panel').contains(dom.window.document.activeElement), true);
+});
+
+test('shared comparison focuses the modal before bundle loading completes', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const details = data.details;
+  let releaseChanges;
+  let changesRequests = 0;
+  data.list.runs = ['compare-a', 'compare-b'].map((id) => ({ ...data.list.runs[0], id }));
+  data.list.total = data.list.runs.length;
+  data.details = (id) => ({ ...details, run: { ...details.run, id } });
+  data.intercept = (url) => {
+    if (!url.pathname.endsWith('/changes')) return null;
+    changesRequests += 1;
+    if (changesRequests !== 2) return null;
+    return new Promise((resolve) => {
+      releaseChanges = () => resolve(response({ items: [], nextCursor: null, total: 0, status: 'available' }));
+    });
+  };
+  data.configure = (window) => window.history.replaceState(null, '', '/?run=compare-a#compare=compare-a,compare-b');
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  assert.ok(releaseChanges, 'comparison changes request is pending');
+  assert.equal(dom.window.document.activeElement.id, 'diff-close', JSON.stringify({
+    activeTag: dom.window.document.activeElement.tagName,
+    panelClass: dom.window.document.querySelector('#diff-panel').className,
+    resultClass: dom.window.document.querySelector('#diff-result').className,
+    resultText: dom.window.document.querySelector('#diff-result').textContent,
+  }));
+  assert.equal(dom.window.document.querySelector('#diff-panel').contains(dom.window.document.activeElement), true);
+  releaseChanges();
+  await settle();
+  assert.equal(dom.window.document.activeElement.id, 'diff-close');
+});
+
+test('ordinary comparison opens with focus in the run picker', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+
+  dom.window.document.querySelector('#compare-with').click();
+  await settle();
+
+  assert.equal(dom.window.document.activeElement.id, 'diff-search');
+  assert.equal(dom.window.document.querySelector('#diff-panel').contains(dom.window.document.activeElement), true);
 });
 
 test('comparison rejects stream pages without items instead of rendering empty evidence', async (t) => {
