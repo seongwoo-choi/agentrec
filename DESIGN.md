@@ -422,3 +422,11 @@ Two isolated hook-driven sessions forced the final manifest installation to fail
 - `agentrec session serve` returns the ordinary failure code when final manifest installation fails. The existing diagnostic and best-effort close-out remain: available repository evidence, verification and report output are still attempted and preserved.
 - Hook acknowledgements, session reason selection, stored provider evidence and successful session exits remain unchanged. A close-out or verification failure continues to fail independently.
 - Acceptance: two isolated reproductions retain their finalization diagnostic and exit 1; a normal finalized session still writes its ending and exits 0.
+
+## 49. Status does not hide an invalid trash root
+
+Two isolated source-built CLI reproductions placed a symlink at the configured trash path. `agentrec trash` refused it with `cli: trash is not a directory`, while `agentrec status` exited 0 and omitted the trash line, making the same invalid store boundary look healthy.
+
+- `agentrec status` inspects the trash through the same root validation as trash listing. A missing trash remains an ordinary empty state; an invalid or unreadable trash emits the existing diagnostic and returns the ordinary failure code.
+- Valid trash counts and disk-usage output, run-store status, Viewer status, hook descriptions and all mutation behavior remain unchanged.
+- Acceptance: a symlinked trash root makes both `status` and `trash` exit 1 with the invalid-trash diagnostic; an absent trash keeps `status` successful and quiet; a valid nonempty trash retains its count and size line.
