@@ -209,6 +209,122 @@ func readActionsFile(t *testing.T, dir string) []action.Action {
 	return actions
 }
 
+func TestSessionRecorderDrainsAcknowledgedDeliveriesAfterSessionEnd(t *testing.T) {
+	root := t.TempDir()
+	cwd := t.TempDir()
+	b, err := storage.Create(root, "run-drain", storage.Manifest{
+		Provider: "claude", CWD: cwd, StartedAt: time.Now(),
+		Mode: storage.ModeSession, SessionID: "session-drain",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &sessionRecorder{
+		bundle:       b,
+		sessionID:    "session-drain",
+		provider:     "claude",
+		cwd:          cwd,
+		canonicalCWD: cwd,
+		repoRoot:     cwd,
+		stderr:       io.Discard,
+	}
+	inbox := &sessionInbox{queue: make(chan delivery, 2)}
+	now := time.Now()
+	inbox.queue <- delivery{raw: sessionEvent(t, "session-drain", cwd, hookSessionEnd, nil), at: now}
+	inbox.queue <- delivery{raw: sessionEvent(t, "session-drain", cwd, hookPostToolUse, map[string]any{
+		"tool_name": "Bash", "tool_use_id": "acknowledged-late",
+	}), at: now.Add(time.Millisecond)}
+
+	if got := rec.drain(inbox); got != reasonSessionEnded {
+		t.Fatalf("reason = %q, want %q", got, reasonSessionEnded)
+	}
+	actions := readActionsFile(t, b.Dir())
+	if len(actions) != 1 || actions[0].ID != "acknowledged-late" {
+		t.Fatalf("actions = %+v, want acknowledged-late to be filed", actions)
+	}
+}
+
+func TestSessionServeFilesSocketAcknowledgedDeliveryAfterSessionEnd(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "session-queued-after-end"
+
+	socket, done, stderr := serveInProcess(t, sessionID, repo)
+	connect := func() *net.UnixConn {
+		t.Helper()
+		conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: socket, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	}
+	queue := func(conn *net.UnixConn, payload []byte) {
+		t.Helper()
+		if _, err := conn.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.CloseWrite(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ack := func(conn *net.UnixConn) string {
+		t.Helper()
+		if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	// The first accepted connection holds the serial socket reader while the
+	// end and late action become pending behind it in kernel accept order.
+	gate := connect()
+	end := connect()
+	late := connect()
+	queue(end, sessionEvent(t, sessionID, repo, hookSessionEnd, nil))
+	queue(late, sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{
+		"tool_name": "Bash", "tool_use_id": "late-action",
+	}))
+	queue(gate, sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{
+		"tool_name": "Read", "tool_use_id": "gate-action", "tool_response": strings.Repeat("x", 256_000),
+	}))
+
+	for name, got := range map[string]string{
+		"gate": ack(gate), "end": ack(end), "late": ack(late),
+	} {
+		if got != hookAck {
+			t.Fatalf("%s acknowledgement = %q, want %q", name, got, hookAck)
+		}
+	}
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	dir := onlyRunDir(t, root)
+	m := readManifestFile(t, dir)
+	if m.ExitReason != reasonSessionEnded || m.WarningCount != 0 {
+		t.Fatalf("manifest reason/warnings = %q/%d, want %q/0", m.ExitReason, m.WarningCount, reasonSessionEnded)
+	}
+	actions := readActionsFile(t, dir)
+	if len(actions) != 2 || actions[0].ID != "gate-action" || actions[1].ID != "late-action" {
+		t.Fatalf("action ids = %+v, want gate-action then late-action", actions)
+	}
+	events, err := os.ReadFile(filepath.Join(dir, "provider-events.sanitized.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gateAt, endAt, lateAt := bytes.Index(events, []byte(`"tool_use_id":"gate-action"`)), bytes.Index(events, []byte(`"hook_event_name":"SessionEnd"`)), bytes.Index(events, []byte(`"tool_use_id":"late-action"`)); gateAt < 0 || endAt <= gateAt || lateAt <= endAt {
+		t.Fatalf("provider event order is not gate, SessionEnd, late: %s", events)
+	}
+	if _, err := os.Stat(socket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("socket after exit: %v, want it gone", err)
+	}
+}
+
 func countLines(t *testing.T, path string) int {
 	t.Helper()
 	raw, err := os.ReadFile(path)

@@ -389,3 +389,12 @@ On a real 95-action run, selecting the first conversation row created its eviden
 - The selected timeline row alone is followed by a localized, focus-revealed skip control that moves focus to the named Evidence inspector region. Selecting another row moves that single control with the current evidence; collapsing its group keeps the control immediately after the closed group.
 - Timeline rows, grouping, expansion, selection focus, exact links, inspector evidence and pointer behavior remain unchanged. The control remains visually absent unless it receives keyboard focus.
 - Acceptance: the measured first-row path falls from 43 Tab presses to two Tab presses plus activation; action/change/event and live-change selections expose exactly one jump, locale rerenders preserve its focus and localized name, and activation focuses the inspector region without changing selected evidence.
+
+## 45. Session shutdown files every acknowledged delivery
+
+Two isolated sessions acknowledged a queued tool delivery after `SessionEnd` with `ok`, then exited successfully with `session_ended`, zero warnings and no record of that delivery. The socket reader had transferred the payload into the recorder's bounded memory queue, but shutdown stopped at the earlier end marker.
+
+- After bundle and baseline setup succeeds, once shutdown begins the recorder stops accepting new socket deliveries before inspecting the remaining queue. A hook not transferred into that queue receives no success acknowledgement. A setup failure remains a nonzero recorder failure rather than a completed run.
+- Every delivery already queued and acknowledged when the serving loop shuts down is filed in queue order, including deliveries behind `SessionEnd`. Seeing an end marker determines the final reason but does not discard later queued evidence.
+- The existing single recorder goroutine remains the only bundle writer. This adds no concurrent reader, durable sidecar, retry journal or second evidence store.
+- Acceptance: two overlapping socket reproductions retain the late acknowledged action, finish as `session_ended` with zero warnings, and preserve the original provider-event/action order; timeout and signal shutdown still file all acknowledged deliveries and remain `session_lost` unless a queued `SessionEnd` was observed.

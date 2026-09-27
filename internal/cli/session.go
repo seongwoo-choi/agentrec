@@ -350,7 +350,12 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 		stderr:       stderr,
 	}
 	reason := rec.serve(inbox, opts.idle, stop)
+	// Stop accepting first, then file everything that was already queued and
+	// acknowledged. No producer remains when drain observes an empty queue.
 	release()
+	if rec.drain(inbox) == reasonSessionEnded {
+		reason = reasonSessionEnded
+	}
 
 	// Everything below is the recorder's own work, and a signal during it is
 	// held the way a traced run holds it: the first cancels a verification
@@ -505,9 +510,9 @@ func (in *sessionInbox) run() {
 			conn.Close()
 			continue
 		}
-		// Acknowledged only once queued, so a hook that was told its delivery
-		// was taken is never wrong: whatever is queued is filed before the
-		// recorder stops.
+		// Acknowledged only once queued. After bundle setup reaches the serving
+		// loop, shutdown files every queued delivery; an earlier setup failure
+		// remains a nonzero recorder failure.
 		select {
 		case in.queue <- d:
 			conn.Write([]byte(hookAck))
@@ -623,10 +628,10 @@ func (s *sessionRecorder) serve(inbox *sessionInbox, idle time.Duration, stop <-
 			timer.Reset(idle)
 		case <-timer.C:
 			s.warn("no hook delivery for %s; closing the run as lost", idle)
-			return s.drain(inbox)
+			return reasonSessionLost
 		case sig := <-stop:
 			s.warn("%v; closing the run as lost", sig)
-			return s.drain(inbox)
+			return reasonSessionLost
 		}
 	}
 }
@@ -636,13 +641,17 @@ func (s *sessionRecorder) serve(inbox *sessionInbox, idle time.Duration, stop <-
 // recorded. It reports the session ended if one of them says so, and lost
 // otherwise.
 func (s *sessionRecorder) drain(inbox *sessionInbox) string {
+	ended := false
 	for {
 		select {
 		case d := <-inbox.queue:
 			if s.take(d) {
-				return reasonSessionEnded
+				ended = true
 			}
 		default:
+			if ended {
+				return reasonSessionEnded
+			}
 			return reasonSessionLost
 		}
 	}
