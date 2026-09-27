@@ -415,6 +415,87 @@ test('successful run-list JSON without runs is reported instead of rendered as a
   assert.equal(document.querySelector('#store-size').textContent, '');
 });
 
+test('run-list unreadable count rejects malformed values before mutating loaded-page evidence', async (t) => {
+  for (const unreadable of [-1, 1.5, '1', null]) {
+    await t.test(JSON.stringify(unreadable), async (t) => {
+      const data = fixture('completed', 'pass', 'PASS');
+      data.intercept = (url) => url.pathname === '/api/runs' && !url.search
+        ? response({ ...data.list, unreadable })
+        : null;
+      const dom = await renderFixture(data);
+      t.after(() => dom.window.close());
+      const d = dom.window.document;
+      assert.equal(d.querySelector('#error').textContent, 'Invalid response: expected "unreadable" non-negative integer');
+      assert.equal(d.querySelectorAll('.run-item').length, 0);
+      assert.equal(d.querySelector('#unreadable-warning').classList.contains('hidden'), true);
+    });
+  }
+});
+
+test('malformed unreadable refreshes preserve retained continuation-page evidence and cursor', async (t) => {
+  const data = recentRunsFixture();
+  const [first, second, third] = data.list.runs;
+  data.list.runs = [first];
+  data.list.total = 4;
+  data.list.nextCursor = 'page-two';
+  let poll;
+  data.configure = (w) => {
+    w.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return 1;
+    };
+    w.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const fetch = w.fetch;
+  let malformedPoll = false;
+  let malformedPageThree = true;
+  w.fetch = (input, init) => {
+    const url = new URL(String(input), w.location.href);
+    if (url.pathname !== '/api/runs') return fetch(input, init);
+    if (!url.searchParams.has('cursor')) {
+      return malformedPoll ? response({ ...data.list, unreadable: -1 }) : fetch(input, init);
+    }
+    if (url.searchParams.get('cursor') === 'page-two') {
+      return response({ runs: [second], total: 4, nextCursor: 'page-three', generation: 'same', unreadable: 1 });
+    }
+    assert.equal(url.searchParams.get('cursor'), 'page-three');
+    return malformedPageThree
+      ? response({ runs: [third], total: 4, nextCursor: '', generation: 'same', unreadable: 1.5 })
+      : response({ runs: [third], total: 4, nextCursor: '', generation: 'same', unreadable: 1 });
+  };
+
+  const more = d.querySelector('#run-load-more');
+  more.click();
+  await settle();
+  assert.deepEqual(runIDs(d), [first.id, second.id]);
+  assert.equal(d.querySelector('#unreadable-warning').textContent, '1 unreadable run(s) were excluded.');
+  assert.equal(more.classList.contains('hidden'), false);
+
+  malformedPoll = true;
+  await poll();
+  assert.equal(d.querySelector('#error').textContent, 'Invalid response: expected "unreadable" non-negative integer');
+  assert.deepEqual(runIDs(d), [first.id, second.id]);
+  assert.equal(d.querySelector('#unreadable-warning').textContent, '1 unreadable run(s) were excluded.');
+  assert.equal(more.classList.contains('hidden'), false);
+
+  more.click();
+  await settle();
+  assert.equal(d.querySelector('#error').textContent, 'Invalid response: expected "unreadable" non-negative integer');
+  assert.deepEqual(runIDs(d), [first.id, second.id]);
+  assert.equal(d.querySelector('#unreadable-warning').textContent, '1 unreadable run(s) were excluded.');
+  assert.equal(more.classList.contains('hidden'), false);
+
+  malformedPageThree = false;
+  more.click();
+  await settle();
+  assert.deepEqual(runIDs(d), [first.id, second.id, third.id]);
+  assert.equal(d.querySelector('#unreadable-warning').textContent, '2 unreadable run(s) were excluded.');
+  assert.equal(more.classList.contains('hidden'), true);
+});
+
 test('global search closes before keyboard focus leaves its combobox', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.search = { hits: [{ runId: data.details.run.id, kind: 'action', snippet: 'matching action' }], truncated: false };
@@ -835,6 +916,54 @@ test('run-list JSON without runs during polling cannot replace valid store metad
   await poll();
   dom.window.document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   assert.match(dom.window.document.querySelector('#store-size').textContent, /4\.0 KB on disk/);
+});
+
+test('malformed unreadable polling cannot replace valid store metadata', async (t) => {
+  let poll;
+  let invalid = false;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.storeBytes = 4096;
+  data.list.trashBytes = 2048;
+  data.configure = (w) => {
+    w.setInterval = (callback) => { poll = callback; return 1; };
+    w.clearInterval = () => {};
+  };
+  data.intercept = (url) => invalid && url.pathname === '/api/runs' && !url.search
+    ? response({ ...data.list, storeBytes: 8192, trashBytes: 6144, unreadable: -1 })
+    : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.match(d.querySelector('#store-size').textContent, /4\.0 KB on disk/);
+  invalid = true;
+  await poll();
+  d.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(d.querySelector('#error').textContent, 'Invalid response: expected "unreadable" non-negative integer');
+  assert.match(d.querySelector('#store-size').textContent, /4\.0 KB on disk/);
+});
+
+test('malformed run-list page IDs cannot poison retained unreadable evidence', async (t) => {
+  let poll;
+  let invalid = false;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.list.unreadable = 1;
+  data.configure = (w) => {
+    w.setInterval = (callback) => { poll = callback; return 1; };
+    w.clearInterval = () => {};
+  };
+  data.intercept = (url) => invalid && url.pathname === '/api/runs' && !url.search
+    ? response({ ...data.list, unreadable: 9, pageIds: {} })
+    : null;
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.equal(d.querySelector('#unreadable-warning').textContent, '1 unreadable run(s) were excluded.');
+  invalid = true;
+  await poll();
+  d.querySelector('#lang').value = 'ko';
+  d.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(d.querySelector('#error').textContent, 'Invalid response: expected "pageIds" array');
+  assert.equal(d.querySelector('#unreadable-warning').textContent, '읽을 수 없는 실행 1개를 제외했습니다.');
 });
 
 test('load-more JSON without runs surfaces the contract error and preserves loaded runs', async (t) => {
@@ -2521,6 +2650,95 @@ test('unreadable final page refreshes empty copy and hides exhausted load-more w
   assert.equal(d.querySelector('#workspace-empty-title').textContent, 'No run selected');
   assert.equal(d.querySelector('#unreadable-warning').textContent, '55 unreadable run(s) were excluded.');
   assert.equal(d.querySelector('#unreadable-warning').classList.contains('hidden'), false);
+});
+
+test('first-page polling retains terminal-page unreadable evidence without impossible widening copy', async (t) => {
+  const data = recentRunsFixture();
+  const second = data.list.runs[1];
+  data.list.runs = data.list.runs.slice(0, 1);
+  data.list.total = 3;
+  data.list.nextCursor = 'page-two';
+  let poll;
+  data.configure = (w) => {
+    w.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return 1;
+    };
+    w.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const fetch = w.fetch;
+  let nextGeneration = false;
+  w.fetch = (input, init) => {
+    const url = new URL(String(input), w.location.href);
+    if (url.pathname === '/api/runs' && url.searchParams.has('cursor')) {
+      return response({ runs: [second], total: 3, nextCursor: '', generation: 'same', unreadable: 1 });
+    }
+    if (nextGeneration && url.pathname === '/api/runs') {
+      return response({ runs: data.list.runs, total: 1, nextCursor: '', generation: 'next', unreadable: 0 });
+    }
+    return fetch(input, init);
+  };
+
+  d.querySelector('#run-load-more').click();
+  await settle();
+  assert.equal(d.querySelector('#run-load-more').classList.contains('hidden'), true);
+  for (let i = 0; i < 2; i += 1) {
+    await poll();
+    assert.equal(d.querySelector('#unreadable-warning').textContent, '1 unreadable run(s) were excluded.');
+    assert.equal(d.querySelector('#unreadable-warning').classList.contains('hidden'), false);
+    assert.equal(d.querySelector('#run-load-more').classList.contains('hidden'), true);
+    assert.doesNotMatch(d.querySelector('#run-overview-scope').textContent, /load more/);
+  }
+  for (const [lang, warning] of [
+    ['en', '1 unreadable run(s) were excluded.'],
+    ['ko', '읽을 수 없는 실행 1개를 제외했습니다.'],
+    ['ja', '読み取れない実行 1 件を除外しました。'],
+    ['zh-CN', '已排除 1 个无法读取的运行。'],
+  ]) {
+    d.querySelector('#lang').value = lang;
+    d.querySelector('#lang').dispatchEvent(new w.Event('change'));
+    assert.equal(d.querySelector('#unreadable-warning').textContent, warning, lang);
+  }
+  nextGeneration = true;
+  await poll();
+  assert.equal(d.querySelector('#unreadable-warning').classList.contains('hidden'), true, 'a new index generation replaces old page evidence');
+});
+
+test('first-page polling keeps an all-unreadable terminal continuation exhausted', async (t) => {
+  const data = recentRunsFixture();
+  data.list.runs = data.list.runs.slice(0, 1);
+  data.list.total = 2;
+  data.list.nextCursor = 'page-two';
+  let poll;
+  data.configure = (w) => {
+    w.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return 1;
+    };
+    w.clearInterval = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const fetch = w.fetch;
+  w.fetch = (input, init) => {
+    const url = new URL(String(input), w.location.href);
+    return url.pathname === '/api/runs' && url.searchParams.has('cursor')
+      ? response({ runs: [], total: 2, nextCursor: '', generation: 'same', unreadable: 1 })
+      : fetch(input, init);
+  };
+
+  d.querySelector('#run-load-more').click();
+  await settle();
+  for (let i = 0; i < 2; i += 1) {
+    await poll();
+    assert.equal(d.querySelector('#unreadable-warning').textContent, '1 unreadable run(s) were excluded.');
+    assert.equal(d.querySelector('#run-load-more').classList.contains('hidden'), true);
+    assert.doesNotMatch(d.querySelector('#run-overview-scope').textContent, /load more/);
+  }
 });
 
 test('project and recent-run controls explain loaded scope in all four locales', async (t) => {
