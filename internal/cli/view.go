@@ -49,17 +49,18 @@ type viewField struct {
 }
 
 type viewRunSummary struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title,omitempty"`
-	Provider     string    `json:"provider"`
-	Project      string    `json:"project"`
-	StartedAt    time.Time `json:"startedAt"`
-	Exit         string    `json:"exit"`
-	Verification string    `json:"verification"`
-	StatusClass  string    `json:"statusClass"`
-	StatusLabel  string    `json:"statusLabel"`
-	WarningCount int       `json:"warningCount"`
-	Failure      bool      `json:"failure"`
+	ID             string    `json:"id"`
+	Title          string    `json:"title,omitempty"`
+	Provider       string    `json:"provider"`
+	Project        string    `json:"project"`
+	StartedAt      time.Time `json:"startedAt"`
+	Exit           string    `json:"exit"`
+	Verification   string    `json:"verification"`
+	StatusClass    string    `json:"statusClass"`
+	StatusLabel    string    `json:"statusLabel"`
+	WarningCount   int       `json:"warningCount"`
+	Failure        bool      `json:"failure"`
+	ProcessFailure bool      `json:"processFailure"`
 	// DurationMillis follows the detail page's Duration field and is omitted
 	// rather than zero when the run has not ended.
 	DurationMillis *int64 `json:"durationMillis,omitempty"`
@@ -92,6 +93,14 @@ func viewRunStatus(exit, verification string, verificationWarnings int) (string,
 	return class, verification
 }
 
+func viewRunStatusWithFailure(exit, verification string, verificationWarnings int, failure bool) (string, string) {
+	class, label := viewRunStatus(exit, verification, verificationWarnings)
+	if failure && class != "fail" {
+		return "fail", "failed"
+	}
+	return class, label
+}
+
 func viewRunListStatus(exit, verification string) (string, string) {
 	return viewRunStatus(exit, verification, 0)
 }
@@ -108,6 +117,7 @@ type viewRunInfo struct {
 	ExitReason        string     `json:"exitReason,omitempty"`
 	StatusClass       string     `json:"statusClass"`
 	StatusLabel       string     `json:"statusLabel"`
+	ProcessFailure    bool       `json:"processFailure"`
 	WarningCount      int        `json:"warningCount"`
 	UnparsedLines     int        `json:"unparsedLines"`
 	VersionUnverified bool       `json:"versionUnverified,omitempty"`
@@ -123,6 +133,9 @@ type viewEvidence struct {
 	Repository           []viewField              `json:"repository"`
 	Verification         []viewField              `json:"verification"`
 	PosthocVerification  *viewPosthocVerification `json:"posthocVerification"`
+	processResult        *processResult
+	failure              bool
+	processFailure       bool
 	verificationStatus   string
 	verificationWarnings int
 }
@@ -355,8 +368,8 @@ func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error)
 	}
 	run := runSummary{
 		ID: runID, Title: readViewRunTitle(runRoot), Provider: manifest.Provider, Project: projectName(manifest.CWD),
-		StartedAt: manifest.StartedAt, Exit: exitReason(manifest, nil), WarningCount: manifest.WarningCount,
-		Failure: supervisorFailed(manifest, result), DurationMillis: summaryDurationMillis(manifest, result),
+		StartedAt: manifest.StartedAt, Exit: viewExitReason(manifest, result), WarningCount: manifest.WarningCount,
+		Failure: supervisorFailed(manifest, result), ProcessFailure: supervisorFailed(manifest, result), DurationMillis: summaryDurationMillis(manifest, result),
 	}
 	verification, err := readVerificationFromRoot(runRoot)
 	if err != nil {
@@ -785,12 +798,12 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 		}
 		out := make([]viewRunSummary, 0, len(page.runs))
 		for _, run := range page.runs {
-			statusClass, statusLabel := viewRunStatus(run.Exit, run.Verification, run.VerificationWarnings)
+			statusClass, statusLabel := viewRunStatusWithFailure(run.Exit, run.Verification, run.VerificationWarnings, run.Failure)
 			out = append(out, viewRunSummary{
 				ID: run.ID, Title: run.Title, Provider: run.Provider, Project: run.Project,
 				StartedAt: run.StartedAt, Exit: run.Exit, Verification: run.Verification,
 				StatusClass: statusClass, StatusLabel: statusLabel, WarningCount: run.WarningCount + run.VerificationWarnings,
-				Failure: run.Failure, DurationMillis: run.DurationMillis,
+				Failure: run.Failure, ProcessFailure: run.ProcessFailure, DurationMillis: run.DurationMillis,
 			})
 		}
 		initial := initialRunID

@@ -457,3 +457,12 @@ Two isolated stores contained an arbitrary directory with no `manifest.json` and
 - A missing, unreadable or identity-free manifest returns the ordinary failure code and no stdout. The provider-event artifact is not interpreted or attributed.
 - Valid run event summaries, sanitized payloads, pagination-independent CLI output and absent optional event artifacts remain unchanged.
 - Acceptance: both human and JSON event commands reject a directory without a manifest and syntactically valid empty manifests while valid runs, including runs without a provider-event artifact, retain their existing output.
+
+## 53. Viewer status retains a supervisor-observed ending
+
+Two isolated partial-finalization bundles retained a supervisor result with `exitCode: 7` and `exitReason: "nonzero"` plus passing verification, while the manifest ending was absent. `show` reported the failure, but both Viewer APIs labelled the same run **PASS** and the rendered process state appeared **RUNNING**.
+
+- Viewer list and detail responses use the same effective process ending as `show`: the manifest conclusion first, then the stored process result when final manifest installation did not preserve an ending.
+- A stored nonzero exit or signal prevents a passing aggregate status. A traced run is running only while neither the manifest nor process result records an ending.
+- Supervisor fields, verification evidence, finalized-manifest precedence, session liveness semantics and canonical stored documents remain unchanged.
+- Acceptance: a missing manifest ending with stored `nonzero`/exit 7 and passing verification returns `exitReason: "nonzero"` and failure status from both list and detail APIs; it never renders as PASS or RUNNING.
