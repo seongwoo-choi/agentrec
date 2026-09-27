@@ -3991,7 +3991,12 @@ function shortID(id) {
     $('diff-backdrop').classList.remove('hidden');
     $('diff-panel').classList.remove('hidden');
     renderDiffSheet();
-    if (bID && bID !== diff.a) loadDiff(diff.a, bID); else showDiffPicker();
+    if (bID && bID !== diff.a) {
+      loadDiff(diff.a, bID);
+      $('diff-close').focus();
+    } else {
+      showDiffPicker();
+    }
   }
 
   function closeDiff() {
