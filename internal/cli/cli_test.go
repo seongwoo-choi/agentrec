@@ -2385,6 +2385,15 @@ func TestShowRefusesEvidenceItCannotTrust(t *testing.T) {
 		{"malformed verification", func(t *testing.T, root, id string) {
 			writeVerification(t, root, id, []byte(`not json`))
 		}},
+		{"duplicate verification status", func(t *testing.T, root, id string) {
+			writeVerification(t, root, id, []byte(`{"status":"failed","status":"passed","attribution":"verification_observed","config":".agentrec.yaml","configSha256":"abc","checks":[]}`))
+		}},
+		{"case-folded duplicate verification status", func(t *testing.T, root, id string) {
+			writeVerification(t, root, id, []byte(`{"status":"failed","Status":"passed","attribution":"verification_observed","config":".agentrec.yaml","configSha256":"abc","checks":[]}`))
+		}},
+		{"duplicate nested check status", func(t *testing.T, root, id string) {
+			writeVerification(t, root, id, []byte(`{"status":"passed","attribution":"verification_observed","config":".agentrec.yaml","configSha256":"abc","checks":[{"name":"test","status":"failed","status":"passed","command":["true"]}]}`))
+		}},
 		{"oversize git", func(t *testing.T, root, id string) {
 			doc := availableGit()
 			doc["reason"] = strings.Repeat("x", maxDocumentBytes+1)
@@ -2529,6 +2538,48 @@ func TestListFailuresOnlyCountsInvalidProcessDurationAsUnreadable(t *testing.T) 
 	const want = "{\"schemaVersion\":1,\"runs\":[],\"unreadableRuns\":1}\n"
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestListFailuresOnlyCountsAmbiguousVerificationAsUnreadable(t *testing.T) {
+	root := home(t)
+	writeRun(t, root, "run-ambiguous-verification", "claude", late, "completed")
+	writeVerification(t, root, "run-ambiguous-verification", []byte(`{"status":"failed","status":"passed","attribution":"verification_observed","config":".agentrec.yaml","configSha256":"abc","checks":[]}`))
+
+	code, stdout, stderr := run(t, "list", "--failures-only", "--json")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	const want = "{\"schemaVersion\":1,\"runs\":[],\"unreadableRuns\":1}\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestDecodeVerificationNamesTheDuplicateMember(t *testing.T) {
+	_, err := decodeVerification([]byte(`{"status":"failed","Status":"passed","attribution":"verification_observed","checks":[]}`), verifyResults)
+	if err == nil || !strings.Contains(err.Error(), `duplicate JSON member "Status"`) {
+		t.Fatalf("decode error = %v, want duplicate member diagnostic", err)
+	}
+}
+
+func TestDecodeVerificationBoundsWideDuplicateScan(t *testing.T) {
+	var raw strings.Builder
+	raw.WriteString(`{"status":"failed","attribution":"verification_observed","checks":[]`)
+	for i := 0; i < 50000; i++ {
+		raw.WriteString(`,"x`)
+		raw.WriteString(strconv.Itoa(i))
+		raw.WriteString(`":null`)
+	}
+	raw.WriteString(`,"Status":"passed"}`)
+
+	started := time.Now()
+	_, err := decodeVerification([]byte(raw.String()), verifyResults)
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("wide duplicate scan took %s, want at most 2s", elapsed)
+	}
+	if err == nil || !strings.Contains(err.Error(), `duplicate JSON member "Status"`) {
+		t.Fatalf("decode error = %v, want duplicate member diagnostic", err)
 	}
 }
 

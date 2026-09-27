@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -478,6 +479,9 @@ func decodeVerification(raw []byte, name string) (*evidence.VerificationResult, 
 // attribution the reader expects: the run-end one, or a later one.
 func decodeVerificationAs(raw []byte, name, attribution string) (*evidence.VerificationResult, error) {
 	var res evidence.VerificationResult
+	if err := rejectDuplicateJSONMembers(raw); err != nil {
+		return nil, fmt.Errorf("cli: read %s: %w", name, err)
+	}
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fmt.Errorf("cli: read %s: %w", name, err)
 	}
@@ -505,6 +509,73 @@ func decodeVerificationAs(raw []byte, name, attribution string) (*evidence.Verif
 		}
 	}
 	return &res, nil
+}
+
+func rejectDuplicateJSONMembers(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := readUniqueJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("document holds more than one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func foldJSONMemberName(name string) string {
+	return strings.Map(func(r rune) rune {
+		start, smallest := r, r
+		for current := unicode.SimpleFold(r); current != start; current = unicode.SimpleFold(current) {
+			if current < smallest {
+				smallest = current
+			}
+		}
+		return smallest
+	}, name)
+}
+
+func readUniqueJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			member, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			name := member.(string)
+			folded := foldJSONMemberName(name)
+			if _, duplicate := seen[folded]; duplicate {
+				return fmt.Errorf("duplicate JSON member %q", name)
+			}
+			seen[folded] = struct{}{}
+			if err := readUniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := readUniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delim)
+	}
+	_, err = decoder.Token()
+	return err
 }
 
 // repositoryFields summarizes what the run left in the repository, in a fixed
