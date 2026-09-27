@@ -425,7 +425,12 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, " (%d unreadable)", unreadable)
 	}
 	fmt.Fprintf(stdout, ", %s on disk\n", humanBytes(storeBytes(root)))
-	if trashed, trashUnreadable, err := listRuns(trashRootFor(root), ""); err == nil && len(trashed)+trashUnreadable > 0 {
+	trashed, trashUnreadable, err := listTrash(root, nil)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+	if len(trashed)+trashUnreadable > 0 {
 		fmt.Fprintf(stdout, "trash     %d run(s), %s (agentrec trash empty)\n", len(trashed)+trashUnreadable, humanBytes(storeBytes(trashRootFor(root))))
 	}
 	// A running viewer's stream copies are the store's too; they go when it

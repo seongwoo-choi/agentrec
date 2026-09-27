@@ -92,6 +92,25 @@ func TestTrashSweepMovesOldRunsAndKeepsRecentAndOpenOnes(t *testing.T) {
 	}
 }
 
+func TestStatusRefusesASymlinkedTrashRoot(t *testing.T) {
+	root := home(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, trashRootFor(root)); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := runStatus(nil, &stdout, &stderr); code != exitFailure {
+		t.Fatalf("status exit = %d, want %d; stdout:\n%s\nstderr:\n%s", code, exitFailure, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "trash is not a directory") {
+		t.Fatalf("status stderr = %q, want the invalid trash diagnostic", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "trash     ") {
+		t.Fatalf("status reported invalid trash as usable:\n%s", stdout.String())
+	}
+}
+
 func TestStatusAndRunListReportDiskUsage(t *testing.T) {
 	root := home(t)
 	writeRun(t, root, "run-a", "claude", time.Now().Add(-2*time.Hour), "completed")
