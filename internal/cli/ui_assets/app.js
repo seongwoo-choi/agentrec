@@ -8,7 +8,7 @@
   const MAX_EXPANDED_ACTION_GROUPS = 250;
   let earlierRunsExpanded = false;
   let requestRunId = '';
-  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', runUnreadableByPage: new Map(), initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -1172,6 +1172,15 @@
     throw invalid;
   }
 
+  function requireNonNegativeIntegerField(body, field) {
+    const value = body?.[field];
+    if (value === undefined) return 0;
+    if (Number.isSafeInteger(value) && value >= 0) return value;
+    const invalid = new Error(`Invalid response: expected "${field}" non-negative integer`);
+    invalid.name = 'InvalidResponseError';
+    throw invalid;
+  }
+
   // getJSONRetrying re-asks a few times when the server says its snapshot lost a race with the recorder ("…; retry"):
   // a run that is still being written changes under the capture, and the next attempt usually lands between writes.
   async function getJSONRetrying(path, signal, attempts = 3) {
@@ -1763,7 +1772,7 @@ function shortID(id) {
 
     const loaded = state.runs.length;
     const total = Math.max(state.runTotal || 0, loaded);
-    const partial = total > loaded || Boolean(state.runNextCursor);
+    const partial = Boolean(state.runNextCursor);
     $('run-overview-scope').textContent = partial
       ? t('{loaded} loaded of {total} recorded — load more to widen this count', { loaded, total })
       : t('{loaded} loaded run(s)', { loaded });
@@ -4411,34 +4420,48 @@ function shortID(id) {
     view.focus({ preventScroll: true });
   }
 
-  function applyRunList(list, append = false) {
+  function renderUnreadableWarning() {
+    const warning = $('unreadable-warning');
+    const unreadable = [...state.runUnreadableByPage.values()].reduce((sum, count) => sum + count, 0);
+    if (unreadable) {
+      warning.textContent = t('{n} unreadable run(s) were excluded.', { n: unreadable });
+      warning.classList.remove('hidden');
+    } else {
+      warning.classList.add('hidden');
+    }
+  }
+
+  function applyRunList(list, append = false, pageKey = '') {
     const incoming = requireArrayField(list, 'runs');
-    state.runListError = null;
+    const unreadable = requireNonNegativeIntegerField(list, 'unreadable');
     const previousRuns = state.runs;
     const previousCursor = state.runNextCursor;
     const previousTotal = state.runTotal;
     const sameGeneration = (list.generation || '') === state.runGeneration;
-    const pageIDs = new Set(list.pageIds || incoming.map((run) => run.id));
+    const hasContinuationPage = [...state.runUnreadableByPage.keys()].some((key) => key !== '');
+    const pageIDs = new Set(list.pageIds === undefined ? incoming.map((run) => run.id) : requireArrayField(list, 'pageIds'));
+    const unreadableByPage = sameGeneration ? new Map(state.runUnreadableByPage) : new Map();
+    unreadableByPage.set(pageKey, unreadable);
     const runs = append && sameGeneration
       ? [...previousRuns, ...incoming.filter((run) => !previousRuns.some((current) => current.id === run.id))]
       : (!append && sameGeneration ? [...incoming, ...previousRuns.filter((run) => !pageIDs.has(run.id))] : incoming);
     // ponytail: rebuild the list only when its content changed; a rebuild mid-click would swallow the click.
     const signature = JSON.stringify(runs.map((run) => [run.id, run.title, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.failure, run.startedAt]));
     const changed = signature !== state.runsSignature;
+    state.runListError = null;
+    state.runUnreadableByPage = unreadableByPage;
+    if (!append) {
+      state.storeBytes = list.storeBytes || 0;
+      state.trashBytes = list.trashBytes || 0;
+    }
     state.runsSignature = signature;
     state.runs = runs;
     renderRunIdentity();
     state.runTotal = list.total || runs.length;
     state.initialRunId = list.initialRunId || state.initialRunId;
-    state.runNextCursor = runs.length >= state.runTotal ? '' : (append || !sameGeneration || previousRuns.length <= incoming.length ? (list.nextCursor || '') : previousCursor);
+    state.runNextCursor = runs.length >= state.runTotal ? '' : (append || !sameGeneration || !hasContinuationPage ? (list.nextCursor || '') : previousCursor);
     state.runGeneration = list.generation || '';
-    const warning = $('unreadable-warning');
-    if (list.unreadable) {
-      warning.textContent = t('{n} unreadable run(s) were excluded.', { n: list.unreadable });
-      warning.classList.remove('hidden');
-    } else {
-      warning.classList.add('hidden');
-    }
+    renderUnreadableWarning();
     if (changed) {
       renderRunList();
       if (!$('diff-panel').classList.contains('hidden') && !diff.b) renderDiffList();
@@ -4467,7 +4490,7 @@ function shortID(id) {
       if (cursor !== state.runNextCursor || generation !== state.runGeneration) return;
       requireArrayField(list, 'runs');
       if ((list.generation || '') !== generation) return;
-      applyRunList(list, true);
+      applyRunList(list, true, cursor);
     } catch (error) {
       showError(error);
     } finally {
@@ -4526,8 +4549,6 @@ function shortID(id) {
     try {
       const list = await getJSON('/api/runs', state.pollController.signal);
       requireArrayField(list, 'runs');
-      state.storeBytes = list.storeBytes || 0;
-      state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
       clearPollingError();
       await refreshSelectedRun();
@@ -4566,8 +4587,6 @@ function shortID(id) {
     try {
       const list = await getJSON('/api/runs');
       requireArrayField(list, 'runs');
-      state.storeBytes = list.storeBytes || 0;
-      state.trashBytes = list.trashBytes || 0;
       applyRunList(list);
       const linkedRun = new URLSearchParams(location.search).get('run');
       const linkedChange = changedFileFromURL();
@@ -4606,6 +4625,7 @@ function shortID(id) {
   $('lang').addEventListener('change', (event) => {
     setLang(event.target.value);
     if (state.run) renderRun(); else { renderRunList(); renderWorkspaceState(); }
+    renderUnreadableWarning();
     renderCompareForm();
     renderCompareJob();
     renderDiffSheet();

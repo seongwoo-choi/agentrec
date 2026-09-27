@@ -1916,7 +1916,7 @@ func TestViewRunListUIUsesExplicitCursorContinuation(t *testing.T) {
 	}
 	for _, source := range []string{
 		"/api/runs?cursor=${encodeURIComponent(cursor)}",
-		"applyRunList(list, true)",
+		"applyRunList(list, true, cursor)",
 	} {
 		if !strings.Contains(string(app), source) {
 			t.Fatalf("app.js missing %q", source)

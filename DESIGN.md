@@ -430,3 +430,13 @@ Two isolated source-built CLI reproductions placed a symlink at the configured t
 - `agentrec status` inspects the trash through the same root validation as trash listing. A missing trash remains an ordinary empty state; an invalid or unreadable trash emits the existing diagnostic and returns the ordinary failure code.
 - Valid trash counts and disk-usage output, run-store status, Viewer status, hook descriptions and all mutation behavior remain unchanged.
 - Acceptance: a symlinked trash root makes both `status` and `trash` exit 1 with the invalid-trash diagnostic; an absent trash keeps `status` successful and quiet; a valid nonempty trash retains its count and size line.
+
+## 50. Loaded-page unreadable evidence survives first-page polling
+
+A loaded continuation page can exclude unreadable runs after the first page was clean. The next ordinary first-page poll previously hid that warning while retaining the loaded continuation state, then told the user to load more even when the continuation cursor was exhausted.
+
+- Unreadable counts are retained per loaded run-list page within the same index generation. A first-page poll refreshes that page's count without erasing continuation-page exclusions; a generation change replaces the loaded-page evidence.
+- A provided `unreadable` count must be a non-negative safe integer before page state mutates; an omitted legacy count remains zero. The retained warning follows EN/KO/JA/ZH locale changes.
+- The overview asks the user to load more only when a continuation cursor actually exists. Once pagination is exhausted, unreadable exclusions explain why readable rows can remain below the recorded total.
+- Run order, polling, pagination, totals, canonical run evidence and fail-closed response validation remain unchanged.
+- Acceptance: after one readable first page and one terminal page containing readable and unreadable entries, two first-page polls retain the unreadable warning, keep **Load more** hidden and never show the impossible widening instruction. A new generation clears the old page warning.
