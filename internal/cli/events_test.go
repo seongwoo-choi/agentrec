@@ -89,6 +89,48 @@ func TestEventsReportsAnAbsentArtifactWithoutGuessing(t *testing.T) {
 	}
 }
 
+func TestEventsRejectsDirectoryWithoutManifest(t *testing.T) {
+	root := home(t)
+	if err := os.MkdirAll(filepath.Join(root, "not-a-run"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeEventStream(t, root, "not-a-run", "{\n")
+
+	for _, args := range [][]string{{"events", "not-a-run"}, {"events", "not-a-run", "--json"}} {
+		code, stdout, stderr := run(t, args...)
+		if code != 1 || stdout != "" || !strings.Contains(stderr, manifestFile) {
+			t.Errorf("%v: exit=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+}
+
+func TestEventsRejectsManifestWithoutRunIdentity(t *testing.T) {
+	for _, manifest := range []string{
+		"{}",
+		"null",
+		`{"provider":"claude","startedAt":"2026-07-27T10:00:00Z","redactionRuleVersion":"   "}`,
+	} {
+		t.Run(manifest, func(t *testing.T) {
+			root := home(t)
+			runDir := filepath.Join(root, "not-a-run")
+			if err := os.MkdirAll(runDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(runDir, manifestFile), []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			writeEventStream(t, root, "not-a-run", "{\"type\":\"fabricated\"}\n")
+
+			for _, args := range [][]string{{"events", "not-a-run"}, {"events", "not-a-run", "--json"}} {
+				code, stdout, stderr := run(t, args...)
+				if code != 1 || stdout != "" || !strings.Contains(stderr, "run identity") {
+					t.Errorf("%v: exit=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+				}
+			}
+		})
+	}
+}
+
 func TestEventsRejectsUnsafeEventArtifacts(t *testing.T) {
 	t.Run("symlink", func(t *testing.T) {
 		root := home(t)
