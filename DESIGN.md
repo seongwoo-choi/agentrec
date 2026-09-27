@@ -440,3 +440,11 @@ A loaded continuation page can exclude unreadable runs after the first page was 
 - The overview asks the user to load more only when a continuation cursor actually exists. Once pagination is exhausted, unreadable exclusions explain why readable rows can remain below the recorded total.
 - Run order, polling, pagination, totals, canonical run evidence and fail-closed response validation remain unchanged.
 - Acceptance: after one readable first page and one terminal page containing readable and unreadable entries, two first-page polls retain the unreadable warning, keep **Load more** hidden and never show the impossible widening instruction. A new generation clears the old page warning.
+
+## 51. Ambiguous verification JSON never becomes a verdict
+
+Two isolated bundles stored both `"status":"failed"` and `"status":"passed"` in one verification result. The permissive JSON decoder kept the last member, so `show` and `list` reported **PASS** and `list --failures-only` hid both runs.
+
+- Stored verification results reject duplicate member names at any object depth, including case variants that the Go decoder maps to the same field, instead of choosing one value. The result is unreadable; no verdict or check summary is rendered from it.
+- Valid verification results, attribution checks, size limits, list filtering and the JSON written by the recorder remain unchanged.
+- Acceptance: duplicate top-level or nested verification members make `show` exit 1 with no stdout, and list accounting treats the run as unreadable rather than passed.

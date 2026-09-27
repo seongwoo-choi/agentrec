@@ -24,6 +24,24 @@ func currentPosthocPath(t *testing.T, dir, name string) string {
 	return filepath.Join(dir, verifyPosthocDir, current, name)
 }
 
+func TestReadPosthocVerificationRejectsAmbiguousResult(t *testing.T) {
+	read := func(name string) ([]byte, error) {
+		switch name {
+		case filepath.Join(verifyPosthocDir, verifyPosthocCurrent):
+			return nil, os.ErrNotExist
+		case filepath.Join(verifyPosthocDir, verifyResults):
+			return []byte(`{"status":"failed","Status":"passed","attribution":"verification_observed_later","checks":[]}`), nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	_, _, err := readPosthocVerificationWith(read)
+	if err == nil || !strings.Contains(err.Error(), `duplicate JSON member "Status"`) {
+		t.Fatalf("posthoc read error = %v, want duplicate member diagnostic", err)
+	}
+}
+
 // finishedRunIn records a run that ended two hours ago in repo, closed out.
 func finishedRunIn(t *testing.T, root, id, repo string) string {
 	t.Helper()
