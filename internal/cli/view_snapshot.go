@@ -903,8 +903,8 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		return fail(err)
 	}
 
-	exitReason := viewExitReason(manifest)
-	statusClass, statusLabel := viewRunStatus(exitReason, evidence.verificationStatus, evidence.verificationWarnings)
+	exitReason := viewExitReason(manifest, evidence.processResult)
+	statusClass, statusLabel := viewRunStatusWithFailure(exitReason, evidence.verificationStatus, evidence.verificationWarnings, evidence.failure)
 	return viewRunResponse{
 		SchemaVersion:    1,
 		SnapshotID:       snapshot.id,
@@ -916,7 +916,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 			ID: runID, Provider: manifest.Provider, ProviderVersion: manifest.ProviderVersion,
 			Project: projectName(manifest.CWD), CWD: manifest.CWD, Prompt: prompt,
 			StartedAt: manifest.StartedAt, EndedAt: manifest.EndedAt, ExitReason: exitReason,
-			StatusClass: statusClass, StatusLabel: statusLabel,
+			StatusClass: statusClass, StatusLabel: statusLabel, ProcessFailure: evidence.processFailure,
 			WarningCount: manifest.WarningCount + evidence.verificationWarnings, UnparsedLines: manifest.UnparsedLines,
 			VersionUnverified: manifest.VersionUnverified,
 			Mode:              manifest.Mode, SessionID: manifest.SessionID,
@@ -1159,6 +1159,9 @@ func readCapturedViewEvidence(snapshot *viewSnapshot, manifest storage.Manifest)
 		Repository:          viewFields(repository),
 		Verification:        viewFields(verificationSummary),
 		PosthocVerification: posthoc,
+		processResult:       result,
+		failure:             supervisorFailed(manifest, result) || failureVerification(verification) != nil,
+		processFailure:      supervisorFailed(manifest, result),
 	}
 	if verification != nil {
 		out.verificationStatus = verdict(verification.Status)
@@ -1572,13 +1575,13 @@ func (s *viewSnapshotStore) Close() error {
 	return errors.Join(errs...)
 }
 
-// viewExitReason is the exit reason the viewer shows. A traced run keeps the
-// manifest's own word, empty while it runs; a session bundle goes through the
-// same reading as the terminal report, so an open session says running and one
-// whose recorder is gone without a result says unknown, in both places.
-func viewExitReason(m storage.Manifest) string {
-	if m.Mode != storage.ModeSession {
-		return m.ExitReason
+// viewExitReason is the exit reason the viewer shows. A traced run with no
+// manifest or process ending is still running; otherwise both trace and session
+// bundles use the terminal report's manifest-first process-result fallback.
+// An open session says running only while its recorder remains reachable.
+func viewExitReason(m storage.Manifest, result *processResult) string {
+	if m.Mode != storage.ModeSession && m.ExitReason == "" && result == nil {
+		return ""
 	}
-	return exitReason(m, nil)
+	return exitReason(m, result)
 }

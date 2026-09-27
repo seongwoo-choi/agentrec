@@ -35,6 +35,7 @@ type runSummary struct {
 	WarningCount         int
 	VerificationWarnings int
 	Failure              bool
+	ProcessFailure       bool
 	// DurationMillis is the recorded process window, resolved the way the
 	// detail page does (process result, else manifest end minus start). Nil
 	// when neither exists, so an open run never reads as zero seconds.

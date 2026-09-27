@@ -2221,6 +2221,108 @@ test('run list separates process and verification verdicts before opening a run'
   assert.equal(localizedCards.get('run-verification-failed').querySelector('.run-warning-count').textContent.trim(), '경고 2개');
 });
 
+test('explicit supervisor failure overrides a contradictory completed process label', async (t) => {
+  const data = fixture('completed', 'fail', 'failed');
+  data.list.runs[0].processFailure = true;
+  data.details.run.processFailure = true;
+  data.details.evidence.supervisor = [
+    { name: 'Exit Reason', value: 'completed' },
+    { name: 'Exit Code', value: '7' },
+  ];
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.deepEqual(
+    Array.from(document.querySelectorAll('.run-item .run-verdict'), (badge) => badge.textContent.trim()),
+    ['Run FAIL', 'Verify PASS'],
+  );
+  assert.equal(document.querySelector('#run-verdict').textContent, 'Run FAIL · Verify PASS');
+  assert.equal(document.querySelector('.run-item .run-verdict-run').classList.contains('fail'), true);
+  assert.equal(
+    document.querySelector('.run-item .run-verdict-run .run-verdict-value').title,
+    'The process failed despite its recorded exit reason.',
+  );
+  assert.deepEqual(
+    Array.from(document.querySelectorAll('.metric-value'), (value) => value.textContent.trim()).slice(0, 2),
+    ['FAIL', 'PASS'],
+  );
+  assert.equal(document.querySelector('.metric-primary').classList.contains('fail'), true);
+  assert.equal(
+    document.querySelector('.metric-primary .metric-detail').textContent,
+    'The process failed despite its recorded exit reason. · exit code 7',
+  );
+  assert.doesNotMatch(document.querySelector('#run-view').textContent, /Run COMPLETED/);
+
+  document.querySelector('#lang').value = 'ko';
+  document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(document.querySelector('#run-verdict').textContent, '실행 실패 · 검증 통과');
+  assert.match(document.querySelector('.metric-primary .metric-detail').textContent, /^기록된 종료 사유와 달리 프로세스가 실패했습니다\./);
+});
+
+test('process and verification failures remain independent', async (t) => {
+  const processAndVerification = fixture('completed', 'fail', 'FAIL');
+  processAndVerification.list.runs[0].processFailure = true;
+  processAndVerification.list.runs[0].verification = 'FAIL';
+  processAndVerification.details.run.processFailure = true;
+  processAndVerification.details.evidence.verification = [{ name: 'Status', value: 'FAIL' }];
+  const failedDom = await renderFixture(processAndVerification);
+  t.after(() => failedDom.window.close());
+  assert.deepEqual(
+    Array.from(failedDom.window.document.querySelectorAll('.run-item .run-verdict'), (badge) => badge.textContent.trim()),
+    ['Run FAIL', 'Verify FAIL'],
+  );
+  assert.equal(failedDom.window.document.querySelector('#run-verdict').textContent, 'Run FAIL · Verify FAIL');
+
+  const verificationOnly = fixture('completed', 'fail', 'FAIL');
+  verificationOnly.list.runs[0].verification = 'FAIL';
+  verificationOnly.details.evidence.verification = [{ name: 'Status', value: 'FAIL' }];
+  const verificationDom = await renderFixture(verificationOnly);
+  t.after(() => verificationDom.window.close());
+  assert.deepEqual(
+    Array.from(verificationDom.window.document.querySelectorAll('.run-item .run-verdict'), (badge) => badge.textContent.trim()),
+    ['Run COMPLETED', 'Verify FAIL'],
+  );
+  assert.equal(verificationDom.window.document.querySelector('#run-verdict').textContent, 'Run COMPLETED · Verify FAIL');
+});
+
+test('polling reveals a new process failure when verification already failed', async (t) => {
+  let poll;
+  const data = fixture('completed', 'fail', 'FAIL');
+  data.list.runs[0].failure = true;
+  data.list.runs[0].verification = 'FAIL';
+  data.details.evidence.verification = [{ name: 'Status', value: 'FAIL' }];
+  const details = structuredClone(data.details);
+  data.details = () => structuredClone(details);
+  data.configure = (window) => {
+    window.setInterval = (callback, delay) => {
+      if (delay === 5000) poll = callback;
+      return 1;
+    };
+    window.clearInterval = () => {};
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(document.querySelector('.run-item .run-verdict-run').textContent.trim(), 'Run COMPLETED');
+  assert.equal(document.querySelector('#run-verdict').textContent, 'Run COMPLETED · Verify FAIL');
+
+  data.list.runs[0].processFailure = true;
+  details.run.processFailure = true;
+  details.evidence.supervisor = [
+    { name: 'Exit Reason', value: 'completed' },
+    { name: 'Exit Code', value: '7' },
+  ];
+  await poll();
+  await settle();
+
+  assert.equal(document.querySelector('.run-item .run-verdict-run').textContent.trim(), 'Run FAIL');
+  assert.equal(document.querySelector('#run-verdict').textContent, 'Run FAIL · Verify FAIL');
+  assert.match(document.querySelector('.metric-primary .metric-detail').textContent, /exit code 7/);
+});
+
+
 test('long run titles stay within a shrinkable sidebar grid track', () => {
   assert.match(css, /\.run-list\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
 });

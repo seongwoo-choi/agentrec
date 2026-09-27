@@ -2046,20 +2046,126 @@ func TestViewRunListReportsCanonicalFailures(t *testing.T) {
 	}
 	var body struct {
 		Runs []struct {
-			ID      string `json:"id"`
-			Failure bool   `json:"failure"`
+			ID             string `json:"id"`
+			Failure        bool   `json:"failure"`
+			ProcessFailure bool   `json:"processFailure"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	got := make(map[string]bool, len(body.Runs))
+	type failures struct{ Aggregate, Process bool }
+	got := make(map[string]failures, len(body.Runs))
 	for _, run := range body.Runs {
-		got[run.ID] = run.Failure
+		got[run.ID] = failures{Aggregate: run.Failure, Process: run.ProcessFailure}
 	}
-	want := map[string]bool{"process-failure": true, "verification-failure": true, "pass": false}
+	want := map[string]failures{
+		"process-failure":      {Aggregate: true, Process: true},
+		"verification-failure": {Aggregate: true},
+		"pass":                 {},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("failures = %#v, want %#v", got, want)
+	}
+}
+
+func TestViewActiveTraceIsRunningInListAndDetail(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "active-trace", storage.Manifest{
+		Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteAction(readAction(early)); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newViewHandler(root, "active-trace", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var list struct {
+		Runs []viewRunSummary `json:"runs"`
+	}
+	viewJSONRequest(t, handler, "/api/runs", &list)
+	if len(list.Runs) != 1 || list.Runs[0].Exit != "" || list.Runs[0].Failure {
+		t.Fatalf("list runs = %+v, want one active trace with no ending", list.Runs)
+	}
+
+	var detail struct {
+		Run viewRunInfo `json:"run"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/active-trace", &detail)
+	if detail.Run.ExitReason != "" || detail.Run.StatusClass != list.Runs[0].StatusClass || detail.Run.StatusLabel != list.Runs[0].StatusLabel {
+		t.Fatalf("detail run = %+v, list run = %+v, want the same active trace status", detail.Run, list.Runs[0])
+	}
+}
+
+func TestViewUsesProcessEndingWhenManifestFinalizationIsMissing(t *testing.T) {
+	tests := []struct {
+		name, processExit, manifestExit, signal string
+		exitCode                                int
+		verification                            string
+		wantExit, wantLabel                     string
+	}{
+		{name: "process ending fallback", processExit: "nonzero", exitCode: 7, wantExit: "nonzero", wantLabel: "nonzero"},
+		{name: "nonzero code contradicts process reason", processExit: "completed", exitCode: 7, wantExit: "completed", wantLabel: "failed"},
+		{name: "signal contradicts process reason", processExit: "completed", signal: "killed", wantExit: "completed", wantLabel: "failed"},
+		{name: "manifest reason keeps precedence", processExit: "nonzero", manifestExit: "completed", exitCode: 7, wantExit: "completed", wantLabel: "failed"},
+		{name: "process and verification both fail", processExit: "completed", exitCode: 7, verification: "FAIL", wantExit: "completed", wantLabel: "FAIL"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := home(t)
+			b, err := storage.Create(root, "partial-finalization", storage.Manifest{
+				Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.WriteAction(readAction(early)); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.WriteProcessResult(mustJSON(t, map[string]any{
+				"startedAt": early, "endedAt": late, "durationMillis": 1250,
+				"exitCode": test.exitCode, "signal": test.signal, "exitReason": test.processExit,
+			})); err != nil {
+				t.Fatal(err)
+			}
+			if test.manifestExit != "" {
+				if err := b.Finalize(storage.Finalization{EndedAt: late, ExitReason: test.manifestExit}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			verification := passedVerification()
+			if test.verification == "FAIL" {
+				verification["status"] = "failed"
+				check := verification["checks"].([]map[string]any)[0]
+				check["status"] = "failed"
+				check["exitCode"] = 1
+			}
+			writeVerification(t, root, "partial-finalization", verification)
+
+			handler := newViewHandler(root, "partial-finalization", false)
+			t.Cleanup(func() { _ = handler.Close() })
+			var list struct {
+				Runs []viewRunSummary `json:"runs"`
+			}
+			viewJSONRequest(t, handler, "/api/runs", &list)
+			if len(list.Runs) != 1 {
+				t.Fatalf("runs = %+v", list.Runs)
+			}
+			if got := list.Runs[0]; got.Exit != test.wantExit || got.StatusClass != "fail" || got.StatusLabel != test.wantLabel || !got.Failure || !got.ProcessFailure {
+				t.Fatalf("list run = %+v, want exit %q and failure label %q", got, test.wantExit, test.wantLabel)
+			}
+
+			var detail struct {
+				Run viewRunInfo `json:"run"`
+			}
+			viewJSONRequest(t, handler, "/api/runs/partial-finalization", &detail)
+			if detail.Run.ExitReason != test.wantExit || detail.Run.StatusClass != "fail" || detail.Run.StatusLabel != test.wantLabel || !detail.Run.ProcessFailure {
+				t.Fatalf("detail run = %+v, want exit %q and failure label %q", detail.Run, test.wantExit, test.wantLabel)
+			}
+		})
 	}
 }
 

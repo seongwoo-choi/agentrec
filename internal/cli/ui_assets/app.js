@@ -172,6 +172,7 @@
       'No checks were run for this session.': '이 세션에서는 검증 체크를 실행하지 않았습니다.',
       'Verification checks passed.': '검증 체크를 통과했습니다.',
       'Verification checks failed.': '검증 체크가 실패했습니다.',
+      'The process failed despite its recorded exit reason.': '기록된 종료 사유와 달리 프로세스가 실패했습니다.',
       'The run ended with {label}.': '실행이 {label}(으)로 끝났습니다.',
       'Previous page': '이전 페이지',
       'Next page': '다음 페이지',
@@ -520,6 +521,7 @@
       'No checks were run for this session.': 'このセッションでは検証チェックを実行していません。',
       'Verification checks passed.': '検証チェックに合格しました。',
       'Verification checks failed.': '検証チェックに不合格でした。',
+      'The process failed despite its recorded exit reason.': '記録された終了理由に反してプロセスが失敗しました。',
       'The run ended with {label}.': '実行は {label} で終了しました。',
       'Previous page': '前のページ',
       'Next page': '次のページ',
@@ -868,6 +870,7 @@
       'No checks were run for this session.': '此会话未运行任何检查。',
       'Verification checks passed.': '验证检查已通过。',
       'Verification checks failed.': '验证检查失败。',
+      'The process failed despite its recorded exit reason.': '记录的退出原因与实际不符，进程已失败。',
       'The run ended with {label}.': '运行以 {label} 结束。',
       'Previous page': '上一页',
       'Next page': '下一页',
@@ -1441,6 +1444,18 @@ function shortID(id) {
     return t('Verification reported {label}.', { label: verdict });
   }
 
+  function failedProcess(supervisor) {
+    const facts = [
+      supervisor.has('Exit Code') ? t('exit code {n}', { n: supervisor.get('Exit Code') }) : '',
+      supervisor.get('Signal') ? t('signal {s}', { s: supervisor.get('Signal') }) : '',
+    ].filter(Boolean);
+    return {
+      value: 'FAIL',
+      tone: 'fail',
+      detail: [t('The process failed despite its recorded exit reason.'), ...facts].join(' · '),
+    };
+  }
+
   // runItem is one card of a run list; the sidebar and the compare-runs picker draw the same card.
   function runItem(run, active) {
     const button = node('button', `run-item${active ? ' active' : ''}`);
@@ -1467,7 +1482,8 @@ function shortID(id) {
       meta.append(node('span', 'run-meta-separator', '·'), el);
     }
     const verdicts = node('span', 'run-verdicts');
-    const process = outcome(run.exit, new Map());
+    const observedProcess = outcome(run.exit, new Map());
+    const process = run.processFailure && observedProcess.tone !== 'fail' ? failedProcess(new Map()) : observedProcess;
     const verification = verdictWord(String(run.verification || 'NOT RUN').toUpperCase());
     const emphasis = (value, tone) => value === 'RUNNING' ? 'running' : (tone === 'fail' || tone === 'warn' ? tone : '');
     const badge = (kind, value, tone, detail) => {
@@ -3186,7 +3202,8 @@ function shortID(id) {
     document.title = `${run.project || run.id} · agentrec`;
 
     const supervisor = fieldsMap(data.evidence.supervisor);
-    const process = outcome(run.exitReason, supervisor);
+    const observedProcess = outcome(run.exitReason, supervisor);
+    const process = run.processFailure && observedProcess.tone !== 'fail' ? failedProcess(supervisor) : observedProcess;
     const verification = verificationSummary(data.evidence.verification);
     const runStatus = run.statusClass || '';
     const verdict = $('run-verdict');
@@ -4446,7 +4463,7 @@ function shortID(id) {
       ? [...previousRuns, ...incoming.filter((run) => !previousRuns.some((current) => current.id === run.id))]
       : (!append && sameGeneration ? [...incoming, ...previousRuns.filter((run) => !pageIDs.has(run.id))] : incoming);
     // ponytail: rebuild the list only when its content changed; a rebuild mid-click would swallow the click.
-    const signature = JSON.stringify(runs.map((run) => [run.id, run.title, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.failure, run.startedAt]));
+    const signature = JSON.stringify(runs.map((run) => [run.id, run.title, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.failure, run.processFailure, run.startedAt]));
     const changed = signature !== state.runsSignature;
     state.runListError = null;
     state.runUnreadableByPage = unreadableByPage;
@@ -4530,6 +4547,7 @@ function shortID(id) {
       || summary.verification !== verification
       || summary.statusClass !== state.run.run.statusClass
       || summary.statusLabel !== state.run.run.statusLabel
+      || Boolean(summary.processFailure) !== Boolean(state.run.run.processFailure)
       || Number(summary.warningCount || 0) !== Number(state.run.run.warningCount || 0);
     if (!differs) return;
     const generation = state.loadGeneration;
