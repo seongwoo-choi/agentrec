@@ -162,8 +162,8 @@
             <div id="timeline" class="timeline" role="tabpanel" aria-labelledby="timeline-tab-actions" aria-live="polite"></div>
           </section>
 
-          <aside class="inspector-panel">
-            <div class="section-label" data-i18n="Evidence inspector">Evidence inspector</div>
+          <aside id="inspector-panel" class="inspector-panel" tabindex="-1" aria-labelledby="inspector-title">
+            <div id="inspector-title" class="section-label" data-i18n="Evidence inspector">Evidence inspector</div>
             <div id="inspector-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
             <div id="inspector" class="inspector-empty">Select an action, change, or provider event to inspect its sanitized evidence.</div>
             <div class="evidence-sections" id="evidence-sections"></div>
