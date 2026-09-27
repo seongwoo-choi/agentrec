@@ -372,3 +372,12 @@ Opening a saved comparison URL twice in real Chromium left focus outside its vis
 - A comparison restored from `#compare=<run-a>,<run-b>` focuses its stable close control as the two bundles begin loading. Ordinary **Compare with…** opens keep focusing the run picker.
 - Existing close/hash restoration behavior, comparison evidence, loading/error behavior and visible layout remain unchanged.
 - Acceptance: initial load and reload of a valid comparison link both place focus inside the modal; Tab and Shift+Tab remain inside it; Escape closes it without changing the compared evidence.
+
+## 43. Global search closes when keyboard focus leaves
+
+On exact-source Chromium, a query produced 98 options in a 5,427 px results list over a 913 px viewport. The first Tab moved focus into the scroll container, where ArrowDown selected nothing; the second Tab focused **Compare runners** while the overlay stayed open. When Tab was pressed before the 400 ms debounce completed, the same overlay opened later behind **Compare runners**.
+
+- Search results remain navigable from the combobox with Arrow keys and Enter, but the scrollable listbox is not a separate Tab stop.
+- Tab or Shift+Tab from the combobox closes the overlay before native focus movement and cancels pending debounce or in-flight search ownership. A late response cannot reopen it.
+- Search text, pointer result activation, Escape, result ordering, exact evidence links and refocus reopening of settled results remain unchanged.
+- Acceptance: settled, debounced and in-flight searches stay closed with `aria-expanded="false"` after keyboard focus leaves; the next native Tab reaches the ordinary next control rather than the results scroller.
