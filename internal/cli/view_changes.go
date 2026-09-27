@@ -634,7 +634,7 @@ func readViewChangePage(snapshot *viewSnapshot, cursor int64) (viewChangePage, e
 	if end > int64(len(snapshot.changes)) {
 		end = int64(len(snapshot.changes))
 	}
-	items := append([]viewChange(nil), snapshot.changes[cursor:end]...)
+	items := append([]viewChange{}, snapshot.changes[cursor:end]...)
 	return viewChangePage{
 		Status: snapshot.changeStatus, Reason: snapshot.changeReason,
 		Attribution: snapshot.changeAttribution, Baseline: snapshot.changeBaseline,
