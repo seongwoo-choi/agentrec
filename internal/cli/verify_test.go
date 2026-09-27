@@ -105,6 +105,55 @@ func TestVerifyLaterFilesAResultBesideTheRunAndSaysWhenHeadMoved(t *testing.T) {
 	}
 }
 
+func TestVerifyLatestRefusesToGuessPastUnreadableRuns(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	marker := filepath.Join(t.TempDir(), "check-ran")
+	commitVerifyConfig(t, repo, "sh", "-c", `printf ran > "$1"`, "sh", marker)
+	dir := finishedRunIn(t, root, "run-older", repo)
+	if err := os.Mkdir(filepath.Join(root, "run-unreadable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run(t, "verify", "latest")
+	if code != exitFailure || stdout != "" || !strings.Contains(stderr, "1 run(s)") || !strings.Contains(stderr, "unreadable") || !strings.Contains(stderr, "name a run id") {
+		t.Fatalf("verify latest exit %d, stdout %q, stderr %q; want refusal to guess past one unreadable run", code, stdout, stderr)
+	}
+	for _, path := range []string{marker, filepath.Join(dir, verifyPosthocDir)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unexpected verification artifact %s: %v", path, err)
+		}
+	}
+
+	code, stdout, stderr = run(t, "verify", "run-older")
+	if code != 0 || !strings.Contains(stdout, "run-older verified later") || stderr != "" {
+		t.Fatalf("explicit verify exit %d, stdout %q, stderr %q; want the named run verified", code, stdout, stderr)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("explicit verification check marker: %v", err)
+	}
+}
+
+func TestVerifyLatestRefusesToGuessPastUnopenableRunEntries(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	commitVerifyConfig(t, repo, "sh", "-c", "exit 0")
+	finishedRunIn(t, root, "run-older", repo)
+	unopenable := filepath.Join(root, "run-unopenable")
+	if err := os.Mkdir(unopenable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unopenable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(unopenable, 0o700) })
+
+	code, stdout, stderr := run(t, "verify", "latest")
+	if code != exitFailure || stdout != "" || !strings.Contains(stderr, "1 run(s)") || !strings.Contains(stderr, "unreadable") {
+		t.Fatalf("verify latest exit %d, stdout %q, stderr %q; want refusal to skip an unopenable run entry", code, stdout, stderr)
+	}
+}
+
 func TestVerifyLaterPublishesImmutableGenerationsThroughCurrentPointer(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)

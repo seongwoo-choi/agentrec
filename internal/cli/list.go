@@ -321,6 +321,9 @@ func scanRunsFromRootContext(ctx context.Context, root *os.Root, cwd string, enr
 		}
 		runRoot, err := openRunRootFromRoot(root, entry.Name())
 		if err != nil {
+			if entry.IsDir() && !errors.Is(err, os.ErrNotExist) {
+				unreadable++
+			}
 			continue
 		}
 		manifest, err := readManifestFromRoot(runRoot)
