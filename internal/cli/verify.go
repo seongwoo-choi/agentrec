@@ -463,16 +463,11 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	}
 	runID := args[0]
 	if runID == latestRun {
-		runs, _, err := listRuns(root, "")
+		runID, err = newestRunID(root)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return exitFailure
 		}
-		if len(runs) == 0 {
-			fmt.Fprintln(stderr, "cli: no runs recorded")
-			return exitFailure
-		}
-		runID = runs[0].ID
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

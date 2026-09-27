@@ -398,3 +398,11 @@ Two isolated sessions acknowledged a queued tool delivery after `SessionEnd` wit
 - Every delivery already queued and acknowledged when the serving loop shuts down is filed in queue order, including deliveries behind `SessionEnd`. Seeing an end marker determines the final reason but does not discard later queued evidence.
 - The existing single recorder goroutine remains the only bundle writer. This adds no concurrent reader, durable sidecar, retry journal or second evidence store.
 - Acceptance: two overlapping socket reproductions retain the late acknowledged action, finish as `session_ended` with zero warnings, and preserve the original provider-event/action order; timeout and signal shutdown still file all acknowledged deliveries and remain `session_lost` unless a queued `SessionEnd` was observed.
+
+## 46. Later verification never guesses which run is latest
+
+With one readable run and one unreadable run-shaped directory, `show latest` refused because ordering was unknowable while `verify latest` silently executed the older readable run's repository checks and published a PASS there. This repeated in two isolated stores.
+
+- Every CLI path that resolves `latest` uses the same fail-closed rule: if any run is unreadable, the latest run cannot be established and the command requires an exact run ID.
+- An unreadable store causes `verify latest` to run no checks and publish no later-verification pointer or result. Explicit `verify <run-id>` remains available and unchanged.
+- Acceptance: the isolated unreadable-store regression returns a nonzero exit with the existing diagnostic, no stdout, and no mutation under the older readable run.
