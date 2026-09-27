@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
@@ -68,6 +69,15 @@ func runEvents(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer runRoot.Close()
+	manifest, err := readManifestFromRoot(runRoot)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if strings.TrimSpace(manifest.Provider) == "" || manifest.StartedAt.IsZero() || strings.TrimSpace(manifest.RedactionRuleVersion) == "" {
+		fmt.Fprintf(stderr, "cli: %s has no recorded run identity\n", manifestFile)
+		return 1
+	}
 	events, present, err := readProviderEvents(runRoot)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

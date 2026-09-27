@@ -448,3 +448,12 @@ Two isolated bundles stored both `"status":"failed"` and `"status":"passed"` in 
 - Stored verification results reject duplicate member names at any object depth, including case variants that the Go decoder maps to the same field, instead of choosing one value. The result is unreadable; no verdict or check summary is rendered from it.
 - Valid verification results, attribution checks, size limits, list filtering and the JSON written by the recorder remain unchanged.
 - Acceptance: duplicate top-level or nested verification members make `show` exit 1 with no stdout, and list accounting treats the run as unreadable rather than passed.
+
+## 52. Provider events require a recorded run identity
+
+Two isolated stores contained an arbitrary directory with no `manifest.json` and one fabricated provider-event record. Run listing counted the directory as unreadable and `show` rejected it, while `events` labeled the record `provider_reported` and exited successfully.
+
+- `events <run-id>` and `events <run-id> --json` require the held run directory to contain a readable manifest with the provider, start time and redaction-rule identity written for every recorded run before projecting provider-event evidence.
+- A missing, unreadable or identity-free manifest returns the ordinary failure code and no stdout. The provider-event artifact is not interpreted or attributed.
+- Valid run event summaries, sanitized payloads, pagination-independent CLI output and absent optional event artifacts remain unchanged.
+- Acceptance: both human and JSON event commands reject a directory without a manifest and syntactically valid empty manifests while valid runs, including runs without a provider-event artifact, retain their existing output.
