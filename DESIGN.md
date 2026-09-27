@@ -381,3 +381,11 @@ On exact-source Chromium, a query produced 98 options in a 5,427 px results list
 - Tab or Shift+Tab from the combobox closes the overlay before native focus movement and cancels pending debounce or in-flight search ownership. A late response cannot reopen it.
 - Search text, pointer result activation, Escape, result ordering, exact evidence links and refocus reopening of settled results remain unchanged.
 - Acceptance: settled, debounced and in-flight searches stay closed with `aria-expanded="false"` after keyboard focus leaves; the next native Tab reaches the ordinary next control rather than the results scroller.
+
+## 44. A selected timeline row offers a bounded path to its inspector
+
+On a real 95-action run, selecting the first conversation row created its evidence controls while leaving keyboard focus in the timeline. Reaching **Copy evidence link** then required 43 Tab presses across 107 timeline stops; the same separation recurs for action, change and provider-event selections.
+
+- The selected timeline row alone is followed by a localized, focus-revealed skip control that moves focus to the named Evidence inspector region. Selecting another row moves that single control with the current evidence; collapsing its group keeps the control immediately after the closed group.
+- Timeline rows, grouping, expansion, selection focus, exact links, inspector evidence and pointer behavior remain unchanged. The control remains visually absent unless it receives keyboard focus.
+- Acceptance: the measured first-row path falls from 43 Tab presses to two Tab presses plus activation; action/change/event and live-change selections expose exactly one jump, locale rerenders preserve its focus and localized name, and activation focuses the inspector region without changing selected evidence.

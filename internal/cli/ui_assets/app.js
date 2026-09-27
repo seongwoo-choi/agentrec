@@ -16,7 +16,6 @@
     if (text !== undefined) el.textContent = text;
     return el;
   };
-
   // ── Localization ──────────────────────────────────────────────────────────
   // English strings are the keys. Only page-authored copy and the server sentences special-cased below are translated;
   // provider content (commands, paths, prompts, ids) never is. The documented status tokens (NOT RUN, PASS, …) are shown
@@ -2363,6 +2362,33 @@ function shortID(id) {
     control.setAttribute('aria-description', t('Currently shown in inspector'));
   }
 
+  function renderInspectorJump(row) {
+    const previous = $('timeline').querySelector('.timeline-inspector-jump');
+    previous?.removePositionListener?.();
+    previous?.remove();
+    const jump = node('button', 'skip-link timeline-inspector-jump', t('Evidence inspector'));
+    jump.type = 'button';
+
+    jump.addEventListener('click', () => $('inspector-panel').focus());
+    const group = row.closest('details.action-group');
+    const position = () => {
+      if (!row.isConnected || !row.classList.contains('selected')) return;
+      const current = $('timeline').querySelector('.timeline-inspector-jump');
+      if (current && current !== jump) return;
+      if (group && !group.open) {
+        if (group.nextElementSibling !== jump) group.after(jump);
+      } else if (row.nextElementSibling !== jump) {
+        row.after(jump);
+      }
+    };
+    if (group) {
+      group.addEventListener('toggle', position);
+      jump.removePositionListener = () => group.removeEventListener('toggle', position);
+    }
+    position();
+    return jump;
+  }
+
   // speechBlock shows a capped two-line preview that expands in place up to a cap; the inspector carries the full text.
   const PREVIEW_CHARS = 280;
   const EXPANDED_CHARS = 20000;
@@ -2562,10 +2588,11 @@ function shortID(id) {
 
   // renderLiveChanges draws the working tree of a running run. A tick redraws it in place: selection, focus and scroll
   // are kept by path, and a selected file that is no longer listed clears the inspector.
-  function renderLiveChanges() {
+  function renderLiveChanges(focusedInspectorJump = document.activeElement?.classList.contains('timeline-inspector-jump')) {
     const timeline = $('timeline');
     const files = live.changes ? live.changes.files || [] : [];
     const selectedPath = state.selected && state.selected.kind === 'live' ? state.selected.value.path : '';
+
     const focusedPath = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.path : undefined;
     const focusedGroup = timeline.contains(document.activeElement) && document.activeElement.matches('summary')
       ? document.activeElement.dataset.groupId : undefined;
@@ -2600,6 +2627,8 @@ function shortID(id) {
       selectedRow.classList.add('selected');
       selectedRow.setAttribute('aria-current', 'true');
       selectedRow.setAttribute('aria-description', t('Currently shown in inspector'));
+      const jump = renderInspectorJump(selectedRow);
+      if (focusedInspectorJump) jump.focus({ preventScroll: true });
     } else if (selectedPath) {
       state.selected = null;
     }
@@ -2610,6 +2639,8 @@ function shortID(id) {
     } else if (focusedGroup !== undefined) {
       const summary = [...timeline.querySelectorAll('.change-folder-summary')].find((el) => el.dataset.groupId === focusedGroup);
       (summary || $('timeline-tab-changes')).focus({ preventScroll: true });
+    } else if (focusedInspectorJump && !selectedRow) {
+      $('timeline-tab-changes').focus({ preventScroll: true });
     }
     if (shown === 0) timeline.append(node('div', 'timeline-empty', t(files.length ? 'No loaded changes match this filter.' : 'No repository changes were observed.')));
     state.streams.changes.shown = shown;
@@ -2687,6 +2718,7 @@ function shortID(id) {
     const focusedIndex = focusedRow ? focusedRow.dataset.index : undefined;
     const focusedConversationControl = focusedRow && document.activeElement?.classList.contains('show-more') ? 'expand' : 'select';
     const focusedGroup = sameStream && document.activeElement?.classList.contains('action-group-summary') ? document.activeElement.dataset.groupId : undefined;
+    const focusedInspectorJump = sameStream && document.activeElement?.classList.contains('timeline-inspector-jump');
     const selectedKind = { actions: 'action', changes: 'change', events: 'event' }[streamName];
     const selected = sameStream && state.selected?.kind === selectedKind ? state.selected : null;
     const selectedIndex = selected ? state.streams[streamName].items.indexOf(selected.value) : -1;
@@ -2725,6 +2757,8 @@ function shortID(id) {
       selectedRow.classList.add('selected');
       markTimelineRowCurrent(selectedRow);
       state.selected = selected;
+      const jump = renderInspectorJump(selectedRow);
+      if (focusedInspectorJump) jump.focus({ preventScroll: true });
     } else {
       state.selected = null;
     }
@@ -2739,6 +2773,8 @@ function shortID(id) {
     } else if (focusedGroup !== undefined) {
       const summary = [...timeline.querySelectorAll('.action-group-summary')].find((item) => item.dataset.groupId === focusedGroup);
       if (summary) summary.focus({ preventScroll: true });
+    } else if (focusedInspectorJump && !selectedRow) {
+      $(`timeline-tab-${streamName}`).focus({ preventScroll: true });
     }
     timeline.scrollTop = scrollTop;
   }
@@ -2754,6 +2790,7 @@ function shortID(id) {
     revealGroupedRow(row);
     row.classList.add('selected');
     markTimelineRowCurrent(row);
+    renderInspectorJump(row);
     selected.generation = state.loadGeneration;
     selected.runID = state.run?.run.id;
     state.selected = selected;

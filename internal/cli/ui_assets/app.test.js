@@ -148,6 +148,123 @@ test('timeline rows expose the one item currently shown in the inspector', async
   }
 });
 
+test('a selected timeline row offers a bounded keyboard jump to its inspector', async (t) => {
+  let activeToggleListeners = 0;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 2;
+  data.details.eventCount = 2;
+  const dom = await renderFixture({
+    ...data,
+    actions: [
+      { id: 'action-1', type: 'tool.call', status: 'success', input: { command: 'first' } },
+      { id: 'action-2', type: 'shell.exec', status: 'success', input: { command: 'second' } },
+    ],
+    changes: [
+      { path: 'first.go', kind: 'modified', tracked: false },
+      { path: 'second.go', kind: 'modified', tracked: false },
+    ],
+    events: [
+      { hook_event_name: 'PreToolUse', tool_name: 'Read' },
+      { hook_event_name: 'Stop', stop_hook_active: false },
+    ],
+    configure: (window) => {
+      const add = window.EventTarget.prototype.addEventListener;
+      const remove = window.EventTarget.prototype.removeEventListener;
+      window.EventTarget.prototype.addEventListener = function (type, listener, options) {
+        if (type === 'toggle') activeToggleListeners += 1;
+        return add.call(this, type, listener, options);
+      };
+      window.EventTarget.prototype.removeEventListener = function (type, listener, options) {
+        if (type === 'toggle') activeToggleListeners -= 1;
+        return remove.call(this, type, listener, options);
+      };
+    },
+  });
+  t.after(() => dom.window.close());
+  const { document, KeyboardEvent, Event } = dom.window;
+
+  for (const [tab, selector] of [
+    ['actions', '.action-row'],
+    ['changes', '.change-row'],
+    ['events', '.event-row'],
+  ]) {
+    document.querySelector(`#timeline-tab-${tab}`).click();
+    await settle();
+    const rows = [...document.querySelectorAll(selector)];
+    rows[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    let jump = document.querySelector('.timeline-inspector-jump');
+    assert.equal(rows[0].nextElementSibling, jump, `${tab} first row`);
+    assert.equal(jump.textContent, 'Evidence inspector', `${tab} label`);
+    jump.click();
+    assert.equal(document.activeElement, document.querySelector('#inspector-panel'), `${tab} target`);
+
+    rows[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    jump = document.querySelector('.timeline-inspector-jump');
+    assert.equal(document.querySelectorAll('.timeline-inspector-jump').length, 1, `${tab} single jump`);
+    assert.equal(rows[1].nextElementSibling, jump, `${tab} second row`);
+    if (tab === 'changes') {
+      const group = rows[1].closest('details');
+      assert.ok(group);
+      group.open = false;
+      group.dispatchEvent(new Event('toggle'));
+      assert.equal(group.nextElementSibling, jump, 'closed selected group keeps jump reachable');
+      group.open = true;
+      group.dispatchEvent(new Event('toggle'));
+      assert.equal(rows[1].nextElementSibling, jump, 'reopened selected group restores adjacent jump');
+      const listenersBeforeReselect = activeToggleListeners;
+      rows[1].click();
+      assert.equal(activeToggleListeners, listenersBeforeReselect, 'same-row reselection replaces its positioning listener');
+      jump = document.querySelector('.timeline-inspector-jump');
+      group.open = false;
+      group.dispatchEvent(new Event('toggle'));
+      assert.equal(document.querySelectorAll('.timeline-inspector-jump').length, 1, 'same-row reselection leaves one jump');
+      assert.equal(group.nextElementSibling, jump, 'reselected closed group keeps the current jump');
+      group.open = true;
+      group.dispatchEvent(new Event('toggle'));
+      assert.equal(document.querySelectorAll('.timeline-inspector-jump').length, 1, 'reopened reselected group leaves one jump');
+    }
+  }
+
+  let jump = document.querySelector('.timeline-inspector-jump');
+  jump.focus();
+  document.querySelector('#lang').value = 'ko';
+  document.querySelector('#lang').dispatchEvent(new Event('change', { bubbles: true }));
+  jump = document.querySelector('.timeline-inspector-jump');
+  assert.equal(jump.textContent, '증거 인스펙터');
+  assert.equal(document.activeElement, jump);
+});
+
+test('conversation inspector jump preserves exact selection evidence and URL', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 2;
+  const dom = await renderFixture({
+    ...data,
+    actions: [
+      { id: 'prompt-1', type: 'user.prompt', status: 'success', input: { prompt: 'first '.repeat(100) } },
+      { id: 'action-2', type: 'tool.call', status: 'success', input: { command: 'second' } },
+    ],
+  });
+  t.after(() => dom.window.close());
+  const { document, location, history } = dom.window;
+  const row = document.querySelector('.conversation-row');
+  const select = row.querySelector('.conversation-select');
+  select.click();
+  const jump = document.querySelector('.timeline-inspector-jump');
+  const href = location.href;
+  const historyLength = history.length;
+  const inspector = document.querySelector('#inspector').textContent;
+
+  assert.ok(row.querySelector('.show-more'));
+  assert.equal(row.nextElementSibling, jump);
+  jump.click();
+  assert.equal(document.activeElement, document.querySelector('#inspector-panel'));
+  assert.equal(row.classList.contains('selected'), true);
+  assert.equal(select.getAttribute('aria-current'), 'true');
+  assert.equal(location.href, href);
+  assert.equal(history.length, historyLength);
+  assert.equal(document.querySelector('#inspector').textContent, inspector);
+});
+
 test('a different timeline selection starts its inspector at the top without resetting same-selection rerenders', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.actionCount = 2;
@@ -1062,7 +1179,7 @@ test('copy evidence link is absent for no selection and unsupported provider eve
   assert.equal(w.document.querySelector('.copy-evidence-link'), null);
 });
 
-test('copy evidence link excludes live working-tree selections', async (t) => {
+test('live working-tree selections keep a localized inspector jump without fabricating exact links', async (t) => {
   const dom = await renderFixture(fixture('running', 'pending', 'RUNNING'));
   t.after(() => dom.window.close());
   const w = dom.window;
@@ -1070,9 +1187,22 @@ test('copy evidence link excludes live working-tree selections', async (t) => {
   w.fetch = (input, init) => String(input).endsWith('/live') ? response({ files: [{ path: 'live.js', status: 'M' }] }) : original(input, init);
   w.document.querySelector('#timeline-tab-changes').click();
   await settle();
-  w.document.querySelector('.change-row').click();
+  let row = w.document.querySelector('.change-row');
+  row.click();
   assert.match(w.document.querySelector('#inspector').textContent, /Working tree/);
   assert.equal(w.document.querySelector('.copy-evidence-link'), null);
+  let jump = w.document.querySelector('.timeline-inspector-jump');
+  assert.equal(row.nextElementSibling, jump);
+  jump.focus();
+  w.document.querySelector('#lang').value = 'ja';
+  w.document.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+  row = w.document.querySelector('.change-row');
+  jump = w.document.querySelector('.timeline-inspector-jump');
+  assert.equal(row.nextElementSibling, jump);
+  assert.equal(jump.textContent, '証跡インスペクター');
+  assert.equal(w.document.activeElement, jump);
+  jump.click();
+  assert.equal(w.document.activeElement, w.document.querySelector('#inspector-panel'));
 });
 
 test('copy evidence link excludes actions without exact IDs and empty runs', async (t) => {
@@ -4629,6 +4759,12 @@ for (const scenario of ['poll', 'locale', 'disappear', 'empty']) {
 
 test('live Folder view clears a disappearing selection and never invents stored patch controls', async (t) => {
   const data = fixture('running', '', 'RUNNING');
+  const details = data.details;
+  let delayDetails = false;
+  let releaseDetails;
+  data.details = () => delayDetails
+    ? new Promise((resolve) => { releaseDetails = () => resolve(details); })
+    : details;
   let liveFiles = [{ path: 'src/live.js', status: 'M' }, { path: 'src/peer.js', status: '??' }];
   let tick;
   data.live = () => ({ measuredAt: '2026-09-03T00:00:05Z', files: liveFiles });
@@ -4664,12 +4800,26 @@ test('live Folder view clears a disappearing selection and never invents stored 
   assert.equal(d.querySelectorAll('.change-row[aria-current="true"]').length, 1);
   assert.equal(d.activeElement, d.querySelector('.change-row[data-path="src/live.js"]'));
   assert.equal(panel.scrollTop, 88, 'same-path live polling preserves inspector position');
+  d.querySelector('.timeline-inspector-jump').focus();
+  assert.equal(d.activeElement, d.querySelector('.timeline-inspector-jump'), 'jump receives focus before poll');
+  liveFiles = [...liveFiles, { path: 'src/newer.js', status: 'A' }];
+  delayDetails = true;
+  const pendingTick = tick();
+  await settle();
+  d.querySelector('#search-all').focus();
+  releaseDetails();
+  await pendingTick;
+  await settle();
+  assert.equal(d.activeElement, d.querySelector('#search-all'), 'pending polling never steals newer focus');
+  delayDetails = false;
+  d.querySelector('.timeline-inspector-jump').focus();
   liveFiles = [{ path: 'src/peer.js', status: '??' }];
   await tick();
   await settle();
   assert.equal(d.querySelector('.change-row.selected'), null);
   assert.equal(d.querySelector('.change-row[aria-current="true"]'), null);
   assert.match(d.querySelector('#inspector').textContent, /Select an action/);
+  assert.equal(d.activeElement, d.querySelector('#timeline-tab-changes'), 'disappearing focused jump falls back to the current tab');
 });
 
 test('grouped event paging stays manual and a failed page retries from the visible button', async (t) => {
