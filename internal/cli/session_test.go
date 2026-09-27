@@ -170,6 +170,21 @@ func onlyRunDir(t *testing.T, root string) string {
 	return dirs[0]
 }
 
+func waitForInitializedRunDir(t *testing.T, root string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if dirs := runDirs(t, root); len(dirs) == 1 {
+			if _, err := os.Stat(filepath.Join(dirs[0], "manifest.json")); err == nil {
+				return dirs[0]
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("recorder never initialized a run under %s", root)
+	return ""
+}
+
 func readManifestFile(t *testing.T, dir string) storage.Manifest {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
@@ -207,6 +222,32 @@ func readActionsFile(t *testing.T, dir string) []action.Action {
 		t.Fatalf("scan actions: %v", err)
 	}
 	return actions
+}
+
+func TestSessionServeFailsWhenManifestFinalizationFails(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	stubProviders(t, verifyHelperName)
+	commitVerifyConfig(t, repo, verifyHelperName, "pass")
+	const sessionID = "session-finalize-failure"
+
+	socket, done, stderr := serveInProcess(t, sessionID, repo, verifyFlag)
+	dir := waitForInitializedRunDir(t, root)
+	writeFile(t, filepath.Join(dir, "manifest.json.tmp"), "occupied\n")
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, nil))
+
+	if code := waitExit(t, done); code != exitFailure {
+		t.Fatalf("exit code = %d, want %d after manifest finalization failure (stderr %q)", code, exitFailure, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "manifest.json.tmp") {
+		t.Fatalf("stderr = %q, want manifest finalization failure", stderr.String())
+	}
+	for _, name := range []string{filepath.Join("git", "result.json"), filepath.Join("verification", "results.json"), "report.md"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s: %v, want it filed despite manifest finalization failure", name, err)
+		}
+	}
 }
 
 func TestSessionRecorderDrainsAcknowledgedDeliveriesAfterSessionEnd(t *testing.T) {
