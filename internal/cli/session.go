@@ -389,13 +389,14 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 			}
 		}
 	}
-	if err := bundle.Finalize(storage.Finalization{
+	finalizeErr := bundle.Finalize(storage.Finalization{
 		EndedAt:         time.Now(),
 		ExitReason:      reason,
 		WarningCount:    rec.warnings,
 		ProviderVersion: version,
-	}); err != nil {
-		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, err)
+	})
+	if finalizeErr != nil {
+		fmt.Fprintf(stderr, "cli: run %s: %v\n", runID, finalizeErr)
 	}
 	closed := closeOut(closeOutRequest{
 		RunsRoot: root,
@@ -405,7 +406,7 @@ func serveSession(opts sessionOptions, stderr io.Writer) int {
 		Cancel:   held.fired,
 	}, stderr)
 	held.stop()
-	if closed.Incomplete || rec.storageErr != nil {
+	if closed.Incomplete || rec.storageErr != nil || finalizeErr != nil {
 		return exitFailure
 	}
 	if closed.Verified && closed.Verification.Status != evidence.VerificationPassed {

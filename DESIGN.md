@@ -414,3 +414,11 @@ A valid run with zero repository changes returned `"items": null` on seven repea
 - Every successful action, change and provider-event page represents `items` as a JSON array, including an empty first or terminal page. Missing and `null` collections remain invalid and visible rather than being normalized in the browser.
 - Stored evidence, stream totals, cursors, unavailable-change diagnostics and the Viewer's fail-closed response validation remain unchanged.
 - Acceptance: a zero-change page serializes as `"items":[]`; the exact-source Viewer loads it without an error toast and shows the existing empty Changes state.
+
+## 48. Session finalization failure reaches the process exit
+
+Two isolated hook-driven sessions forced the final manifest installation to fail after `SessionEnd`. Both printed the storage error but exited successfully, leaving the authoritative manifest without `endedAt` or `exitReason` while later repository evidence and the report were still filed.
+
+- `agentrec session serve` returns the ordinary failure code when final manifest installation fails. The existing diagnostic and best-effort close-out remain: available repository evidence, verification and report output are still attempted and preserved.
+- Hook acknowledgements, session reason selection, stored provider evidence and successful session exits remain unchanged. A close-out or verification failure continues to fail independently.
+- Acceptance: two isolated reproductions retain their finalization diagnostic and exit 1; a normal finalized session still writes its ending and exits 0.
