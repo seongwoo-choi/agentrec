@@ -3315,17 +3315,21 @@ function shortID(id) {
     if (!state.run) return;
     const run = state.run.run;
     if (state.confirmDelete) {
+      const question = node('span', 'confirm-text', t('Delete this run?'));
+      question.id = 'delete-confirm-question';
       const yes = node('button', 'danger-button', t('Delete'));
       yes.type = 'button';
+      yes.setAttribute('aria-describedby', question.id);
       yes.addEventListener('click', () => deleteRun(run.id));
       const no = node('button', 'load-more', t('Cancel'));
       no.type = 'button';
+      no.setAttribute('aria-describedby', question.id);
       no.addEventListener('click', () => {
         state.confirmDelete = false;
         renderRunActions();
         $('delete-run').focus();
       });
-      holder.append(node('span', 'confirm-text', t('Delete this run?')), yes, no);
+      holder.append(question, yes, no);
       yes.focus();
       return;
     }
