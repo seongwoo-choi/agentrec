@@ -4131,6 +4131,10 @@ function shortID(id) {
 
   function closeSearch() {
     window.clearTimeout(search.timer);
+    if (search.controller) {
+      search.controller.abort();
+      search.controller = null;
+    }
     search.open = false;
     search.active = -1;
     $('search-results').classList.add('hidden');
@@ -4631,7 +4635,9 @@ function shortID(id) {
   searchAll.addEventListener('input', scheduleSearch);
   searchAll.addEventListener('focus', () => { if (search.hits.length && searchAll.value.trim() === search.query) renderSearch(); });
   searchAll.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
+    if (event.key === 'Tab') {
+      closeSearch();
+    } else if (event.key === 'Escape') {
       // Escape closes the panel and keeps the text; the native search control would clear it.
       event.preventDefault();
       closeSearch();

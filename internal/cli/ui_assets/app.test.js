@@ -298,6 +298,86 @@ test('successful run-list JSON without runs is reported instead of rendered as a
   assert.equal(document.querySelector('#store-size').textContent, '');
 });
 
+test('global search closes before keyboard focus leaves its combobox', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.search = { hits: [{ runId: data.details.run.id, kind: 'action', snippet: 'matching action' }], truncated: false };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, KeyboardEvent } = dom.window;
+  const input = document.querySelector('#search-all');
+  input.focus();
+  input.value = 'matching';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.equal(document.querySelector('#search-results').classList.contains('hidden'), false);
+
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+
+  assert.equal(document.querySelector('#search-results').classList.contains('hidden'), true);
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+  assert.equal(document.querySelector('#search-results').getAttribute('tabindex'), '-1');
+
+  input.blur();
+  input.focus();
+  assert.equal(document.querySelector('#search-results').classList.contains('hidden'), false);
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+  assert.equal(document.querySelector('#search-results').classList.contains('hidden'), true);
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+});
+
+test('leaving global search cancels its pending debounce', async (t) => {
+  let searchRequests = 0;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url) => {
+    if (url.pathname !== '/api/search') return null;
+    searchRequests += 1;
+    return response({ hits: [], truncated: false });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, Event, KeyboardEvent } = dom.window;
+  const input = document.querySelector('#search-all');
+  input.focus();
+  input.value = 'pending';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+  await new Promise((resolve) => dom.window.setTimeout(resolve, 450));
+
+  assert.equal(searchRequests, 0);
+  assert.equal(document.querySelector('#search-results').classList.contains('hidden'), true);
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+});
+
+test('a completed search cannot reopen after keyboard focus leaves', async (t) => {
+  let releaseSearch;
+  let searchSignal;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.intercept = (url, init) => {
+    if (url.pathname !== '/api/search') return null;
+    searchSignal = init.signal;
+    return new Promise((resolve) => { releaseSearch = () => resolve(response({ hits: [{ runId: data.details.run.id, kind: 'action', snippet: 'late result' }], truncated: false })); });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document, KeyboardEvent } = dom.window;
+  const input = document.querySelector('#search-all');
+  input.focus();
+  input.value = 'late';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.ok(releaseSearch, 'search request is pending');
+  assert.equal(searchSignal.aborted, false);
+
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+  assert.equal(searchSignal.aborted, true);
+  releaseSearch();
+  await settle();
+
+  assert.equal(document.querySelector('#search-results').classList.contains('hidden'), true);
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+  assert.doesNotMatch(document.querySelector('#search-results').textContent, /late result/);
+});
+
 test('successful search JSON without hits is reported instead of rendered as no matches', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.intercept = (url) => url.pathname === '/api/search' ? response({}) : null;
