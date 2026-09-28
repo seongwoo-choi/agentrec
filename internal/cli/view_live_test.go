@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/lock"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
@@ -151,6 +152,38 @@ func TestViewRecordingStatusKeepsActiveQuietSessionNeutral(t *testing.T) {
 	case <-probeDone:
 	case <-time.After(time.Second):
 		t.Error("recording status did not probe the session-bound recorder")
+	}
+}
+
+func TestViewRecordingStatusUsesRepositoryLockForActiveTrace(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	const runID = "run-active-trace"
+	if _, err := storage.Create(root, runID, storage.Manifest{
+		Provider: "claude", CWD: repo, StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	held, err := lock.Acquire(context.Background(), filepath.Join(filepath.Dir(root), locksDirName), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { held.Release() })
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { handler.Close() })
+	var detail struct {
+		Recording viewRecordingStatus `json:"recording"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &detail)
+	if detail.Recording.State != "active" || detail.Recording.Activity != "quiet" || detail.Recording.Evidence != "repository_recorder" {
+		t.Errorf("held trace recording = %+v, want active/quiet/repository_recorder", detail.Recording)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &detail)
+	if detail.Recording.State != "unknown" {
+		t.Errorf("released trace recording state = %q, want unknown", detail.Recording.State)
 	}
 }
 
