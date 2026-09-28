@@ -152,9 +152,10 @@ agentrec events latest --json
   collapsed advanced filters; a collapsed count of loaded runs by provider,
   verification result and project.
 - **Run detail** — the request and the agent's last message side by side; a
-  four-card summary (process, verification, repository, warnings); failure
-  triage on failed runs; **Verify now** or, without `--allow-run`, the command
-  to verify later.
+  bounded **Recorded requests** index opens any recorded prompt at its exact
+  timeline record without loading the full action stream; a four-card summary
+  (process, verification, repository, warnings); failure triage on failed runs;
+  **Verify now** or, without `--allow-run`, the command to verify later.
 - **Timeline** — **Reading view** folds routine tool actions and keeps prompts
   (`You · 3 of 12`), replies, edits, failures and unknown states visible;
   **Changes** groups files by directory; **Provider events** folds `PostToolUse`

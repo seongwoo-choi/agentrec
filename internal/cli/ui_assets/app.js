@@ -8,7 +8,7 @@
   const MAX_EXPANDED_ACTION_GROUPS = 250;
   let earlierRunsExpanded = false;
   let requestRunId = '';
-  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', runUnreadableByPage: new Map(), initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', runUnreadableByPage: new Map(), initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, requests: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -37,6 +37,16 @@
       'Recorded runs': '기록된 실행',
       'Find a title, run, or project': '제목, 실행 또는 프로젝트 검색',
       Request: '요청',
+      'Recorded requests': '기록된 요청',
+      'Show request index': '요청 목록 보기',
+      'Hide request index': '요청 목록 숨기기',
+      'Provider-recorded prompts in record order; no authorship or response pairing is inferred.': '프로바이더가 기록한 프롬프트를 기록 순서로 표시합니다. 작성 주체나 응답 연결은 추론하지 않습니다.',
+      'Load more requests': '요청 더 불러오기',
+      'Loading request index…': '요청 목록 불러오는 중…',
+      'Could not load request index: {error}': '요청 목록을 불러오지 못했습니다: {error}',
+      'No recorded prompts.': '기록된 프롬프트가 없습니다.',
+      'Preview unavailable': '미리보기 없음',
+      '{loaded} of {total} recorded requests': '기록된 요청 {total}개 중 {loaded}개',
       'Last message from {provider}': '{provider}의 마지막 메시지',
       'the agent': '에이전트',
       'Show message': '메시지 보기',
@@ -386,6 +396,16 @@
       'Recorded runs': '記録された実行',
       'Find a title, run, or project': 'タイトル、実行、プロジェクトを検索',
       Request: 'リクエスト',
+      'Recorded requests': '記録されたリクエスト',
+      'Show request index': 'リクエスト一覧を表示',
+      'Hide request index': 'リクエスト一覧を隠す',
+      'Provider-recorded prompts in record order; no authorship or response pairing is inferred.': 'プロバイダーが記録したプロンプトを記録順に表示します。作成者や応答との対応は推測しません。',
+      'Load more requests': 'リクエストをさらに読み込む',
+      'Loading request index…': 'リクエスト一覧を読み込み中…',
+      'Could not load request index: {error}': 'リクエスト一覧を読み込めませんでした: {error}',
+      'No recorded prompts.': '記録されたプロンプトはありません。',
+      'Preview unavailable': 'プレビューなし',
+      '{loaded} of {total} recorded requests': '記録されたリクエスト{total}件中{loaded}件',
       'Last message from {provider}': '{provider} の最後のメッセージ',
       'the agent': 'エージェント',
       'Show message': 'メッセージを表示',
@@ -735,6 +755,16 @@
       'Recorded runs': '已记录的运行',
       'Find a title, run, or project': '搜索标题、运行或项目',
       Request: '请求',
+      'Recorded requests': '已记录的请求',
+      'Show request index': '显示请求列表',
+      'Hide request index': '隐藏请求列表',
+      'Provider-recorded prompts in record order; no authorship or response pairing is inferred.': '按记录顺序显示提供方记录的提示，不推断作者身份或请求与回复的对应关系。',
+      'Load more requests': '加载更多请求',
+      'Loading request index…': '正在加载请求列表…',
+      'Could not load request index: {error}': '无法加载请求列表：{error}',
+      'No recorded prompts.': '没有已记录的提示。',
+      'Preview unavailable': '无预览',
+      '{loaded} of {total} recorded requests': '已记录 {total} 个请求，已加载 {loaded} 个',
       'Last message from {provider}': '{provider} 的最后一条消息',
       'the agent': '代理',
       'Show message': '显示消息',
@@ -1534,9 +1564,10 @@ function shortID(id) {
 
   function actionFromURL() {
     const params = new URLSearchParams(location.search);
-    const id = params.get('focus') === 'actions' ? params.get('action') : '';
+    if (params.get('focus') !== 'actions') return null;
+    const id = params.get('action') || '';
     const raw = params.get('actionCursor');
-    if (!id || !/^(0|[1-9][0-9]*)$/.test(raw || '')) return null;
+    if (!/^(0|[1-9][0-9]*)$/.test(raw || '')) return null;
     const cursor = Number(raw);
     return Number.isSafeInteger(cursor) ? { id, cursor } : null;
   }
@@ -1572,9 +1603,9 @@ function shortID(id) {
       tab.focus({ preventScroll: true });
       if (action) {
         const items = state.streams.actions.items;
-        const exactIndex = items.findIndex((item) => item.id === action.id && item.offset === action.cursor);
+        const exactIndex = items.findIndex((item) => item.offset === action.cursor && (!action.id || item.id === action.id));
         const hasRecordOffsets = items.some((item) => Number.isSafeInteger(item.offset) && item.offset >= 0);
-        const index = exactIndex >= 0 ? exactIndex : (hasRecordOffsets ? -1 : items.findIndex((item) => item.id === action.id));
+        const index = exactIndex >= 0 ? exactIndex : (action.id && !hasRecordOffsets ? items.findIndex((item) => item.id === action.id) : -1);
         const row = $('timeline').querySelector(`.action-row[data-index="${index}"]`);
         if (row) {
           revealActionRow(row);
@@ -2466,9 +2497,10 @@ function shortID(id) {
     const select = () => {
       const url = new URL(location.href);
       if (generation !== state.loadGeneration || runID !== state.run?.run.id || runID !== url.searchParams.get('run')) return;
-      if (action.id && Number.isSafeInteger(cursor) && cursor >= 0) {
+      if (Number.isSafeInteger(cursor) && cursor >= 0) {
         url.searchParams.set('focus', 'actions');
-        url.searchParams.set('action', action.id);
+        if (action.id) url.searchParams.set('action', action.id);
+        else url.searchParams.delete('action');
         url.searchParams.set('actionCursor', String(cursor));
         url.searchParams.delete('change');
         url.searchParams.delete('changeCursor');
@@ -3161,6 +3193,46 @@ function shortID(id) {
     $('run-prompt').textContent = prompt;
   }
 
+  function renderRequestIndex() {
+    const index = state.requests;
+    const total = state.run?.promptCount || 0;
+    const card = $('request-index');
+    card.classList.remove('hidden');
+    if (!index) return;
+    const loaded = index.items.length;
+    $('request-index-count').textContent = t('{loaded} of {total} recorded requests', { loaded, total });
+    const list = $('request-index-list');
+    const focusedRequest = list.contains(document.activeElement)
+      ? Array.from(list.querySelectorAll('button')).indexOf(document.activeElement)
+      : -1;
+    list.replaceChildren();
+    const linked = actionFromURL();
+    for (const request of index.items) {
+      const button = node('button', 'request-index-item');
+      button.type = 'button';
+      button.append(
+        node('span', 'request-index-rank', t('{n} of {total}', { n: request.rank, total })),
+        node('span', 'request-index-preview', request.preview || t('Preview unavailable')),
+      );
+      const current = linked && linked.cursor === request.offset && (!linked.id || linked.id === (request.id || ''));
+      if (current) button.setAttribute('aria-current', 'true');
+      button.addEventListener('click', () => navigateRun(state.run.run.id, request.offset, 'push', '', request.id || '', true));
+      list.append(button);
+    }
+    if (focusedRequest >= 0) list.querySelectorAll('button')[focusedRequest]?.focus({ preventScroll: true });
+    const empty = $('request-index-empty');
+    let message = '';
+    if (index.loading && loaded === 0) message = t('Loading request index…');
+    else if (index.error) message = t('Could not load request index: {error}', { error: index.error });
+    else if (index.loaded && loaded === 0) message = t('No recorded prompts.');
+    empty.textContent = message;
+    empty.classList.toggle('hidden', !message);
+    const more = $('request-index-more');
+    more.classList.toggle('hidden', index.loading || index.nextCursor === null);
+    more.disabled = index.loading;
+    $('request-index-status').textContent = message || $('request-index-count').textContent;
+  }
+
   // renderReply shows the provider's own last agent.message beside the request:
   // a verbatim record with its position, never a summary or a verdict. Live runs
   // keep the timeline as their surface.
@@ -3197,6 +3269,7 @@ function shortID(id) {
     $('run-project').textContent = run.project || t('unknown');
     renderRunIdentity();
     renderRequest();
+    renderRequestIndex();
     renderReply();
     $('action-count').textContent = String(data.actionCount || 0);
     // A language switch re-renders the run without refetching its streams:
@@ -3248,6 +3321,40 @@ function shortID(id) {
     renderTimeline();
     renderRunList();
     renderWorkspaceState();
+  }
+
+  async function loadRequestPage(cursor = 0, append = false, generation = state.loadGeneration, signal) {
+    const index = state.requests;
+    if (!index || index.loading || cursor === null || generation !== state.loadGeneration) return;
+    const snapshotID = state.run.snapshotId;
+    const from = append ? index.items.length : 0;
+    const moreControl = $('request-index-more');
+    const focusNew = append && document.activeElement === moreControl;
+    index.loading = true;
+    index.currentCursor = cursor;
+    renderRequestIndex();
+    try {
+      const page = await getJSON(`/api/snapshots/${encodeURIComponent(snapshotID)}/requests?cursor=${cursor}`, signal);
+      if (generation !== state.loadGeneration || state.run?.snapshotId !== snapshotID || index !== state.requests || cursor !== index.currentCursor) return;
+      const items = requireArrayField(page, 'items');
+      index.items = append ? index.items.concat(items) : items;
+      index.nextCursor = page.nextCursor === undefined ? null : page.nextCursor;
+      index.error = '';
+      index.loaded = true;
+    } catch (error) {
+      if (generation === state.loadGeneration && index === state.requests) {
+        index.error = error instanceof Error ? error.message : String(error);
+        showError(index.error);
+      }
+    } finally {
+      if (generation === state.loadGeneration && index === state.requests) {
+        index.loading = false;
+        renderRequestIndex();
+        if (focusNew) {
+          $('request-index-list').querySelectorAll('button')[from]?.focus({ preventScroll: true });
+        }
+      }
+    }
   }
 
   async function loadPatchPage(path, cursor = 0, rememberCurrent = false, generation = state.loadGeneration, consumeHistory = false) {
@@ -4159,11 +4266,17 @@ function shortID(id) {
     try {
       const fresh = await getJSON(`/api/runs/${encodeURIComponent(state.run.run.id)}`);
       if (generation !== state.loadGeneration) return;
+      const previousPromptCount = state.run.promptCount || 0;
       const grew = { actions: (fresh.actionCount || 0) > (state.run.actionCount || 0), events: (fresh.eventCount || 0) > (state.run.eventCount || 0) };
+      const requestsGrew = (fresh.promptCount || 0) > previousPromptCount;
       const signature = runSignature(fresh);
       state.run = fresh;
       const running = isLive();
-      if (signature !== live.signature) {
+      const requestsMissing = (fresh.promptCount || 0) > (state.requests?.items.length || 0);
+      if (requestsMissing && state.requests?.loaded && !state.requests.loading && state.requests.nextCursor === null) {
+        await loadRequestPage(state.requests.items.length, true, generation);
+      }
+      if (signature !== live.signature || requestsGrew) {
         live.signature = signature;
         renderRunHeader();
         // The visible stream's "Loaded n of total" reads the new total; pages still to come are fetched from the new snapshot.
@@ -4371,6 +4484,7 @@ function shortID(id) {
       Object.assign(live, { updatedAt: new Date(), signature: runSignature(run), changes: null, error: '', refreshError: '' });
       $('live-status').textContent = '';
       // shown counts the rows the filter lets through, across every page loaded so far.
+      state.requests = { items: [], currentCursor: 0, nextCursor: state.run.promptCount === 0 ? null : 0, loading: false, loaded: state.run.promptCount === 0, error: '' };
       state.streams = {
         actions: { items: [], currentCursor: 0, nextCursor: state.run.actionCount === 0 ? null : 0, endCursor: 0, loading: false, loaded: state.run.actionCount === 0, error: '', shown: 0 },
         changes: { items: [], currentCursor: 0, nextCursor: 0, loading: false, loaded: false, error: '', shown: 0, total: 0, attribution: '', baseline: '', status: '', reason: '' },
@@ -4379,6 +4493,7 @@ function shortID(id) {
       state.activeTypes.clear();
       state.selected = null;
       renderRun();
+      await loadRequestPage(0, false, generation, controller.signal);
       await loadStreamPage(state.mode, cursor, false, generation, false, controller.signal);
       if (state.mode !== 'actions') await loadStreamPage('actions', 0, false, generation, false, controller.signal);
       if (state.mode !== 'changes') await loadStreamPage('changes', 0, false, generation, false, controller.signal);
@@ -4406,14 +4521,14 @@ function shortID(id) {
     }
   }
 
-  async function navigateRun(id, cursor = 0, mode = 'push', changedPath = '', actionID = '') {
+  async function navigateRun(id, cursor = 0, mode = 'push', changedPath = '', actionID = '', exactAction = false) {
     const url = new URL(location.href);
     url.searchParams.set('run', id);
     url.searchParams.delete('action');
     url.searchParams.delete('actionCursor');
-    if (actionID) {
+    if (actionID || exactAction) {
       url.searchParams.set('focus', 'actions');
-      url.searchParams.set('action', actionID);
+      if (actionID) url.searchParams.set('action', actionID);
       url.searchParams.set('actionCursor', String(cursor));
     }
     if (changedPath) {
@@ -4428,7 +4543,7 @@ function shortID(id) {
     const changedFile = changedFileFromURL();
     const action = actionFromURL();
     if (changedFile) state.mode = 'changes';
-    if (actionID) state.mode = 'actions';
+    if (actionID || exactAction) state.mode = 'actions';
     await loadRun(id, false, changedFile ? changedFile.cursor : action ? action.cursor : 0, true);
     if (!state.run || state.run.run.id !== id) return;
     focusRunEvidenceFromURL();
@@ -4712,6 +4827,7 @@ function shortID(id) {
   $('run-verification-filter').addEventListener('change', changeRunFilters);
   $('run-failures-only').addEventListener('change', changeRunFilters);
   $('run-load-more').addEventListener('click', loadMoreRuns);
+  $('request-index-more').addEventListener('click', () => loadRequestPage(state.requests?.nextCursor, true, state.loadGeneration));
   $('run-earlier-toggle').addEventListener('click', () => {
     earlierRunsExpanded = !earlierRunsExpanded;
     renderRunList();

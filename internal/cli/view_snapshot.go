@@ -46,6 +46,21 @@ type viewActionPage struct {
 	EndCursor int64 `json:"endCursor"`
 }
 
+const viewRequestPreviewRunes = 160
+
+type viewRequest struct {
+	ID        string `json:"id,omitempty"`
+	Rank      int    `json:"rank"`
+	Offset    int64  `json:"offset"`
+	Preview   string `json:"preview"`
+	Truncated bool   `json:"truncated"`
+}
+
+type viewRequestPage struct {
+	Items      []viewRequest `json:"items"`
+	NextCursor *int          `json:"nextCursor,omitempty"`
+}
+
 type viewEventPage struct {
 	Items      []json.RawMessage `json:"items"`
 	NextCursor *int64            `json:"nextCursor,omitempty"`
@@ -58,6 +73,7 @@ type viewSnapshot struct {
 	actions           *os.File
 	actionSize        int64
 	actionPromptRanks map[int64]int
+	promptOffsets     []int64
 	events            *os.File
 	eventSize         int64
 	unparsed          *os.File
@@ -872,6 +888,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		return fail(err)
 	}
 	snapshot.actionPromptRanks = scan.promptRanks
+	snapshot.promptOffsets = scan.promptOffsets
 	actionCount, lastMessage, promptCount := scan.count, scan.last, scan.prompts
 	eventCount := 0
 	if snapshot.events != nil {
@@ -1210,10 +1227,11 @@ const viewLastMessageMaxBytes = 64 * 1024
 
 // viewActionScan is what one pass over actions.jsonl yields for the run detail.
 type viewActionScan struct {
-	count       int
-	prompts     int
-	promptRanks map[int64]int
-	last        *viewLastAgentMessage
+	count         int
+	prompts       int
+	promptRanks   map[int64]int
+	promptOffsets []int64
+	last          *viewLastAgentMessage
 }
 
 // scanViewActionsContext counts the recorded actions and the user.prompt
@@ -1226,6 +1244,7 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 	scanner.Split(splitViewLines)
 	count, prompts := 0, 0
 	promptRanks := make(map[int64]int)
+	promptOffsets := make([]int64, 0)
 	var last *viewLastAgentMessage
 	// Track each line's start the way readViewActionPage does, so the offset is
 	// a cursor the page endpoint accepts.
@@ -1253,6 +1272,7 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 		if item.Type == action.TypeUserPrompt {
 			prompts++
 			promptRanks[lineStart] = prompts
+			promptOffsets = append(promptOffsets, lineStart)
 		}
 		if item.Type == action.TypeAgentMessage {
 			var input struct {
@@ -1271,7 +1291,7 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 	if err := scanner.Err(); err != nil {
 		return viewActionScan{}, fmt.Errorf("cli: read %s: %w", actionsFile, err)
 	}
-	return viewActionScan{count: count, prompts: prompts, promptRanks: promptRanks, last: last}, nil
+	return viewActionScan{count: count, prompts: prompts, promptRanks: promptRanks, promptOffsets: promptOffsets, last: last}, nil
 }
 
 // splitViewLines keeps a trailing carriage return in the token so callers that
@@ -1517,6 +1537,68 @@ func readViewActionPage(snapshot *viewSnapshot, cursor int64) (viewActionPage, e
 	page.NextCursor = viewNextCursor(position, snapshot.actionSize)
 	page.EndCursor = position
 	return page, nil
+}
+
+func readViewRequestPage(snapshot *viewSnapshot, cursor int64) (viewRequestPage, error) {
+	if cursor < 0 || cursor > int64(len(snapshot.promptOffsets)) {
+		return viewRequestPage{}, errors.New("cursor is outside the request index")
+	}
+	start := int(cursor)
+	end := min(start+viewPageSize, len(snapshot.promptOffsets))
+	page := viewRequestPage{Items: make([]viewRequest, 0, end-start)}
+	for index, offset := range snapshot.promptOffsets[start:end] {
+		item, err := readViewRequestAt(snapshot, offset, start+index+1)
+		if err != nil {
+			return viewRequestPage{}, err
+		}
+		page.Items = append(page.Items, item)
+	}
+	if end < len(snapshot.promptOffsets) {
+		next := end
+		page.NextCursor = &next
+	}
+	return page, nil
+}
+
+func readViewRequestAt(snapshot *viewSnapshot, offset int64, rank int) (viewRequest, error) {
+	scanner := bufio.NewScanner(io.NewSectionReader(snapshot.actions, offset, snapshot.actionSize-offset))
+	scanner.Buffer(nil, maxActionBytes)
+	scanner.Split(splitViewLines)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return viewRequest{}, fmt.Errorf("cli: read %s request at %d: %w", actionsFile, offset, err)
+		}
+		return viewRequest{}, fmt.Errorf("cli: read %s request at %d: %w", actionsFile, offset, io.ErrUnexpectedEOF)
+	}
+	var item action.Action
+	if err := json.Unmarshal(scanner.Bytes(), &item); err != nil {
+		return viewRequest{}, fmt.Errorf("cli: read %s request at %d: %w", actionsFile, offset, err)
+	}
+	if item.Type != action.TypeUserPrompt {
+		return viewRequest{}, fmt.Errorf("cli: %s request index offset %d is not a recorded prompt", actionsFile, offset)
+	}
+	var input struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal(item.Input, &input); err != nil {
+		return viewRequest{}, fmt.Errorf("cli: read %s request input at %d: %w", actionsFile, offset, err)
+	}
+	preview, truncated := boundRunes(input.Prompt, viewRequestPreviewRunes)
+	return viewRequest{ID: item.ID, Rank: rank, Offset: offset, Preview: preview, Truncated: truncated}, nil
+}
+
+func boundRunes(value string, limit int) (string, bool) {
+	if limit <= 0 {
+		return value, false
+	}
+	count := 0
+	for offset := range value {
+		if count == limit {
+			return value[:offset], true
+		}
+		count++
+	}
+	return value, false
 }
 
 func readViewEventPage(snapshot *viewSnapshot, cursor int64) (viewEventPage, error) {

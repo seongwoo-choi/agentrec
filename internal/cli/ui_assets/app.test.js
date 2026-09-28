@@ -14,7 +14,7 @@ const response = (body) => Promise.resolve({
   json: async () => body,
 });
 
-async function renderFixture({ list, details, actions = [], changes = [], events = [], live = null, search = { hits: [], truncated: false }, configure = () => {}, intercept = () => null }) {
+async function renderFixture({ list, details, actions = [], requests = [], changes = [], events = [], live = null, search = { hits: [], truncated: false }, configure = () => {}, intercept = () => null }) {
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
     url: 'http://localhost:42817/',
@@ -51,6 +51,7 @@ async function renderFixture({ list, details, actions = [], changes = [], events
       }
       if (currentDetails && url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
     }
+    if (url.pathname.includes('/requests')) return response(typeof requests === 'function' ? requests(Number(url.searchParams.get('cursor') || 0)) : { items: requests, nextCursor: null });
     if (url.pathname.includes('/actions')) return response(typeof actions === 'function' ? actions(Number(url.searchParams.get('cursor') || 0)) : { items: actions, nextCursor: null });
     if (url.pathname.endsWith('/live') && live) return response(typeof live === 'function' ? live() : live);
     if (url.pathname.includes('/events')) {
@@ -2949,6 +2950,19 @@ function responsiveFixture(markup, width) {
   style.textContent = flatten(style.sheet.cssRules);
   return dom;
 }
+
+test('request index mobile summary keeps its complete localized count on a second row', (t) => {
+  const dom = responsiveFixture(html, 375);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const style = (element) => dom.window.getComputedStyle(element);
+  const summary = document.querySelector('#request-index .request-summary');
+  const count = document.querySelector('#request-index-count');
+  assert.equal(style(summary).gridTemplateColumns, 'minmax(0,1fr) max-content');
+  assert.equal(style(count).gridColumn, '1 / -1');
+  assert.equal(style(count).whiteSpace, 'normal');
+  assert.equal(style(count).textOverflow, 'clip');
+});
 
 test('responsive fix: conversation keeps two tracks with intrinsic timestamp width', (t) => {
   for (const width of [320, 375, 720]) {
@@ -6510,7 +6524,297 @@ test('conversation expand context localizes after a run re-render', async (t) =>
   assert.equal(document.activeElement, current, 'the corresponding disclosure retains focus across the rerender');
 });
 
-// --- Notification-shaped prompts do not assert an operator (DESIGN.md section 22) ---
+test('request index paging stays manual and moves focus to the first appended request', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 251;
+  data.details.actionCount = 1;
+  const item = (rank) => ({ id: `prompt-${rank}`, rank, offset: rank * 100, preview: `request ${rank}`, truncated: false });
+  data.requests = (cursor) => cursor === 0
+    ? { items: Array.from({ length: 250 }, (_, index) => item(index + 1)), nextCursor: 250 }
+    : { items: [item(251)], nextCursor: null };
+  data.actions = [{ id: 'action', offset: 0, type: 'tool.call', input: { command: 'true' } }];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  assert.equal(d.querySelectorAll('#request-index-list button').length, 250);
+  assert.equal(dom.window.__fetchPaths.filter((path) => path.includes('/requests?')).length, 1);
+  const more = d.querySelector('#request-index-more');
+  more.focus();
+  more.click();
+  await settle();
+  const buttons = [...d.querySelectorAll('#request-index-list button')];
+  assert.equal(buttons.length, 251);
+  assert.equal(dom.window.__fetchPaths.filter((path) => path.includes('/requests?')).length, 2);
+  assert.equal(d.activeElement, buttons[250]);
+});
+
+test('request index paging restores focus after the browser drops focus from its hidden control', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 251;
+  data.details.actionCount = 1;
+  const item = (rank) => ({ id: `prompt-${rank}`, rank, offset: rank * 100, preview: `request ${rank}`, truncated: false });
+  data.requests = (cursor) => cursor === 0
+    ? { items: Array.from({ length: 250 }, (_, index) => item(index + 1)), nextCursor: 250 }
+    : { items: [item(251)], nextCursor: null };
+  data.actions = [{ id: 'action', offset: 0, type: 'tool.call', input: { command: 'true' } }];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  const release = deferFetch(dom.window, (url) => url.endsWith('/requests?cursor=250'));
+  const more = d.querySelector('#request-index-more');
+  d.body.tabIndex = -1;
+  const toggle = more.classList.toggle.bind(more.classList);
+  more.classList.toggle = (token, force) => {
+    const result = toggle(token, force);
+    if (token === 'hidden' && force) d.body.focus();
+    return result;
+  };
+  more.focus();
+  more.click();
+  await settle();
+  assert.equal(d.activeElement, d.body);
+  release();
+  await settle();
+  assert.equal(d.activeElement, d.querySelectorAll('#request-index-list button')[250]);
+});
+
+test('live refresh exposes newly recorded requests without resetting exact selection', async (t) => {
+  let liveTick;
+  let refresh = false;
+  const data = fixture('running', '', 'RUNNING');
+  data.details.promptCount = 1;
+  data.details.actionCount = 1;
+  const initial = data.details;
+  const appended = { ...initial, promptCount: 2 };
+  data.details = () => refresh ? appended : initial;
+  data.requests = (cursor) => {
+    const items = refresh
+      ? [
+          { id: 'prompt-1', rank: 1, offset: 0, preview: 'first request', truncated: false },
+          { id: 'prompt-2', rank: 2, offset: 98765, preview: 'second request', truncated: false },
+        ]
+      : [{ id: 'prompt-1', rank: 1, offset: 0, preview: 'first request', truncated: false }];
+    return { items: items.slice(cursor), nextCursor: null };
+  };
+  data.actions = [{ id: 'prompt-1', offset: 0, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 }];
+  data.configure = (window) => {
+    window.history.replaceState(null, '', `/?run=${initial.run.id}&focus=actions&action=prompt-1&actionCursor=0`);
+    window.setTimeout = (callback, delay) => {
+      if (delay === 3000) liveTick = callback;
+      return delay;
+    };
+    window.clearTimeout = () => {};
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  assert.equal(d.querySelectorAll('#request-index-list button').length, 1);
+  assert.equal(d.querySelector('#request-index-list [aria-current="true"]')?.textContent, '1 of 1first request');
+  assert.match(d.querySelector('#inspector').textContent, /first request/);
+  const exactURL = dom.window.location.href;
+  d.querySelector('#request-index-list [aria-current="true"]').focus();
+  assert.equal(d.activeElement, d.querySelector('#request-index-list [aria-current="true"]'));
+  assert.equal(typeof liveTick, 'function');
+
+  refresh = true;
+  await liveTick();
+  await settle();
+
+  assert.equal(dom.window.location.href, exactURL);
+  assert.match(d.querySelector('#inspector').textContent, /first request/);
+  assert.equal(d.activeElement, d.querySelector('#request-index-list [aria-current="true"]'));
+  assert.equal(d.querySelectorAll('#request-index-list button').length, 2);
+  assert.equal(d.querySelector('#request-index-count').textContent, '2 of 2 recorded requests');
+});
+
+test('live refresh retries a failed recorded-request append without another prompt', async (t) => {
+  let liveTick;
+  let refresh = false;
+  let appendAttempts = 0;
+  const data = fixture('running', '', 'RUNNING');
+  const initial = { ...data.details, promptCount: 1, actionCount: 1 };
+  const appended = { ...initial, promptCount: 2 };
+  data.details = () => refresh ? appended : initial;
+  data.requests = (cursor) => ({
+    items: cursor === 0
+      ? [{ id: 'prompt-1', rank: 1, offset: 0, preview: 'first request', truncated: false }]
+      : [{ id: 'prompt-2', rank: 2, offset: 98765, preview: 'second request', truncated: false }],
+    nextCursor: null,
+  });
+  data.actions = [{ id: 'prompt-1', offset: 0, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 }];
+  data.configure = (window) => {
+    window.setTimeout = (callback, delay) => {
+      if (delay === 3000) liveTick = callback;
+      return delay;
+    };
+    window.clearTimeout = () => {};
+  };
+  data.intercept = (url) => {
+    if (!url.pathname.includes('/requests') || url.searchParams.get('cursor') !== '1') return null;
+    appendAttempts += 1;
+    if (appendAttempts === 1) return Promise.reject(new Error('synthetic request append failure'));
+    return null;
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  refresh = true;
+  await liveTick();
+  await settle();
+  assert.equal(dom.window.document.querySelectorAll('#request-index-list button').length, 1);
+  await liveTick();
+  await settle();
+  assert.equal(appendAttempts, 2);
+  assert.equal(dom.window.document.querySelectorAll('#request-index-list button').length, 2);
+});
+
+test('request index distinguishes intentional empty data from an unreadable page', async (t) => {
+  const empty = fixture('completed', 'pass', 'PASS');
+  empty.details.promptCount = 0;
+  const emptyDOM = await renderFixture(empty);
+  t.after(() => emptyDOM.window.close());
+  assert.equal(emptyDOM.window.document.querySelector('#request-index').classList.contains('hidden'), false);
+  assert.equal(emptyDOM.window.document.querySelector('#request-index-empty').textContent, 'No recorded prompts.');
+
+  const unreadable = fixture('completed', 'pass', 'PASS');
+  unreadable.details.promptCount = 1;
+  unreadable.requests = () => { throw new Error('synthetic unreadable request page'); };
+  const unreadableDOM = await renderFixture(unreadable);
+  t.after(() => unreadableDOM.window.close());
+  assert.match(unreadableDOM.window.document.querySelector('#request-index-empty').textContent, /Could not load request index: .*synthetic unreadable request page/);
+  assert.doesNotMatch(unreadableDOM.window.document.querySelector('#request-index-empty').textContent, /No recorded prompts/);
+});
+
+test('stale request-page response cannot append over newer exact navigation', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 251;
+  data.details.actionCount = 1;
+  const item = (rank) => ({ id: `prompt-${rank}`, rank, offset: (rank - 1) * 100, preview: `request ${rank}`, truncated: false });
+  data.requests = (cursor) => cursor === 0
+    ? { items: Array.from({ length: 250 }, (_, index) => item(index + 1)), nextCursor: 250 }
+    : { items: [item(251)], nextCursor: null };
+  data.actions = (cursor) => ({ items: [{ id: 'prompt-1', offset: cursor, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 }], nextCursor: null });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const release = deferFetch(w, (url) => url.endsWith('/requests?cursor=250'));
+
+  d.querySelector('#request-index-more').click();
+  await settle();
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  const exactURL = w.location.href;
+  release();
+  await settle();
+
+  assert.equal(w.location.href, exactURL);
+  assert.equal(new URLSearchParams(w.location.search).get('actionCursor'), '0');
+  assert.equal(d.querySelectorAll('#request-index-list button').length, 250);
+  assert.match(d.querySelector('#inspector').textContent, /first request/);
+});
+
+test('request index exact navigation survives back, forward, and reload', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 2;
+  data.requests = [
+    { id: 'duplicate', rank: 1, offset: 0, preview: 'first request', truncated: false },
+    { id: 'duplicate', rank: 2, offset: 98765, preview: 'second request', truncated: false },
+  ];
+  data.actions = (cursor) => ({
+    items: [{ id: 'duplicate', offset: cursor, type: 'user.prompt', input: { prompt: cursor === 0 ? 'first request' : 'second request' }, promptRank: cursor === 0 ? 1 : 2 }],
+    nextCursor: null,
+  });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  d.querySelectorAll('#request-index-list button')[1].click();
+  await settle();
+  const secondURL = w.location.href;
+  w.history.back();
+  await settle();
+  assert.equal(new URLSearchParams(w.location.search).get('actionCursor'), '0');
+  assert.match(d.querySelector('#inspector').textContent, /first request/);
+  w.history.forward();
+  await settle();
+  assert.equal(w.location.href, secondURL);
+  assert.match(d.querySelector('#inspector').textContent, /second request/);
+
+  const reloaded = await renderFixture({ ...data, configure: (window) => window.history.replaceState(null, '', secondURL) });
+  t.after(() => reloaded.window.close());
+  assert.equal(reloaded.window.document.querySelector('#request-index-list [aria-current="true"]')?.textContent, '2 of 2second request');
+  assert.match(reloaded.window.document.querySelector('#inspector').textContent, /second request/);
+});
+
+test('request index count, caveat, and CJK previews localize in every supported language', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 0, preview: '긴 요청 日本語 中文', truncated: false },
+    { id: 'p2', rank: 2, offset: 42, preview: '', truncated: false },
+  ];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  for (const [lang, title, count, unavailable, caveat] of [
+    ['en', 'Recorded requests', '2 of 2 recorded requests', 'Preview unavailable', 'Provider-recorded prompts in record order; no authorship or response pairing is inferred.'],
+    ['ko', '기록된 요청', '기록된 요청 2개 중 2개', '미리보기 없음', '프로바이더가 기록한 프롬프트를 기록 순서로 표시합니다. 작성 주체나 응답 연결은 추론하지 않습니다.'],
+    ['ja', '記録されたリクエスト', '記録されたリクエスト2件中2件', 'プレビューなし', 'プロバイダーが記録したプロンプトを記録順に表示します。作成者や応答との対応は推測しません。'],
+    ['zh-CN', '已记录的请求', '已记录 2 个请求，已加载 2 个', '无预览', '按记录顺序显示提供方记录的提示，不推断作者身份或请求与回复的对应关系。'],
+  ]) {
+    d.querySelector('#lang').value = lang;
+    d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+    assert.equal(d.querySelector('#request-index summary').textContent.includes(title), true, lang);
+    assert.equal(d.querySelector('#request-index-count').textContent, count, lang);
+    assert.equal(d.querySelector('#request-index .request-index-note').textContent, caveat, lang);
+    assert.equal(d.querySelectorAll('.request-index-preview')[0].textContent, '긴 요청 日本語 中文', lang);
+    assert.equal(d.querySelectorAll('.request-index-preview')[1].textContent, unavailable, lang);
+  }
+});
+
+test('recorded request index opens duplicate and missing IDs at exact offsets', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 3;
+  data.details.actionCount = 3;
+  data.requests = [
+    { id: 'duplicate', rank: 1, offset: 0, preview: 'first request', truncated: false },
+    { id: 'duplicate', rank: 2, offset: 98765, preview: 'second request', truncated: false },
+    { rank: 3, offset: 99234, preview: '', truncated: false },
+  ];
+  data.actions = (cursor) => {
+    if (cursor === 0) return { items: [{ id: 'duplicate', offset: 0, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 }], nextCursor: 98765 };
+    if (cursor === 98765) return { items: [{ id: 'duplicate', offset: 98765, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 }], nextCursor: 99234 };
+    if (cursor === 99234) return { items: [{ id: '', offset: 99234, type: 'user.prompt', input: { prompt: '' }, promptRank: 3 }], nextCursor: null };
+    assert.fail(`unexpected action cursor ${cursor}`);
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d, location } = dom.window;
+  const buttons = [...d.querySelectorAll('#request-index-list button')];
+  assert.equal(buttons.length, 3);
+  assert.equal(buttons[1].textContent, '2 of 3second request');
+  assert.match(buttons[2].textContent, /3 of 3.*Preview unavailable/);
+
+  buttons[1].click();
+  await settle();
+  let params = new URLSearchParams(location.search);
+  assert.equal(params.get('action'), 'duplicate');
+  assert.equal(params.get('actionCursor'), '98765');
+  assert.equal(d.querySelector('.conversation-select[aria-current="true"]').closest('.action-row').dataset.index, '0');
+  assert.match(d.querySelector('#inspector').textContent, /second request/);
+
+  [...d.querySelectorAll('#request-index-list button')][2].click();
+  await settle();
+  params = new URLSearchParams(location.search);
+  assert.equal(params.has('action'), false);
+  assert.equal(params.get('actionCursor'), '99234');
+  assert.equal(d.querySelector('.conversation-select[aria-current="true"]').closest('.action-row').dataset.index, '0');
+});
+
 
 test('a user.prompt with notification-shaped text uses a cautious shape label', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');

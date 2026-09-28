@@ -889,6 +889,12 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 						writeViewJSON(w, page)
 					}
 					return err
+				case "requests":
+					page, err := readViewRequestPage(snapshot, cursor)
+					if err == nil {
+						writeViewJSON(w, page)
+					}
+					return err
 				case "events":
 					page, err := readViewEventPage(snapshot, cursor)
 					if err == nil {

@@ -919,6 +919,115 @@ func TestViewPromptRanksRemainRecordWideAcrossActionPages(t *testing.T) {
 	}
 }
 
+func TestViewRequestPagesAreBoundedAndPreserveExactPromptIdentity(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-request-index", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})
+	if err != nil {
+		t.Fatal(err)
+	}
+	padding, err := json.Marshal(map[string]string{"command": strings.Repeat("x", viewPageBytes+1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteAction(action.Action{ID: "large-first-action", Type: action.TypeToolCall, Provider: "claude", Assurance: action.AssuranceProviderReported, Status: "completed", Input: padding}); err != nil {
+		t.Fatal(err)
+	}
+	longCJK := strings.Repeat("界", 170)
+	for i := 0; i < viewPageSize+1; i++ {
+		id := fmt.Sprintf("prompt-%03d", i)
+		prompt := fmt.Sprintf("request %03d", i)
+		if i == 0 {
+			id = "duplicate"
+			prompt = longCJK + " api_token=synthetic-request-index-secret"
+		}
+		if i == viewPageSize-1 {
+			id = "duplicate"
+		}
+		if i == viewPageSize {
+			id = "prompt-missing-id"
+		}
+		input, err := json.Marshal(map[string]string{"prompt": prompt})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := b.WriteAction(action.Action{ID: id, Type: action.TypeUserPrompt, Provider: "claude", Assurance: action.AssuranceProviderReported, Status: "completed", Input: input}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: late, ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	actionsPath := filepath.Join(root, "run-request-index", actionsFile)
+	raw, err := os.ReadFile(actionsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.Replace(raw, []byte(`"id":"prompt-missing-id"`), []byte(`"id":""`), 1)
+	if err := os.WriteFile(actionsPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handler := newViewHandler(root, "run-request-index", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var detail struct {
+		SnapshotID  string `json:"snapshotId"`
+		PromptCount int    `json:"promptCount"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/run-request-index", &detail)
+	if detail.PromptCount != viewPageSize+1 {
+		t.Fatalf("promptCount = %d, want %d", detail.PromptCount, viewPageSize+1)
+	}
+	type requestItem struct {
+		ID        string `json:"id"`
+		Rank      int    `json:"rank"`
+		Offset    int64  `json:"offset"`
+		Preview   string `json:"preview"`
+		Truncated bool   `json:"truncated"`
+	}
+	type requestPage struct {
+		Items      []requestItem `json:"items"`
+		NextCursor *int          `json:"nextCursor"`
+	}
+	var first requestPage
+	viewJSONRequest(t, handler, "/api/snapshots/"+detail.SnapshotID+"/requests?cursor=0", &first)
+	if len(first.Items) != viewPageSize || first.NextCursor == nil || *first.NextCursor != viewPageSize {
+		t.Fatalf("first request page = %d items, cursor %v", len(first.Items), first.NextCursor)
+	}
+	if first.Items[0].ID != "duplicate" || first.Items[viewPageSize-1].ID != "duplicate" || first.Items[0].Offset == first.Items[viewPageSize-1].Offset {
+		t.Fatalf("duplicate request identities = first %+v, last %+v", first.Items[0], first.Items[viewPageSize-1])
+	}
+	if first.Items[0].Rank != 1 || first.Items[viewPageSize-1].Rank != viewPageSize {
+		t.Fatalf("request ranks = %d...%d", first.Items[0].Rank, first.Items[viewPageSize-1].Rank)
+	}
+	if first.Items[0].Offset <= viewPageBytes {
+		t.Fatalf("first request offset = %d, want beyond first %d-byte action page", first.Items[0].Offset, viewPageBytes)
+	}
+	if utf8.RuneCountInString(first.Items[0].Preview) != 160 || !first.Items[0].Truncated || strings.Contains(first.Items[0].Preview, "synthetic-request-index-secret") {
+		t.Fatalf("safe bounded preview = %q (truncated %v)", first.Items[0].Preview, first.Items[0].Truncated)
+	}
+	var second requestPage
+	viewJSONRequest(t, handler, fmt.Sprintf("/api/snapshots/%s/requests?cursor=%d", detail.SnapshotID, *first.NextCursor), &second)
+	if len(second.Items) != 1 || second.NextCursor != nil || second.Items[0].ID != "" || second.Items[0].Rank != viewPageSize+1 || second.Items[0].Offset <= first.Items[viewPageSize-1].Offset {
+		t.Fatalf("second request page = %+v, cursor %v", second.Items, second.NextCursor)
+	}
+}
+
+func TestScanViewActionsRejectsInvalidUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), actionsFile)
+	raw := append([]byte(`{"id":"prompt","type":"user.prompt","input":{"prompt":"`), 0xff)
+	raw = append(raw, []byte(`"}}\n`)...)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if _, err := scanViewActionsContext(context.Background(), file, int64(len(raw))); err == nil {
+		t.Fatal("invalid UTF-8 action stream was accepted")
+	}
+}
+
 func TestViewPromptRanksUseCRLFByteOffsets(t *testing.T) {
 	root := home(t)
 	b, err := storage.Create(root, "run-prompt-crlf", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})
