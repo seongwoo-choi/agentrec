@@ -6535,6 +6535,47 @@ test('request index paging stays manual and moves focus to the first appended re
   assert.equal(d.activeElement, buttons[250]);
 });
 
+test('live refresh exposes newly recorded requests without resetting exact selection', async (t) => {
+  let liveTick;
+  let refresh = false;
+  const data = fixture('running', '', 'RUNNING');
+  data.details.promptCount = 1;
+  data.details.actionCount = 1;
+  const initial = data.details;
+  const appended = { ...initial, promptCount: 2 };
+  data.details = () => refresh ? appended : initial;
+  data.requests = () => ({
+    items: refresh
+      ? [
+          { id: 'prompt-1', rank: 1, offset: 0, preview: 'first request', truncated: false },
+          { id: 'prompt-2', rank: 2, offset: 98765, preview: 'second request', truncated: false },
+        ]
+      : [{ id: 'prompt-1', rank: 1, offset: 0, preview: 'first request', truncated: false }],
+    nextCursor: null,
+  });
+  data.actions = [{ id: 'prompt-1', offset: 0, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 }];
+  data.configure = (window) => {
+    window.setTimeout = (callback, delay) => {
+      if (delay === 3000) liveTick = callback;
+      return delay;
+    };
+    window.clearTimeout = () => {};
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  assert.equal(d.querySelectorAll('#request-index-list button').length, 1);
+  assert.equal(typeof liveTick, 'function');
+
+  refresh = true;
+  await liveTick();
+  await settle();
+
+  assert.equal(d.querySelectorAll('#request-index-list button').length, 2);
+  assert.equal(d.querySelector('#request-index-count').textContent, '2 of 2 recorded requests');
+});
+
 test('recorded request index opens duplicate and missing IDs at exact offsets', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.promptCount = 3;
