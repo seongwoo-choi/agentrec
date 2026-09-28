@@ -6604,6 +6604,574 @@ test('request index paging stays manual and moves focus to the first appended re
   assert.equal(d.activeElement, buttons[250]);
 });
 
+test('request index opens the exact recorded interval and can return to the entire timeline', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 5;
+  data.requests = [
+    { id: 'duplicate', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'duplicate', rank: 2, offset: 400, preview: 'second request', truncated: false },
+  ];
+  const all = [
+    { id: 'before', offset: 0, type: 'tool.call', input: { command: 'before' } },
+    { id: 'duplicate', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+    { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'inside first interval' } },
+    { id: 'duplicate', offset: 400, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+    { id: 'outside', offset: 500, type: 'tool.call', input: { command: 'outside first interval' } },
+  ];
+  data.actions = (cursor) => ({ items: cursor === 100 ? all.slice(1) : all, nextCursor: null, endCursor: 600 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+
+  const params = new URLSearchParams(w.location.search);
+  assert.equal(params.get('scope'), 'request');
+  assert.equal(params.get('actionCursor'), '100');
+  assert.equal(d.querySelectorAll('.action-row').length, 2);
+  assert.match(d.querySelector('#timeline').textContent, /first request.*inside first interval/s);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /second request|outside first interval/);
+  assert.match(d.querySelector('#request-scope-label').textContent, /Recorded interval 1 of 2.*before recorded request 2/);
+  assert.equal(d.querySelector('#request-scope-exit').classList.contains('hidden'), false);
+
+  d.querySelector('#request-scope-exit').click();
+  await settle();
+  assert.equal(new URLSearchParams(w.location.search).has('scope'), false);
+  assert.equal(d.querySelectorAll('.action-row').length, 5);
+  assert.equal(d.querySelector('#request-scope-exit').classList.contains('hidden'), true);
+});
+
+test('keyboard exit from a recorded interval returns focus to the actions timeline', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 3;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'p2', rank: 2, offset: 300, preview: 'second request', truncated: false },
+  ];
+  data.actions = (cursor) => ({ items: cursor === 100 ? [
+    { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+    { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'inside' } },
+    { id: 'p2', offset: 300, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+  ] : [
+    { id: 'before', offset: 0, type: 'tool.call', input: { command: 'before' } },
+    { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+    { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'inside' } },
+  ], nextCursor: null, endCursor: 400 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  const exit = d.querySelector('#request-scope-exit');
+  exit.focus();
+  exit.click();
+  await settle();
+
+  assert.equal(new URLSearchParams(dom.window.location.search).has('scope'), false);
+  assert.equal(d.activeElement, d.querySelector('#timeline-tab-actions'));
+});
+
+test('recorded interval filters keep exact bounds links and scope exit available', async (t) => {
+  const writes = [];
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 5;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'p2', rank: 2, offset: 500, preview: 'second request', truncated: false },
+  ];
+  data.actions = (cursor) => ({ items: cursor === 100 ? [
+    { id: 'p1', offset: 100, type: 'user.prompt', status: 'completed', input: { prompt: 'first request' }, promptRank: 1 },
+    { id: 'call', offset: 200, type: 'tool.call', status: 'completed', input: { command: 'needle command' } },
+    { id: 'write', offset: 300, type: 'file.write', status: 'completed', input: { path: 'scope.txt' } },
+    { id: 'result', offset: 400, type: 'tool.result', status: 'completed', input: { text: 'inside result' } },
+    { id: 'p2', offset: 500, type: 'user.prompt', status: 'completed', input: { prompt: 'second request' }, promptRank: 2 },
+  ] : [], nextCursor: null, endCursor: 600 });
+  data.configure = (window) => Object.defineProperty(window.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  const search = d.querySelector('#timeline-search');
+  search.value = 'needle';
+  search.dispatchEvent(new w.Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  assert.deepEqual([...d.querySelectorAll('#timeline > .action-row')].map((row) => row.dataset.index), ['1']);
+  d.querySelector('.action-row[data-index="1"]').click();
+  d.querySelector('.copy-evidence-link').click();
+  await settle();
+  let copied = new URL(writes.at(-1));
+  assert.equal(copied.searchParams.get('scope'), 'request');
+  assert.equal(copied.searchParams.get('scopeStart'), '100');
+  assert.equal(copied.searchParams.get('actionCursor'), '200');
+
+  search.value = '';
+  search.dispatchEvent(new w.Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  [...d.querySelectorAll('#type-filters button')].find((button) => button.dataset.type === 'file.write').click();
+  assert.deepEqual([...d.querySelectorAll('#timeline > .action-row')].map((row) => row.dataset.index), ['0', '1', '3']);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /scope\.txt/);
+  assert.equal(new URLSearchParams(w.location.search).get('scopeStart'), '100');
+  assert.match(d.querySelector('#request-scope-label').textContent, /before recorded request 2/);
+  assert.equal(d.querySelector('#request-scope-exit').classList.contains('hidden'), false);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /second request/);
+});
+
+test('adjacent and completed-final recorded intervals keep their exact bounds', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 3;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'p2', rank: 2, offset: 200, preview: 'second request', truncated: false },
+  ];
+  data.actions = (cursor) => ({ items: cursor === 100 ? [
+    { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+    { id: 'p2', offset: 200, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+  ] : [
+    { id: 'p2', offset: 200, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+    { id: 'final', offset: 300, type: 'tool.call', status: 'failed', input: { command: 'final failed action' } },
+  ], nextCursor: null, endCursor: 400 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  assert.equal(d.querySelectorAll('.action-row').length, 1);
+  assert.match(d.querySelector('#timeline').textContent, /first request/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /second request/);
+  assert.match(d.querySelector('#request-scope-label').textContent, /before recorded request 2/);
+
+  d.querySelectorAll('#request-index-list button')[1].click();
+  await settle();
+  assert.match(d.querySelector('#request-scope-label').textContent, /through the snapshot end/);
+  assert.match(d.querySelector('#timeline').textContent, /final failed action.*failed/s);
+});
+
+test('recorded interval preserves failed and unknown action evidence in both action views', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 1;
+  data.details.actionCount = 3;
+  data.requests = [{ id: 'p1', rank: 1, offset: 100, preview: 'request', truncated: false }];
+  data.actions = () => ({ items: [
+    { id: 'p1', offset: 100, type: 'user.prompt', status: 'completed', input: { prompt: 'request' }, promptRank: 1 },
+    { id: 'failed', offset: 200, type: 'tool.result', status: 'failed', input: { text: 'failure evidence' } },
+    { id: 'unknown', offset: 300, type: 'tool.result', status: 'unknown', input: { text: 'unknown evidence' } },
+  ], nextCursor: null, endCursor: 400 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  assert.match(d.querySelector('#timeline').textContent, /failure evidence.*failed/s);
+  assert.match(d.querySelector('#timeline').textContent, /unknown evidence.*unknown/s);
+  const toggle = d.querySelector('#all-actions-toggle');
+  toggle.checked = true;
+  toggle.dispatchEvent(new w.Event('change', { bubbles: true }));
+  assert.match(d.querySelector('#timeline').textContent, /failure evidence.*failed/s);
+  assert.match(d.querySelector('#timeline').textContent, /unknown evidence.*unknown/s);
+  assert.match(d.querySelector('#request-scope-label').textContent, /through the snapshot end/);
+});
+
+test('request interval stops at a next prompt found on a later action page', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 5;
+  data.requests = [
+    { id: '', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: '', rank: 2, offset: 400, preview: 'second request', truncated: false },
+  ];
+  data.actions = (cursor) => cursor === 100
+    ? { items: [
+        { id: '', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+        { id: 'inside-1', offset: 200, type: 'tool.call', input: { command: 'inside page one' } },
+      ], nextCursor: 300, endCursor: 300 }
+    : { items: [
+        { id: 'inside-2', offset: 300, type: 'tool.call', input: { command: 'inside page two' } },
+        { id: '', offset: 400, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+        { id: 'outside', offset: 500, type: 'tool.call', input: { command: 'outside interval' } },
+      ], nextCursor: null, endCursor: 600 };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  assert.match(d.querySelector('#request-scope-label').textContent, /end not loaded yet/);
+  d.querySelector('#timeline .load-more').click();
+  await settle();
+  assert.equal(d.querySelectorAll('.action-row').length, 3);
+  assert.match(d.querySelector('#timeline').textContent, /inside page two/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /second request|outside interval/);
+  assert.match(d.querySelector('#request-scope-label').textContent, /before recorded request 2/);
+  assert.equal(d.querySelector('#timeline .load-more'), null);
+});
+
+test('request interval fails closed when a non-final request exhausts without its promised boundary', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 3;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'p2', rank: 2, offset: 400, preview: 'second request', truncated: false },
+  ];
+  data.actions = () => ({ items: [
+    { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+    { id: 'leaked', offset: 500, type: 'tool.call', input: { command: 'must not leak past missing boundary' } },
+  ], nextCursor: null, endCursor: 600 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  assert.equal(d.querySelectorAll('.action-row').length, 0);
+  assert.match(d.querySelector('#timeline').textContent, /Could not load recorded interval/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /must not leak|through the snapshot end/);
+});
+
+test('request interval rejects a non-monotonic opening page before rendering beyond its boundary', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 3;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'p2', rank: 2, offset: 400, preview: 'second request', truncated: false },
+  ];
+  data.actions = () => ({ items: [
+    { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+    { id: 'outside', offset: 500, type: 'tool.call', input: { command: 'must not render' } },
+    { id: 'p2', offset: 400, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+  ], nextCursor: null, endCursor: 600 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  assert.equal(d.querySelectorAll('.action-row').length, 0);
+  assert.match(d.querySelector('#timeline').textContent, /Could not load recorded interval/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /must not render|second request/);
+});
+
+test('request interval rejects an unseen prompt hidden in a continuation overlap', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 4;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'p2', rank: 2, offset: 150, preview: 'second request', truncated: false },
+  ];
+  data.actions = (cursor) => cursor === 100
+    ? { items: [
+        { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+        { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'inside page one' } },
+      ], nextCursor: 300, endCursor: 300 }
+    : { items: [
+        { id: 'p2', offset: 150, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+        { id: 'outside', offset: 300, type: 'tool.call', input: { command: 'must not render' } },
+      ], nextCursor: 400, endCursor: 400 };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  d.querySelector('#timeline .load-more').click();
+  await settle();
+  assert.match(d.querySelector('#timeline').textContent, /Could not load recorded interval/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /second request|must not render/);
+});
+
+test('request interval rejects a missing opening prompt rank before rendering', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 2;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'p2', rank: 2, offset: 400, preview: 'second request', truncated: false },
+  ];
+  data.actions = () => ({ items: [
+    { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' } },
+    { id: 'outside', offset: 500, type: 'tool.call', input: { command: 'must not render' } },
+  ], nextCursor: null, endCursor: 600 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  assert.equal(d.querySelectorAll('.action-row').length, 0);
+  assert.match(d.querySelector('#timeline').textContent, /Could not load recorded interval/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /must not render|through the snapshot end/);
+});
+
+test('request interval trims an overlapping continuation by exact offset before finding the next prompt', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 4;
+  data.requests = [
+    { id: 'duplicate', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'duplicate', rank: 2, offset: 400, preview: 'second request', truncated: false },
+  ];
+  data.actions = (cursor) => cursor === 100
+    ? { items: [
+        { id: 'duplicate', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+        { id: '', offset: 200, type: 'tool.call', input: { command: 'inside once' } },
+      ], nextCursor: 300, endCursor: 300 }
+    : { items: [
+        { id: 'duplicate', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+        { id: '', offset: 200, type: 'tool.call', input: { command: 'inside once' } },
+        { id: '', offset: 300, type: 'tool.call', input: { command: 'inside after overlap' } },
+        { id: 'duplicate', offset: 400, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+      ], nextCursor: null, endCursor: 500 };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  d.querySelector('#timeline .load-more').click();
+  await settle();
+  const text = d.querySelector('#timeline').textContent;
+  assert.equal(d.querySelectorAll('.action-row').length, 3);
+  assert.equal((text.match(/inside once/g) || []).length, 1);
+  assert.match(text, /inside after overlap/);
+  assert.doesNotMatch(text, /second request/);
+  assert.match(d.querySelector('#request-scope-label').textContent, /before recorded request 2/);
+});
+
+test('request interval rejects a continuation that moves backward after new evidence', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 4;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+    { id: 'p2', rank: 2, offset: 400, preview: 'second request', truncated: false },
+  ];
+  data.actions = (cursor) => cursor === 100
+    ? { items: [
+        { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+        { id: 'inside-1', offset: 200, type: 'tool.call', input: { command: 'inside page one' } },
+      ], nextCursor: 300, endCursor: 300 }
+    : { items: [
+        { id: 'inside-2', offset: 300, type: 'tool.call', input: { command: 'new evidence' } },
+        { id: 'overlap', offset: 200, type: 'tool.call', input: { command: 'backward overlap' } },
+      ], nextCursor: 400, endCursor: 400 };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelectorAll('#request-index-list button')[0].click();
+  await settle();
+  d.querySelector('#timeline .load-more').click();
+  await settle();
+  assert.match(d.querySelector('#timeline').textContent, /Could not load recorded interval/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /new evidence|backward overlap/);
+});
+
+test('final request interval keeps a live snapshot boundary explicitly open', async (t) => {
+  const data = fixture('running', '', 'RUNNING');
+  data.details.promptCount = 1;
+  data.details.actionCount = 2;
+  data.requests = [{ id: 'last', rank: 1, offset: 100, preview: 'last request', truncated: false }];
+  data.actions = (cursor) => ({ items: [
+    { id: 'last', offset: cursor, type: 'user.prompt', input: { prompt: 'last request' }, promptRank: 1 },
+    { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'still running' } },
+  ], nextCursor: null, endCursor: 300 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  assert.match(d.querySelector('#request-scope-label').textContent, /Open through the current snapshot/);
+  assert.doesNotMatch(d.querySelector('#request-scope-label').textContent, /final/);
+});
+
+test('request interval fails closed when its byte offset is not a recorded prompt', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 1;
+  data.details.actionCount = 1;
+  data.requests = [{ id: 'claimed', rank: 1, offset: 100, preview: 'claimed request', truncated: false }];
+  data.actions = () => ({ items: [{ id: 'wrong', offset: 100, type: 'tool.call', input: { command: 'not a prompt' } }], nextCursor: null, endCursor: 200 });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  assert.equal(d.querySelectorAll('.action-row').length, 0);
+  assert.match(d.querySelector('#timeline').textContent, /Could not load recorded interval/);
+  assert.equal(d.querySelector('#request-scope-exit').classList.contains('hidden'), false);
+});
+
+test('request interval retry revalidates the exact opening prompt', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 1;
+  data.details.actionCount = 2;
+  data.requests = [{ id: 'prompt', rank: 1, offset: 100, preview: 'request', truncated: false }];
+  const cursors = [];
+  let rejected = false;
+  data.actions = (cursor) => {
+    cursors.push(cursor);
+    if (cursor === 100 && !rejected) {
+      rejected = true;
+      return { items: [{ id: 'wrong', offset: cursor, type: 'tool.call', input: { command: 'wrong opening record' } }], nextCursor: null, endCursor: 200 };
+    }
+    return { items: [
+      { id: 'prompt', offset: cursor, type: 'user.prompt', input: { prompt: 'request' }, promptRank: 1 },
+      { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'inside interval' } },
+    ], nextCursor: null, endCursor: 300 };
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  assert.match(d.querySelector('#timeline').textContent, /Could not load recorded interval/);
+  d.querySelector('#timeline .load-more').click();
+  await settle();
+  assert.equal(cursors.at(-1), 100);
+  assert.equal(cursors.filter((cursor) => cursor === 100).length, 2);
+  assert.match(d.querySelector('#timeline').textContent, /request.*inside interval/s);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /wrong opening record|Could not load recorded interval/);
+});
+
+test('copied in-interval evidence link preserves and reloads the recorded interval', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  data.details.actionCount = 4;
+  data.requests = [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first', truncated: false },
+    { id: 'p2', rank: 2, offset: 400, preview: 'second', truncated: false },
+  ];
+  data.actions = (cursor) => cursor === 100
+    ? { items: [
+        { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first' }, promptRank: 1 },
+        { id: 'inside-1', offset: 200, type: 'tool.call', input: { command: 'inside page one' } },
+      ], nextCursor: 300, endCursor: 300 }
+    : { items: [
+        { id: 'inside', offset: 300, type: 'tool.call', input: { command: 'inside page two' } },
+        { id: 'p2', offset: 400, type: 'user.prompt', input: { prompt: 'second' }, promptRank: 2 },
+        { id: 'outside', offset: 500, type: 'tool.call', input: { command: 'outside' } },
+      ], nextCursor: null, endCursor: 600 };
+  const writes = [];
+  data.configure = (window) => Object.defineProperty(window.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  d.querySelector('#timeline .load-more').click();
+  await settle();
+  d.querySelector('.action-row[data-index="2"]').click();
+  d.querySelector('.copy-evidence-link').click();
+  await settle();
+  const copied = new URL(writes[0]);
+  assert.equal(copied.searchParams.get('scope'), 'request');
+  assert.equal(copied.searchParams.get('scopeStart'), '100');
+  assert.equal(copied.searchParams.get('actionCursor'), '300');
+
+  const reloaded = await renderFixture({ ...data, configure: (window) => window.history.replaceState(null, '', `${copied.pathname}${copied.search}`) });
+  t.after(() => reloaded.window.close());
+  assert.match(reloaded.window.document.querySelector('#inspector').textContent, /inside page two/);
+  assert.doesNotMatch(reloaded.window.document.querySelector('#timeline').textContent, /second|outside/);
+});
+
+test('live request interval closes with fresh totals and keeps scoped pager copy', async (t) => {
+  let liveTick;
+  let fresh = false;
+  const data = fixture('running', '', 'RUNNING');
+  const initial = { ...data.details, promptCount: 1, actionCount: 2 };
+  const grown = { ...initial, promptCount: 2, actionCount: 3, recording: { ...initial.recording, refreshedAt: '2025-01-01T00:00:03Z' } };
+  data.details = () => fresh ? grown : initial;
+  data.requests = (cursor) => ({ items: (fresh ? [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first', truncated: false },
+    { id: 'p2', rank: 2, offset: 300, preview: 'second', truncated: false },
+  ] : [{ id: 'p1', rank: 1, offset: 100, preview: 'first', truncated: false }]).slice(cursor), nextCursor: null });
+  data.actions = (cursor) => cursor === 300
+    ? { items: [{ id: 'p2', offset: 300, type: 'user.prompt', input: { prompt: 'second' }, promptRank: 2 }], nextCursor: null, endCursor: 400 }
+    : { items: [
+        { id: 'p1', offset: cursor, type: 'user.prompt', input: { prompt: 'first' }, promptRank: 1 },
+        { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'inside' } },
+      ], nextCursor: null, endCursor: 300 };
+  data.configure = (window) => {
+    window.setTimeout = (callback, delay) => { if (delay === 3000) liveTick = callback; return delay; };
+    window.clearTimeout = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  fresh = true;
+  await liveTick();
+  await settle();
+  assert.match(d.querySelector('#request-scope-label').textContent, /Recorded interval 1 of 2.*before recorded request 2/);
+  assert.equal(d.querySelector('.pager-label').textContent, '2 loaded actions in recorded interval');
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /second/);
+  assert.equal(d.querySelector('#request-scope-label').getAttribute('role'), 'status');
+  assert.equal(d.querySelector('#request-scope-label').getAttribute('aria-live'), 'polite');
+  assert.equal(d.querySelector('#request-scope-label').getAttribute('aria-atomic'), 'true');
+});
+
+test('live request interval retries a continuation discarded after the snapshot advances', async (t) => {
+  let liveTick;
+  let fresh = false;
+  const data = fixture('running', '', 'RUNNING');
+  const initial = { ...data.details, snapshotId: 'snapshot-old', promptCount: 1, actionCount: 2 };
+  const grown = { ...initial, snapshotId: 'snapshot-new', promptCount: 2, actionCount: 3 };
+  data.details = () => fresh ? grown : initial;
+  data.requests = (cursor) => ({ items: (fresh ? [
+    { id: 'p1', rank: 1, offset: 100, preview: 'first', truncated: false },
+    { id: 'p2', rank: 2, offset: 400, preview: 'second', truncated: false },
+  ] : [{ id: 'p1', rank: 1, offset: 100, preview: 'first', truncated: false }]).slice(cursor), nextCursor: null });
+  data.actions = (cursor) => cursor === 100
+    ? { items: [
+        { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first' }, promptRank: 1 },
+        { id: 'inside-1', offset: 200, type: 'tool.call', input: { command: 'inside page one' } },
+      ], nextCursor: 300, endCursor: 300 }
+    : { items: [
+        { id: 'inside-2', offset: 300, type: 'tool.call', input: { command: 'inside fresh page' } },
+        { id: 'p2', offset: 400, type: 'user.prompt', input: { prompt: 'second' }, promptRank: 2 },
+      ], nextCursor: null, endCursor: 500 };
+  data.configure = (window) => {
+    window.setTimeout = (callback, delay) => { if (delay === 3000) liveTick = callback; return delay; };
+    window.clearTimeout = () => {};
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  const releaseOld = deferFetch(w, (url) => url.includes('/snapshots/snapshot-old/actions?cursor=300'), {
+    items: [{ id: 'old-terminal', offset: 300, type: 'tool.call', input: { command: 'stale terminal page' } }],
+    nextCursor: null,
+    endCursor: 400,
+  });
+  d.querySelector('#timeline .load-more').click();
+  await settle();
+  fresh = true;
+  await liveTick();
+  releaseOld();
+  await settle();
+
+  assert.match(d.querySelector('#request-scope-label').textContent, /Recorded interval 1 of 2.*before recorded request 2/);
+  assert.match(d.querySelector('#timeline').textContent, /inside fresh page/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /stale terminal page|Could not load recorded interval/);
+  assert.ok(w.__fetchPaths.includes('/api/snapshots/snapshot-new/actions?cursor=300'));
+});
+
 test('request index paging restores focus after the browser drops focus from its hidden control', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.promptCount = 251;
@@ -6745,12 +7313,15 @@ test('request index distinguishes intentional empty data from an unreadable page
 test('stale request-page response cannot append over newer exact navigation', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.promptCount = 251;
-  data.details.actionCount = 1;
+  data.details.actionCount = 2;
   const item = (rank) => ({ id: `prompt-${rank}`, rank, offset: (rank - 1) * 100, preview: `request ${rank}`, truncated: false });
   data.requests = (cursor) => cursor === 0
     ? { items: Array.from({ length: 250 }, (_, index) => item(index + 1)), nextCursor: 250 }
     : { items: [item(251)], nextCursor: null };
-  data.actions = (cursor) => ({ items: [{ id: 'prompt-1', offset: cursor, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 }], nextCursor: null });
+  data.actions = (cursor) => ({ items: [
+    { id: 'prompt-1', offset: cursor, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+    { id: 'prompt-2', offset: 100, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+  ], nextCursor: null });
   const dom = await renderFixture(data);
   t.after(() => dom.window.close());
   const w = dom.window, d = w.document;
@@ -6779,7 +7350,10 @@ test('request index exact navigation survives back, forward, and reload', async 
     { id: 'duplicate', rank: 2, offset: 98765, preview: 'second request', truncated: false },
   ];
   data.actions = (cursor) => ({
-    items: [{ id: 'duplicate', offset: cursor, type: 'user.prompt', input: { prompt: cursor === 0 ? 'first request' : 'second request' }, promptRank: cursor === 0 ? 1 : 2 }],
+    items: cursor === 0 ? [
+      { id: 'duplicate', offset: 0, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+      { id: 'duplicate', offset: 98765, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+    ] : [{ id: 'duplicate', offset: cursor, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 }],
     nextCursor: null,
   });
   const dom = await renderFixture(data);
@@ -6788,39 +7362,69 @@ test('request index exact navigation survives back, forward, and reload', async 
 
   d.querySelectorAll('#request-index-list button')[0].click();
   await settle();
+  assert.equal(new URLSearchParams(w.location.search).get('scope'), 'request');
+  assert.equal(new URLSearchParams(w.location.search).get('scopeStart'), '0');
+  assert.match(d.querySelector('#request-scope-label').textContent, /before recorded request 2/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /second request/);
   d.querySelectorAll('#request-index-list button')[1].click();
   await settle();
   const secondURL = w.location.href;
   w.history.back();
   await settle();
-  assert.equal(new URLSearchParams(w.location.search).get('actionCursor'), '0');
+  let params = new URLSearchParams(w.location.search);
+  assert.equal(params.get('actionCursor'), '0');
+  assert.equal(params.get('scope'), 'request');
+  assert.equal(params.get('scopeStart'), '0');
+  assert.match(d.querySelector('#request-scope-label').textContent, /before recorded request 2/);
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /second request/);
   assert.match(d.querySelector('#inspector').textContent, /first request/);
   w.history.forward();
   await settle();
   assert.equal(w.location.href, secondURL);
+  params = new URLSearchParams(w.location.search);
+  assert.equal(params.get('scope'), 'request');
+  assert.equal(params.get('scopeStart'), '98765');
+  assert.match(d.querySelector('#request-scope-label').textContent, /through the snapshot end/);
   assert.match(d.querySelector('#inspector').textContent, /second request/);
+
+  d.querySelector('#request-scope-exit').click();
+  await settle();
+  assert.equal(new URLSearchParams(w.location.search).has('scope'), false);
+  w.history.back();
+  await settle();
+  assert.equal(w.location.href, secondURL);
+  assert.match(d.querySelector('#request-scope-label').textContent, /through the snapshot end/);
 
   const reloaded = await renderFixture({ ...data, configure: (window) => window.history.replaceState(null, '', secondURL) });
   t.after(() => reloaded.window.close());
   assert.equal(reloaded.window.document.querySelector('#request-index-list [aria-current="true"]')?.textContent, '2 of 2second request');
+  assert.match(reloaded.window.document.querySelector('#request-scope-label').textContent, /through the snapshot end/);
+  assert.doesNotMatch(reloaded.window.document.querySelector('#timeline').textContent, /first request/);
   assert.match(reloaded.window.document.querySelector('#inspector').textContent, /second request/);
 });
 
-test('request index count, caveat, and CJK previews localize in every supported language', async (t) => {
+test('request index and recorded-interval controls localize in every supported language', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.promptCount = 2;
+  data.details.actionCount = 2;
   data.requests = [
     { id: 'p1', rank: 1, offset: 0, preview: '긴 요청 日本語 中文', truncated: false },
     { id: 'p2', rank: 2, offset: 42, preview: '', truncated: false },
   ];
+  data.actions = () => ({ items: [
+    { id: 'p1', rank: 1, offset: 0, type: 'user.prompt', input: { prompt: '긴 요청 日本語 中文' }, promptRank: 1 },
+    { id: 'p2', rank: 2, offset: 42, type: 'user.prompt', input: { prompt: '' }, promptRank: 2 },
+  ], nextCursor: null, endCursor: 84 });
   const dom = await renderFixture(data);
   t.after(() => dom.window.close());
   const w = dom.window, d = w.document;
-  for (const [lang, title, count, unavailable, caveat] of [
-    ['en', 'Recorded requests', '2 of 2 recorded requests', 'Preview unavailable', 'Provider-recorded prompts in record order; no authorship or response pairing is inferred.'],
-    ['ko', '기록된 요청', '기록된 요청 2개 중 2개', '미리보기 없음', '프로바이더가 기록한 프롬프트를 기록 순서로 표시합니다. 작성 주체나 응답 연결은 추론하지 않습니다.'],
-    ['ja', '記録されたリクエスト', '記録されたリクエスト2件中2件', 'プレビューなし', 'プロバイダーが記録したプロンプトを記録順に表示します。作成者や応答との対応は推測しません。'],
-    ['zh-CN', '已记录的请求', '已记录 2 个请求，已加载 2 个', '无预览', '按记录顺序显示提供方记录的提示，不推断作者身份或请求与回复的对应关系。'],
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  for (const [lang, title, count, unavailable, caveat, interval, exit] of [
+    ['en', 'Recorded requests', '2 of 2 recorded requests', 'Preview unavailable', 'Provider-recorded prompts in record order; no authorship or response pairing is inferred.', 'Recorded interval 1 of 2 · ends before recorded request 2.', 'Entire timeline'],
+    ['ko', '기록된 요청', '기록된 요청 2개 중 2개', '미리보기 없음', '프로바이더가 기록한 프롬프트를 기록 순서로 표시합니다. 작성 주체나 응답 연결은 추론하지 않습니다.', '기록된 구간 1 / 2 · 기록된 요청 2 직전에 끝납니다.', '전체 타임라인'],
+    ['ja', '記録されたリクエスト', '記録されたリクエスト2件中2件', 'プレビューなし', 'プロバイダーが記録したプロンプトを記録順に表示します。作成者や応答との対応は推測しません。', '記録区間 1 / 2 · 記録されたリクエスト 2 の直前までです。', 'タイムライン全体'],
+    ['zh-CN', '已记录的请求', '已记录 2 个请求，已加载 2 个', '无预览', '按记录顺序显示提供方记录的提示，不推断作者身份或请求与回复的对应关系。', '记录区间 1 / 2 · 截止于已记录请求 2 之前。', '完整时间线'],
   ]) {
     d.querySelector('#lang').value = lang;
     d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
@@ -6829,6 +7433,8 @@ test('request index count, caveat, and CJK previews localize in every supported 
     assert.equal(d.querySelector('#request-index .request-index-note').textContent, caveat, lang);
     assert.equal(d.querySelectorAll('.request-index-preview')[0].textContent, '긴 요청 日本語 中文', lang);
     assert.equal(d.querySelectorAll('.request-index-preview')[1].textContent, unavailable, lang);
+    assert.equal(d.querySelector('#request-scope-label').textContent, interval, lang);
+    assert.equal(d.querySelector('#request-scope-exit').textContent, exit, lang);
   }
 });
 
