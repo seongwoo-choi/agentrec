@@ -1001,6 +1001,23 @@ func TestViewRequestPagesAreBoundedAndPreserveExactPromptIdentity(t *testing.T) 
 	}
 }
 
+func TestScanViewActionsRejectsInvalidUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), actionsFile)
+	raw := append([]byte(`{"id":"prompt","type":"user.prompt","input":{"prompt":"`), 0xff)
+	raw = append(raw, []byte(`"}}\n`)...)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if _, err := scanViewActionsContext(context.Background(), file, int64(len(raw))); err == nil {
+		t.Fatal("invalid UTF-8 action stream was accepted")
+	}
+}
+
 func TestViewPromptRanksUseCRLFByteOffsets(t *testing.T) {
 	root := home(t)
 	b, err := storage.Create(root, "run-prompt-crlf", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})

@@ -6628,6 +6628,64 @@ test('live refresh exposes newly recorded requests without resetting exact selec
   assert.equal(d.querySelector('#request-index-count').textContent, '2 of 2 recorded requests');
 });
 
+test('live refresh retries a failed recorded-request append without another prompt', async (t) => {
+  let liveTick;
+  let refresh = false;
+  let appendAttempts = 0;
+  const data = fixture('running', '', 'RUNNING');
+  const initial = { ...data.details, promptCount: 1, actionCount: 1 };
+  const appended = { ...initial, promptCount: 2 };
+  data.details = () => refresh ? appended : initial;
+  data.requests = (cursor) => ({
+    items: cursor === 0
+      ? [{ id: 'prompt-1', rank: 1, offset: 0, preview: 'first request', truncated: false }]
+      : [{ id: 'prompt-2', rank: 2, offset: 98765, preview: 'second request', truncated: false }],
+    nextCursor: null,
+  });
+  data.actions = [{ id: 'prompt-1', offset: 0, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 }];
+  data.configure = (window) => {
+    window.setTimeout = (callback, delay) => {
+      if (delay === 3000) liveTick = callback;
+      return delay;
+    };
+    window.clearTimeout = () => {};
+  };
+  data.intercept = (url) => {
+    if (!url.pathname.includes('/requests') || url.searchParams.get('cursor') !== '1') return null;
+    appendAttempts += 1;
+    if (appendAttempts === 1) return Promise.reject(new Error('synthetic request append failure'));
+    return null;
+  };
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  refresh = true;
+  await liveTick();
+  await settle();
+  assert.equal(dom.window.document.querySelectorAll('#request-index-list button').length, 1);
+  await liveTick();
+  await settle();
+  assert.equal(appendAttempts, 2);
+  assert.equal(dom.window.document.querySelectorAll('#request-index-list button').length, 2);
+});
+
+test('request index distinguishes intentional empty data from an unreadable page', async (t) => {
+  const empty = fixture('completed', 'pass', 'PASS');
+  empty.details.promptCount = 0;
+  const emptyDOM = await renderFixture(empty);
+  t.after(() => emptyDOM.window.close());
+  assert.equal(emptyDOM.window.document.querySelector('#request-index').classList.contains('hidden'), false);
+  assert.equal(emptyDOM.window.document.querySelector('#request-index-empty').textContent, 'No recorded prompts.');
+
+  const unreadable = fixture('completed', 'pass', 'PASS');
+  unreadable.details.promptCount = 1;
+  unreadable.requests = () => { throw new Error('synthetic unreadable request page'); };
+  const unreadableDOM = await renderFixture(unreadable);
+  t.after(() => unreadableDOM.window.close());
+  assert.match(unreadableDOM.window.document.querySelector('#request-index-empty').textContent, /Could not load request index: synthetic unreadable request page/);
+  assert.doesNotMatch(unreadableDOM.window.document.querySelector('#request-index-empty').textContent, /No recorded prompts/);
+});
+
 test('stale request-page response cannot append over newer exact navigation', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.promptCount = 251;
