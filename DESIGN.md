@@ -466,3 +466,11 @@ Two isolated partial-finalization bundles retained a supervisor result with `exi
 - A stored nonzero exit or signal prevents a passing aggregate status. A traced run is running only while neither the manifest nor process result records an ending.
 - Supervisor fields, verification evidence, finalized-manifest precedence, session liveness semantics and canonical stored documents remain unchanged.
 - Acceptance: a missing manifest ending with stored `nonzero`/exit 7 and passing verification returns `exitReason: "nonzero"` and failure status from both list and detail APIs; it never renders as PASS or RUNNING.
+
+## 54. Action evidence links identify an exact record
+
+Two same-page actions can carry the same recorded ID. Selecting the later action and copying its evidence link previously reused the page-start cursor; reopening that link selected the first same-ID action and silently showed different evidence.
+
+- Every action page projects the exact JSONL byte offset of each returned record. Evidence links use that record offset rather than the page boundary; older responses without per-record offsets retain the page-boundary fallback.
+- Exact-link restoration requires the action ID and record offset to match when offsets are present; it does not substitute a same-ID record at another offset. Existing IDs, Reading groups, stream pagination, search hits, loaded-position labels and canonical action records remain unchanged.
+- Acceptance: a copied link from the second of two same-ID actions carries the second record's byte offset, and a fresh Viewer load restores that action's evidence rather than the first duplicate.

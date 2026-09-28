@@ -1571,7 +1571,10 @@ function shortID(id) {
       try { tab.click(); } finally { state.restoringNavigation = false; }
       tab.focus({ preventScroll: true });
       if (action) {
-        const index = state.streams.actions.items.findIndex((item) => item.id === action.id);
+        const items = state.streams.actions.items;
+        const exactIndex = items.findIndex((item) => item.id === action.id && item.offset === action.cursor);
+        const hasRecordOffsets = items.some((item) => Number.isSafeInteger(item.offset) && item.offset >= 0);
+        const index = exactIndex >= 0 ? exactIndex : (hasRecordOffsets ? -1 : items.findIndex((item) => item.id === action.id));
         const row = $('timeline').querySelector(`.action-row[data-index="${index}"]`);
         if (row) {
           revealActionRow(row);
@@ -2865,7 +2868,10 @@ function shortID(id) {
     const stream = state.streams?.[action ? 'actions' : 'changes'];
     const index = stream?.items.indexOf(selected.value) ?? -1;
     // Action offsets are byte page boundaries, not ordinal row indices.
-    const cursor = action ? stream?.pageCursors?.[index] : (stream?.startCursor ?? 0) + index;
+    const recordOffset = selected.value?.offset;
+    const cursor = action
+      ? (Number.isSafeInteger(recordOffset) && recordOffset >= 0 ? recordOffset : stream?.pageCursors?.[index])
+      : (stream?.startCursor ?? 0) + index;
     const target = action ? selected.value.id : selected.value.path;
     if (index < 0 || !target || !Number.isSafeInteger(cursor) || cursor < 0) return '';
     const url = new URL(current.pathname, current.origin);
