@@ -212,13 +212,14 @@ func viewRecordingWithLocks(ctx context.Context, manifest storage.Manifest, rece
 	status := viewRecordingStatus{
 		State: "unknown", Evidence: "unavailable", Persistence: "not_proven", RefreshedAt: time.Now(),
 	}
+	receiptInvalid := false
 	if receiptRaw != nil {
 		var receipt storage.RecordingReceipt
 		if err := json.Unmarshal(receiptRaw, &receipt); err != nil || receipt.Schema != 1 || receipt.EventName == "" || receipt.ObservedAt.IsZero() {
-			status.State = "unavailable"
-			return status
+			receiptInvalid = true
+		} else {
+			status.LastObservedEvent = &viewLastObservedEvent{Name: receipt.EventName, ObservedAt: receipt.ObservedAt}
 		}
-		status.LastObservedEvent = &viewLastObservedEvent{Name: receipt.EventName, ObservedAt: receipt.ObservedAt}
 	}
 	if manifest.EndedAt != nil {
 		status.Evidence = "finalized_manifest"
@@ -231,6 +232,10 @@ func viewRecordingWithLocks(ctx context.Context, manifest storage.Manifest, rece
 				status.State = "ended"
 			}
 		}
+		return status
+	}
+	if receiptInvalid {
+		status.State = "unavailable"
 		return status
 	}
 	if manifest.Mode != storage.ModeSession {
