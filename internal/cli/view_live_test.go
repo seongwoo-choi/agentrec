@@ -88,6 +88,101 @@ func TestViewRecordingStatusKeepsActiveQuietSessionNeutral(t *testing.T) {
 	}
 }
 
+func TestViewRecordingStatusUsesRecorderObservedEventTimeAcrossRefreshes(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const (
+		runID     = "run-observed-event"
+		sessionID = "session-observed-event"
+	)
+	bundle, err := storage.Create(root, runID, storage.Manifest{
+		Provider: "claude", CWD: repo, StartedAt: time.Now(),
+		Mode: storage.ModeSession, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, 9, 28, 8, 40, 0, 123000000, time.UTC)
+	recorder := &sessionRecorder{
+		bundle: bundle, runID: runID, sessionID: sessionID, provider: "claude",
+		cwd: repo, canonicalCWD: repo, repoRoot: repo, stderr: io.Discard,
+	}
+	if ended := recorder.take(delivery{
+		raw: sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{
+			"tool_name": "Read", "tool_use_id": "tool-observed",
+		}),
+		at: observedAt,
+	}); ended {
+		t.Fatal("PostToolUse ended the recording")
+	}
+
+	socket, err := sessionSocketPath(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, lock, err := listenSession(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close(); lock.Close() })
+	probesDone := make(chan struct{})
+	go func() {
+		defer close(probesDone)
+		for range 2 {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = io.ReadAll(conn)
+			_, _ = conn.Write(sessionProbeAck(sessionID))
+			_ = conn.Close()
+		}
+	}()
+
+	type recordingDetail struct {
+		Recording struct {
+			State             string    `json:"state"`
+			RefreshedAt       time.Time `json:"refreshedAt"`
+			LastObservedEvent *struct {
+				Name       string    `json:"name"`
+				ObservedAt time.Time `json:"observedAt"`
+			} `json:"lastObservedEvent"`
+		} `json:"recording"`
+	}
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { handler.Close() })
+	var first, second recordingDetail
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &first)
+	time.Sleep(time.Millisecond)
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &second)
+
+	for i, detail := range []recordingDetail{first, second} {
+		if detail.Recording.State != "active" {
+			t.Errorf("refresh %d recording state = %q, want active", i+1, detail.Recording.State)
+		}
+		if detail.Recording.LastObservedEvent == nil {
+			t.Errorf("refresh %d omitted the recorder-observed event", i+1)
+			continue
+		}
+		if detail.Recording.LastObservedEvent.Name != hookPostToolUse || !detail.Recording.LastObservedEvent.ObservedAt.Equal(observedAt) {
+			t.Errorf("refresh %d last observed event = %+v, want %s at %s", i+1, detail.Recording.LastObservedEvent, hookPostToolUse, observedAt)
+		}
+	}
+	if !second.Recording.RefreshedAt.After(first.Recording.RefreshedAt) {
+		t.Errorf("refresh time did not advance: first %s, second %s", first.Recording.RefreshedAt, second.Recording.RefreshedAt)
+	}
+	if first.Recording.LastObservedEvent != nil && second.Recording.LastObservedEvent != nil &&
+		!first.Recording.LastObservedEvent.ObservedAt.Equal(second.Recording.LastObservedEvent.ObservedAt) {
+		t.Errorf("browser refresh changed observed event time: first %s, second %s", first.Recording.LastObservedEvent.ObservedAt, second.Recording.LastObservedEvent.ObservedAt)
+	}
+	select {
+	case <-probesDone:
+	case <-time.After(time.Second):
+		t.Error("recording refreshes did not probe the session-bound recorder")
+	}
+}
+
 func TestViewLiveEndCursorAndWorkingTree(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
