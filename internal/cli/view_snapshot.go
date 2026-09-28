@@ -942,7 +942,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 			VersionUnverified: manifest.VersionUnverified,
 			Mode:              manifest.Mode, SessionID: manifest.SessionID,
 		},
-		Recording:      viewRecording(manifest, receiptRaw),
+		Recording:      viewRecordingWithLocks(ctx, manifest, receiptRaw, filepath.Join(filepath.Dir(s.root), locksDirName)),
 		ProviderEvents: viewProviderEvents{Attribution: "provider_reported", Present: snapshot.events != nil},
 		Changes:        summarizeViewChanges(snapshot),
 		Evidence:       evidence,

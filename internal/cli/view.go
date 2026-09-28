@@ -28,6 +28,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/seongwoo-choi/agentrec/internal/lock"
 	"github.com/seongwoo-choi/agentrec/internal/redaction"
 	"github.com/seongwoo-choi/agentrec/internal/report"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
@@ -204,6 +205,10 @@ type viewLastObservedEvent struct {
 }
 
 func viewRecording(manifest storage.Manifest, receiptRaw []byte) viewRecordingStatus {
+	return viewRecordingWithLocks(context.Background(), manifest, receiptRaw, "")
+}
+
+func viewRecordingWithLocks(ctx context.Context, manifest storage.Manifest, receiptRaw []byte, locksRoot string) viewRecordingStatus {
 	status := viewRecordingStatus{
 		State: "unknown", Evidence: "unavailable", Persistence: "not_proven", RefreshedAt: time.Now(),
 	}
@@ -228,7 +233,23 @@ func viewRecording(manifest storage.Manifest, receiptRaw []byte) viewRecordingSt
 		}
 		return status
 	}
-	if manifest.Mode != storage.ModeSession || manifest.SessionID == "" {
+	if manifest.Mode != storage.ModeSession {
+		if locksRoot == "" || manifest.CWD == "" {
+			return status
+		}
+		held, err := lock.Held(ctx, locksRoot, manifest.CWD)
+		if err != nil {
+			status.State = "unavailable"
+			return status
+		}
+		if held {
+			status.State = "active"
+			status.Activity = "quiet"
+			status.Evidence = "repository_recorder"
+		}
+		return status
+	}
+	if manifest.SessionID == "" {
 		return status
 	}
 	socket, err := sessionSocketPath(manifest.SessionID)

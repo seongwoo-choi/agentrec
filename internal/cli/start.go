@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
 // `agentrec start` keeps the viewer running in the background and opens it, so
@@ -425,6 +428,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, " (%d unreadable)", unreadable)
 	}
 	fmt.Fprintf(stdout, ", %s on disk\n", humanBytes(storeBytes(root)))
+	printLatestRecordingStatus(stdout, root, runs)
 	trashed, trashUnreadable, err := listTrash(root, nil)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -449,27 +453,78 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// describeHooks says whether the recorder's hooks are installed for a
-// provider, reading the same file setup writes.
+func printLatestRecordingStatus(stdout io.Writer, root string, runs []runSummary) {
+	if len(runs) == 0 {
+		fmt.Fprintln(stdout, "recording unavailable (no recorded run)")
+		return
+	}
+	run := runs[0]
+	runRoot, err := openRunRoot(root, run.ID)
+	if err != nil {
+		fmt.Fprintf(stdout, "recording unavailable for %s: %v\n", oneLine(run.ID), err)
+		return
+	}
+	defer runRoot.Close()
+	manifest, err := readManifestFromRoot(runRoot)
+	if err != nil {
+		fmt.Fprintf(stdout, "recording unavailable for %s: %v\n", oneLine(run.ID), err)
+		return
+	}
+	receipt, err := readDocumentFromRoot(runRoot, storage.RecordingReceiptFile)
+	if errors.Is(err, os.ErrNotExist) {
+		receipt = nil
+	} else if err != nil {
+		fmt.Fprintf(stdout, "recording unavailable for %s: %v\n", oneLine(run.ID), err)
+		return
+	}
+	status := viewRecordingWithLocks(context.Background(), manifest, receipt, filepath.Join(filepath.Dir(root), locksDirName))
+	activity := ""
+	if status.Activity != "" {
+		activity = " (" + oneLine(status.Activity) + ")"
+	}
+	fmt.Fprintf(stdout, "recording %s%s\n", oneLine(status.State), activity)
+	mode := "supervised trace"
+	if manifest.Mode == storage.ModeSession {
+		mode = "session recording"
+	}
+	fmt.Fprintf(stdout, "run        %s (%s)\n", oneLine(run.ID), mode)
+	if status.LastObservedEvent == nil {
+		fmt.Fprintln(stdout, "last event unavailable (no recorder-observed event)")
+	} else {
+		fmt.Fprintf(stdout, "last event %s observed by recorder at %s\n", oneLine(status.LastObservedEvent.Name), status.LastObservedEvent.ObservedAt.UTC().Format(time.RFC3339Nano))
+	}
+	if status.Persistence == "finalized" {
+		fmt.Fprintln(stdout, "persistence finalized")
+	} else {
+		fmt.Fprintln(stdout, "persistence not proven")
+	}
+	fmt.Fprintf(stdout, "evidence   %s\n", oneLine(status.Evidence))
+	fmt.Fprintf(stdout, "status refreshed %s\n", status.RefreshedAt.UTC().Format(time.RFC3339Nano))
+}
+
+// describeHooks says whether the recorder's hooks are configured for a
+// provider, reading the same file setup writes. Configuration is kept separate
+// from event receipt because a configured provider may never invoke the hook.
 func describeHooks(path, provider string) string {
+	setup := "agentrec setup --" + provider
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return "hooks not installed (agentrec setup)"
+		return fmt.Sprintf("hook configuration absent; configuration does not prove event receipt; hooks not installed (agentrec setup); run %s", setup)
 	}
 	if err != nil {
-		return "hooks file unreadable: " + err.Error()
+		return fmt.Sprintf("hook configuration unreadable: %v; configuration does not prove event receipt; run %s", err, setup)
 	}
 	doc, err := decodeOrderedObject(raw)
 	if err != nil {
-		return "hooks file is not a JSON object"
+		return fmt.Sprintf("hook configuration unreadable: file is not a JSON object; configuration does not prove event receipt; run %s", setup)
 	}
 	hooksRaw, ok := doc.get("hooks")
 	if !ok {
-		return "hooks not installed (agentrec setup)"
+		return fmt.Sprintf("hook configuration absent; configuration does not prove event receipt; hooks not installed (agentrec setup); run %s", setup)
 	}
 	hooks, err := decodeOrderedObject(hooksRaw)
 	if err != nil {
-		return "hooks file is not a JSON object"
+		return fmt.Sprintf("hook configuration unreadable: hooks is not a JSON object; configuration does not prove event receipt; run %s", setup)
 	}
 	installed := 0
 	for _, event := range hookEvents[provider] {
@@ -490,9 +545,9 @@ func describeHooks(path, provider string) string {
 	}
 	switch {
 	case installed == 0:
-		return "hooks not installed (agentrec setup)"
+		return fmt.Sprintf("hook configuration absent; configuration does not prove event receipt; hooks not installed (agentrec setup); run %s", setup)
 	case installed < len(hookEvents[provider]):
-		return fmt.Sprintf("hooks installed for %d of %d events in %s (agentrec setup to complete)", installed, len(hookEvents[provider]), displayPath(path))
+		return fmt.Sprintf("hook configuration partial (%d of %d events) in %s; configuration does not prove event receipt; hooks installed for %d of %d events; run %s to complete", installed, len(hookEvents[provider]), displayPath(path), installed, len(hookEvents[provider]), setup)
 	}
-	return "hooks installed in " + displayPath(path)
+	return fmt.Sprintf("hook configuration complete in %s; configuration does not prove event receipt; hooks installed in %s", displayPath(path), displayPath(path))
 }
