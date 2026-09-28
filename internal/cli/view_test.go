@@ -835,6 +835,47 @@ func TestViewPaginatesLargeStreams(t *testing.T) {
 	}
 }
 
+func TestViewActionPagesExposeExactRecordOffsets(t *testing.T) {
+	root := home(t)
+	b, err := storage.Create(root, "run-duplicate-actions", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"first evidence", "second evidence"} {
+		if err := b.WriteAction(action.Action{ID: "duplicate", Type: action.TypeToolCall, Provider: "claude", Assurance: action.AssuranceProviderReported, Status: "completed", Input: json.RawMessage(fmt.Sprintf(`{"command":%q}`, command))}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: late, ExitReason: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newViewHandler(root, "run-duplicate-actions", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var detail struct {
+		SnapshotID string `json:"snapshotId"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/run-duplicate-actions", &detail)
+	type item struct {
+		ID     string          `json:"id"`
+		Input  json.RawMessage `json:"input"`
+		Offset int64           `json:"offset"`
+	}
+	var first struct {
+		Items []item `json:"items"`
+	}
+	viewJSONRequest(t, handler, "/api/snapshots/"+detail.SnapshotID+"/actions?cursor=0", &first)
+	if len(first.Items) != 2 || first.Items[0].Offset != 0 || first.Items[1].Offset <= first.Items[0].Offset {
+		t.Fatalf("action offsets = %+v", first.Items)
+	}
+	var exact struct {
+		Items []item `json:"items"`
+	}
+	viewJSONRequest(t, handler, fmt.Sprintf("/api/snapshots/%s/actions?cursor=%d", detail.SnapshotID, first.Items[1].Offset), &exact)
+	if len(exact.Items) != 1 || exact.Items[0].ID != "duplicate" || !bytes.Contains(exact.Items[0].Input, []byte("second evidence")) || exact.Items[0].Offset != first.Items[1].Offset {
+		t.Fatalf("exact duplicate action page = %+v", exact.Items)
+	}
+}
+
 func TestViewPromptRanksRemainRecordWideAcrossActionPages(t *testing.T) {
 	root := home(t)
 	b, err := storage.Create(root, "run-prompt-pages", storage.Manifest{Provider: "claude", Argv: []string{"claude"}, CWD: "/tmp/agentrec", StartedAt: early})

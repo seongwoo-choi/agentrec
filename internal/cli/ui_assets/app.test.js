@@ -1026,6 +1026,50 @@ test('copy evidence link uses selected action and page bytes, not address-bar fi
   assert.match(w.document.querySelector('.copy-evidence-link').title, /same Viewer and recorded data/);
 });
 
+test('copy evidence link reopens the exact later duplicate action', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const actions = [
+    { id: 'duplicate', offset: 101, type: 'file.edit', status: 'completed', input: { command: 'FIRST evidence' } },
+    { id: 'duplicate', offset: 202, type: 'file.edit', status: 'completed', input: { command: 'SECOND evidence' } },
+  ];
+  data.details.actionCount = actions.length;
+  data.actions = (cursor) => ({ items: cursor === 202 ? actions.slice(1) : actions, nextCursor: null });
+  const writes = [];
+  data.configure = (w) => Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async (url) => writes.push(url) } });
+
+  const initial = await renderFixture(data);
+  t.after(() => initial.window.close());
+  initial.window.document.querySelector('.action-row[data-index="1"]').click();
+  assert.match(initial.window.document.querySelector('.inspector-panel').textContent, /SECOND evidence/);
+  initial.window.document.querySelector('.copy-evidence-link').click();
+  await settle();
+  assert.match(writes[0], /action=duplicate&actionCursor=202$/);
+
+  const exact = await renderFixture({
+    ...data,
+    configure: (w) => w.history.replaceState(null, '', new URL(writes[0]).pathname + new URL(writes[0]).search),
+  });
+  t.after(() => exact.window.close());
+  assert.equal(exact.window.document.querySelector('.action-row[aria-current="true"]').dataset.index, '0');
+  assert.match(exact.window.document.querySelector('.inspector-panel').textContent, /SECOND evidence/);
+  assert.doesNotMatch(exact.window.document.querySelector('.inspector-panel').textContent, /FIRST evidence/);
+});
+
+test('new-format action links do not substitute a same-ID record at another offset', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.actionCount = 2;
+  data.actions = [
+    { id: 'duplicate', offset: 101, type: 'file.edit', status: 'completed', input: { command: 'FIRST evidence' } },
+    { id: 'duplicate', offset: 202, type: 'file.edit', status: 'completed', input: { command: 'SECOND evidence' } },
+  ];
+  data.configure = (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&action=duplicate&actionCursor=999`);
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('.action-row[aria-current="true"]'), null);
+  assert.doesNotMatch(dom.window.document.querySelector('.inspector-panel').textContent, /FIRST evidence|SECOND evidence/);
+});
+
 test('copy evidence link preserves other supported loopback origins', async (t) => {
   const data = actionLinkFixture();
   const writes = [];
@@ -4136,6 +4180,19 @@ test('verification runner invocations stay visible but file inspection words do 
       assert.equal(dom.window.document.querySelectorAll('details.action-group').length, grouped ? 1 : 0, JSON.stringify(command));
     }
   }
+});
+
+test('record offsets do not split same-page Reading groups', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [
+    { id: 'read-1', offset: 101, parentId: 'turn', type: 'file.read', status: 'completed', input: { path: 'one.go' } },
+    { id: 'read-2', offset: 202, parentId: 'turn', type: 'file.read', status: 'completed', input: { path: 'two.go' } },
+  ];
+  data.details.actionCount = 2;
+
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelectorAll('details.action-group').length, 1);
 });
 
 test('live same-page group extension preserves expanded state and focused summary', async (t) => {

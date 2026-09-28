@@ -35,6 +35,7 @@ type viewAction struct {
 	action.Action
 	SamePathObserved []string `json:"samePathObserved,omitempty"`
 	PromptRank       int      `json:"promptRank,omitempty"`
+	Offset           int64    `json:"offset"`
 }
 
 type viewActionPage struct {
@@ -1503,6 +1504,7 @@ func readViewActionPage(snapshot *viewSnapshot, cursor int64) (viewActionPage, e
 			Action:           item,
 			SamePathObserved: viewSamePathObservations(item, snapshot.cwd, snapshot.repoRoot, snapshot.changePaths),
 			PromptRank:       snapshot.actionPromptRanks[lineStart],
+			Offset:           lineStart,
 		})
 		pageBytes += len(line)
 		if len(page.Items) == viewPageSize {
