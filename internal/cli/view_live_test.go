@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,74 @@ import (
 // Every stream page names the offset after its last item, so a page can
 // follow a run as it grows; a running session's working tree can be looked
 // at now, labelled as a look; a run that has ended cannot.
+func TestViewRecordingStatusKeepsActiveQuietSessionNeutral(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "session-active-quiet"
+	_, err := storage.Create(root, "run-active-quiet", storage.Manifest{
+		Provider: "claude", CWD: repo, StartedAt: time.Now(),
+		Mode: storage.ModeSession, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := sessionSocketPath(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, lock, err := listenSession(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close(); lock.Close() })
+	probeDone := make(chan struct{})
+	go func() {
+		defer close(probeDone)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.ReadAll(conn)
+		_, _ = conn.Write(sessionProbeAck(sessionID))
+	}()
+
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { handler.Close() })
+	var detail struct {
+		Recording struct {
+			State             string    `json:"state"`
+			Activity          string    `json:"activity"`
+			Evidence          string    `json:"evidence"`
+			Persistence       string    `json:"persistence"`
+			RefreshedAt       time.Time `json:"refreshedAt"`
+			LastObservedEvent *struct {
+				Name       string    `json:"name"`
+				ObservedAt time.Time `json:"observedAt"`
+			} `json:"lastObservedEvent"`
+		} `json:"recording"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/run-active-quiet", &detail)
+	if detail.Recording.State != "active" || detail.Recording.Activity != "quiet" {
+		t.Errorf("recording state/activity = %q/%q, want active/quiet", detail.Recording.State, detail.Recording.Activity)
+	}
+	if detail.Recording.Evidence != "session_recorder" || detail.Recording.Persistence != "not_proven" {
+		t.Errorf("recording evidence/persistence = %q/%q, want session_recorder/not_proven", detail.Recording.Evidence, detail.Recording.Persistence)
+	}
+	if detail.Recording.RefreshedAt.IsZero() {
+		t.Error("recording refresh time is absent")
+	}
+	if detail.Recording.LastObservedEvent != nil {
+		t.Errorf("active quiet session fabricated a last event: %+v", detail.Recording.LastObservedEvent)
+	}
+	select {
+	case <-probeDone:
+	case <-time.After(time.Second):
+		t.Error("recording status did not probe the session-bound recorder")
+	}
+}
+
 func TestViewLiveEndCursorAndWorkingTree(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
