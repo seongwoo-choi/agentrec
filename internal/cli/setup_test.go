@@ -366,6 +366,71 @@ func TestSetupAddsTheStopHookToAnOlderInstallation(t *testing.T) {
 	}
 }
 
+func TestStatusSeparatesHookConfigurationFromEventReceipt(t *testing.T) {
+	home(t)
+	userHome := setupHome(t, ".claude", ".codex")
+	claudePath := filepath.Join(userHome, ".claude", "settings.json")
+	partial := hookFragment("claude", "/usr/local/bin/agentrec", false)
+	delete(partial.Hooks, hookStop)
+	raw, err := json.Marshal(partial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claudePath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	codexPath := filepath.Join(userHome, ".codex", "hooks.json")
+	if err := os.WriteFile(codexPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run(t, "status")
+	if code != 0 {
+		t.Fatalf("status exit %d: %s", code, stderr)
+	}
+	for _, want := range []string{
+		"claude    hook configuration partial (5 of 6 events)",
+		"agentrec setup --claude",
+		"configuration does not prove event receipt",
+		"codex     hook configuration unreadable",
+		"agentrec setup --codex",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("status lacks %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "events received") || strings.Contains(stdout, "recording healthy") {
+		t.Errorf("configuration was presented as receipt or health:\n%s", stdout)
+	}
+}
+
+func TestStatusKeepsCodexTrustSeparateFromCompleteHookConfiguration(t *testing.T) {
+	home(t)
+	userHome := setupHome(t, ".codex")
+	path := filepath.Join(userHome, ".codex", "hooks.json")
+	raw, err := json.Marshal(hookFragment("codex", "/usr/local/bin/agentrec", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run(t, "status")
+	if code != 0 {
+		t.Fatalf("status exit %d: %s", code, stderr)
+	}
+	for _, want := range []string{
+		"codex     hook configuration complete",
+		"configuration does not prove event receipt",
+		"run /hooks inside Codex to check or establish trust",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("status lacks %q:\n%s", want, stdout)
+		}
+	}
+}
+
 // setupState reads the state setup printed for one event.
 func setupState(stdout, event string) string {
 	for _, line := range strings.Split(stdout, "\n") {

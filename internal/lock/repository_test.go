@@ -57,6 +57,33 @@ func gitRepo(t *testing.T) string {
 	return real
 }
 
+func TestHeldObservesExistingRepositoryLockWithoutCreatingOne(t *testing.T) {
+	repo := gitRepo(t)
+	locks := filepath.Join(t.TempDir(), "locks")
+
+	held, err := Held(context.Background(), locks, repo)
+	if err != nil || held {
+		t.Fatalf("Held before lock = %v, %v; want false, nil", held, err)
+	}
+	if _, err := os.Stat(locks); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only probe created lock storage: %v", err)
+	}
+
+	owner, err := Acquire(context.Background(), locks, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, err = Held(context.Background(), locks, repo); err != nil || !held {
+		t.Fatalf("Held during lock = %v, %v; want true, nil", held, err)
+	}
+	if err := owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if held, err = Held(context.Background(), locks, repo); err != nil || held {
+		t.Fatalf("Held after release = %v, %v; want false, nil", held, err)
+	}
+}
+
 // locksRoot names a lock directory that does not exist yet, which is what an
 // operator who has never recorded a run has.
 func locksRoot(t *testing.T) string {

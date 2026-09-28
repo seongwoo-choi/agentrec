@@ -27,6 +27,9 @@ const (
 	promptFile   = "prompt.txt"
 	actionsFile  = "actions.jsonl"
 	eventsFile   = "provider-events.sanitized.jsonl"
+	// RecordingReceiptFile holds the latest event the recorder accepted and
+	// handled. It is receipt evidence, not a durability or finalization claim.
+	RecordingReceiptFile = "recording-receipt.json"
 	// unparsedFile holds the stdout lines that were not provider events at all —
 	// an update banner, a deprecation warning, anything the provider printed
 	// beside its event stream. They are kept apart from the events because they
@@ -100,6 +103,13 @@ type Finalization struct {
 	// while the run was open — a session learns it from the transcript at
 	// its end — for a manifest created before it was known.
 	ProviderVersion string
+}
+
+// RecordingReceipt describes the latest hook event observed by the recorder.
+type RecordingReceipt struct {
+	Schema     int       `json:"schema"`
+	EventName  string    `json:"eventName"`
+	ObservedAt time.Time `json:"observedAt"`
 }
 
 // ErrFinalized is returned by every write once the run has been finalized, and
@@ -429,6 +439,26 @@ func (b *Bundle) WriteUsage(reported usage.Report) error {
 		return fmt.Errorf("storage: redact provider usage: %w", err)
 	}
 	if err := installNewAt(b.dirRoot, usageFile, append(raw, '\n')); err != nil {
+		return b.fail(err)
+	}
+	return nil
+}
+
+// WriteRecordingReceipt atomically replaces the latest recorder observation.
+// Queue acknowledgement happens before this method and does not imply that
+// this receipt, or the rest of the bundle, has been durably finalized.
+func (b *Bundle) WriteRecordingReceipt(receipt RecordingReceipt) error {
+	if err := b.writable(); err != nil {
+		return err
+	}
+	if receipt.Schema != 1 || receipt.EventName == "" || receipt.ObservedAt.IsZero() {
+		return fmt.Errorf("storage: invalid recording receipt")
+	}
+	raw, err := json.Marshal(receipt)
+	if err != nil {
+		return fmt.Errorf("storage: encode recording receipt: %w", err)
+	}
+	if err := installAt(b.dirRoot, RecordingReceiptFile, append(raw, '\n')); err != nil {
 		return b.fail(err)
 	}
 	return nil

@@ -28,8 +28,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/seongwoo-choi/agentrec/internal/lock"
 	"github.com/seongwoo-choi/agentrec/internal/redaction"
 	"github.com/seongwoo-choi/agentrec/internal/report"
+	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
 const (
@@ -172,19 +174,107 @@ type viewChangeSummary struct {
 }
 
 type viewRunResponse struct {
-	SchemaVersion  int                `json:"schemaVersion"`
-	SnapshotID     string             `json:"snapshotId"`
-	ActionCount    int                `json:"actionCount"`
-	EventCount     int                `json:"eventCount"`
-	Run            viewRunInfo        `json:"run"`
-	ProviderEvents viewProviderEvents `json:"providerEvents"`
-	Changes        viewChangeSummary  `json:"changes"`
-	Evidence       viewEvidence       `json:"evidence"`
+	SchemaVersion  int                 `json:"schemaVersion"`
+	SnapshotID     string              `json:"snapshotId"`
+	ActionCount    int                 `json:"actionCount"`
+	EventCount     int                 `json:"eventCount"`
+	Run            viewRunInfo         `json:"run"`
+	Recording      viewRecordingStatus `json:"recording"`
+	ProviderEvents viewProviderEvents  `json:"providerEvents"`
+	Changes        viewChangeSummary   `json:"changes"`
+	Evidence       viewEvidence        `json:"evidence"`
 	// LastAgentMessage is the provider's own last recorded agent.message,
 	// verbatim and bounded; absent when the run has none. It is a record, not
 	// a summary or a verdict.
 	LastAgentMessage *viewLastAgentMessage `json:"lastAgentMessage,omitempty"`
 	PromptCount      int                   `json:"promptCount"` // user.prompt actions in the record
+}
+
+type viewRecordingStatus struct {
+	State             string                 `json:"state"`
+	Activity          string                 `json:"activity,omitempty"`
+	Evidence          string                 `json:"evidence"`
+	Persistence       string                 `json:"persistence"`
+	RefreshedAt       time.Time              `json:"refreshedAt"`
+	LastObservedEvent *viewLastObservedEvent `json:"lastObservedEvent,omitempty"`
+}
+
+type viewLastObservedEvent struct {
+	Name       string    `json:"name"`
+	ObservedAt time.Time `json:"observedAt"`
+}
+
+func viewRecording(manifest storage.Manifest, receiptRaw []byte) viewRecordingStatus {
+	return viewRecordingWithLocks(context.Background(), manifest, receiptRaw, "")
+}
+
+func viewRecordingWithLocks(ctx context.Context, manifest storage.Manifest, receiptRaw []byte, locksRoot string) viewRecordingStatus {
+	status := viewRecordingStatus{
+		State: "unknown", Evidence: "unavailable", Persistence: "not_proven", RefreshedAt: time.Now(),
+	}
+	if receiptRaw != nil {
+		var receipt storage.RecordingReceipt
+		if err := json.Unmarshal(receiptRaw, &receipt); err != nil || receipt.Schema != 1 || receipt.EventName == "" || receipt.ObservedAt.IsZero() {
+			status.State = "unavailable"
+			return status
+		}
+		status.LastObservedEvent = &viewLastObservedEvent{Name: receipt.EventName, ObservedAt: receipt.ObservedAt}
+	}
+	if manifest.EndedAt != nil {
+		status.Evidence = "finalized_manifest"
+		status.Persistence = "finalized"
+		if viewStatusClass(manifest.ExitReason) == "fail" {
+			status.State = "failed"
+		} else {
+			switch strings.ToLower(manifest.ExitReason) {
+			case "completed", "success", reasonSessionEnded:
+				status.State = "ended"
+			}
+		}
+		return status
+	}
+	if manifest.Mode != storage.ModeSession {
+		if locksRoot == "" || manifest.CWD == "" {
+			return status
+		}
+		held, err := lock.Held(ctx, locksRoot, manifest.CWD)
+		if err != nil {
+			status.State = "unavailable"
+			return status
+		}
+		if held {
+			status.State = "active"
+			status.Activity = "quiet"
+			status.Evidence = "repository_recorder"
+		}
+		return status
+	}
+	if manifest.SessionID == "" {
+		return status
+	}
+	socket, err := sessionSocketPath(manifest.SessionID)
+	if err != nil || !sessionRecorderActive(socket, manifest.SessionID) {
+		return status
+	}
+	status.State = "active"
+	status.Activity = "quiet"
+	status.Evidence = "session_recorder"
+	return status
+}
+
+func sessionRecorderActive(socket, sessionID string) bool {
+	lock, err := os.OpenFile(sessionLockPath(socket), os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		return false
+	} else if !errors.Is(err, syscall.EWOULDBLOCK) {
+		return false
+	}
+	return probeSession(socket, sessionID, sessionProbeTimeout) == nil
 }
 
 type viewLastAgentMessage struct {

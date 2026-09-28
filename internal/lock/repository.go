@@ -45,6 +45,50 @@ func (r *Repository) Root() string { return r.root }
 // Path is the lock file held for that repository.
 func (r *Repository) Path() string { return r.path }
 
+// Held reports whether an existing repository lock is currently held. It never
+// creates the lock directory or lock file, so status checks remain read-only.
+func Held(ctx context.Context, locksRoot, cwd string) (bool, error) {
+	root, err := repoRoot(ctx, cwd)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(locksRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock: stat lock directory %s: %w", strconv.Quote(locksRoot), err)
+	}
+	if !info.Mode().IsDir() {
+		return false, fmt.Errorf("lock: lock directory %s is %s, want a directory", strconv.Quote(locksRoot), info.Mode().Type())
+	}
+	sum := sha256.Sum256([]byte(root))
+	path := filepath.Join(locksRoot, hex.EncodeToString(sum[:])+".lock")
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock: open lock file %s: %w", strconv.Quote(path), err)
+	}
+	defer file.Close()
+	if info, err := file.Stat(); err != nil {
+		return false, fmt.Errorf("lock: stat lock file %s: %w", strconv.Quote(path), err)
+	} else if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("lock: lock file %s is %s, want a regular file", strconv.Quote(path), info.Mode().Type())
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return true, nil
+		}
+		return false, fmt.Errorf("lock: probe %s: %w", strconv.Quote(path), err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
+		return false, fmt.Errorf("lock: unlock probe %s: %w", strconv.Quote(path), err)
+	}
+	return false, nil
+}
+
 // Acquire takes the lock for the repository containing cwd, without waiting: a
 // repository another run already holds is reported as ErrLocked rather than
 // queued behind it, because a recorder that silently waits records a run the

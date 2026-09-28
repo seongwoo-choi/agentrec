@@ -1744,6 +1744,62 @@ function fixture(exitReason, statusClass, statusLabel) {
   };
 }
 
+test('recording status keeps state event time refresh time and persistence distinct in every locale', async (t) => {
+  const data = fixture('', '', 'UNKNOWN');
+  data.details.recording = {
+    state: 'active',
+    activity: 'quiet',
+    evidence: 'session_recorder',
+    persistence: 'not_proven',
+    refreshedAt: '2026-09-28T09:00:00Z',
+    lastObservedEvent: { name: 'PostToolUse', observedAt: '2026-09-28T08:40:00.123Z' },
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const card = document.querySelector('#recording-status');
+  assert.ok(card, 'selected run should expose recording status');
+  assert.match(card.textContent, /Recording state.*Active.*quiet/i);
+  assert.match(card.textContent, /Last event observed.*PostToolUse/i);
+  assert.match(card.textContent, /Status refreshed/i);
+  assert.match(card.textContent, /not proven/i);
+  assert.doesNotMatch(card.textContent, /healthy|durable/i);
+
+  for (const [lang, labels] of [
+    ['en', ['Recording state', 'Last event observed', 'Status refreshed']],
+    ['ko', ['기록 상태', '마지막 이벤트 관측', '상태 새로고침']],
+    ['ja', ['記録状態', '最終イベント観測', '状態更新']],
+    ['zh-CN', ['记录状态', '最近观测事件', '状态刷新']],
+  ]) {
+    document.querySelector('#lang').value = lang;
+    document.querySelector('#lang').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    for (const label of labels) assert.match(card.textContent, new RegExp(label), lang);
+    assert.match(card.textContent, /PostToolUse/, lang);
+  }
+});
+
+test('recording status preserves ended failed unknown unavailable and missing evidence meanings', async (t) => {
+  for (const [state, expected] of [
+    ['ended', /Ended/],
+    ['failed', /Failed/],
+    ['unknown', /Unknown/],
+    ['unavailable', /Unavailable/],
+  ]) {
+    const data = fixture('completed', 'pass', 'PASS');
+    data.details.recording = {
+      state,
+      evidence: state === 'ended' || state === 'failed' ? 'finalized_manifest' : 'unavailable',
+      persistence: state === 'ended' || state === 'failed' ? 'finalized' : 'not_proven',
+      refreshedAt: '2026-09-28T09:00:00Z',
+    };
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const card = dom.window.document.querySelector('#recording-status');
+    assert.match(card.textContent, expected, state);
+    if (state === 'unknown' || state === 'unavailable') assert.doesNotMatch(card.textContent, /healthy/i, state);
+  }
+});
+
 test('selected run row exposes its current destination and exact ID', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const runs = ['run-a', 'run-b'].map((id) => ({ ...data.list.runs[0], id, title: `Run ${id}` }));

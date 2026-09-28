@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,12 +14,317 @@ import (
 	"time"
 
 	"github.com/seongwoo-choi/agentrec/internal/action"
+	"github.com/seongwoo-choi/agentrec/internal/lock"
 	"github.com/seongwoo-choi/agentrec/internal/storage"
 )
 
 // Every stream page names the offset after its last item, so a page can
 // follow a run as it grows; a running session's working tree can be looked
 // at now, labelled as a look; a run that has ended cannot.
+func TestStatusReportsLatestRecordingFactsWithoutInferringHealth(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const (
+		runID     = "run-status-active"
+		sessionID = "session-status-active"
+	)
+	bundle, err := storage.Create(root, runID, storage.Manifest{
+		Provider: "claude", CWD: repo, StartedAt: time.Now(), Mode: storage.ModeSession, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, 9, 28, 8, 40, 0, 123000000, time.UTC)
+	if err := bundle.WriteRecordingReceipt(storage.RecordingReceipt{Schema: 1, EventName: hookPostToolUse, ObservedAt: observedAt}); err != nil {
+		t.Fatal(err)
+	}
+	socket, err := sessionSocketPath(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, lock, err := listenSession(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close(); lock.Close() })
+	probeDone := make(chan struct{})
+	go func() {
+		defer close(probeDone)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.ReadAll(conn)
+		_, _ = conn.Write(sessionProbeAck(sessionID))
+	}()
+
+	var stdout, stderr strings.Builder
+	if code := runStatus(nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("status exit %d: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"recording active (quiet)",
+		"run        run-status-active (session recording)",
+		"last event PostToolUse observed by recorder at 2026-09-28T08:40:00.123Z",
+		"persistence not proven",
+		"status refreshed",
+		"configuration does not prove event receipt",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "healthy") || strings.Contains(out, "durable") {
+		t.Errorf("status inferred health or durability:\n%s", out)
+	}
+	select {
+	case <-probeDone:
+	case <-time.After(time.Second):
+		t.Error("status did not probe the session-bound recorder")
+	}
+}
+
+func TestViewRecordingStatusKeepsActiveQuietSessionNeutral(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "session-active-quiet"
+	_, err := storage.Create(root, "run-active-quiet", storage.Manifest{
+		Provider: "claude", CWD: repo, StartedAt: time.Now(),
+		Mode: storage.ModeSession, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := sessionSocketPath(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, lock, err := listenSession(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close(); lock.Close() })
+	probeDone := make(chan struct{})
+	go func() {
+		defer close(probeDone)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.ReadAll(conn)
+		_, _ = conn.Write(sessionProbeAck(sessionID))
+	}()
+
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { handler.Close() })
+	var detail struct {
+		Recording struct {
+			State             string    `json:"state"`
+			Activity          string    `json:"activity"`
+			Evidence          string    `json:"evidence"`
+			Persistence       string    `json:"persistence"`
+			RefreshedAt       time.Time `json:"refreshedAt"`
+			LastObservedEvent *struct {
+				Name       string    `json:"name"`
+				ObservedAt time.Time `json:"observedAt"`
+			} `json:"lastObservedEvent"`
+		} `json:"recording"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/run-active-quiet", &detail)
+	if detail.Recording.State != "active" || detail.Recording.Activity != "quiet" {
+		t.Errorf("recording state/activity = %q/%q, want active/quiet", detail.Recording.State, detail.Recording.Activity)
+	}
+	if detail.Recording.Evidence != "session_recorder" || detail.Recording.Persistence != "not_proven" {
+		t.Errorf("recording evidence/persistence = %q/%q, want session_recorder/not_proven", detail.Recording.Evidence, detail.Recording.Persistence)
+	}
+	if detail.Recording.RefreshedAt.IsZero() {
+		t.Error("recording refresh time is absent")
+	}
+	if detail.Recording.LastObservedEvent != nil {
+		t.Errorf("active quiet session fabricated a last event: %+v", detail.Recording.LastObservedEvent)
+	}
+	select {
+	case <-probeDone:
+	case <-time.After(time.Second):
+		t.Error("recording status did not probe the session-bound recorder")
+	}
+}
+
+func TestViewRecordingStatusUsesRepositoryLockForActiveTrace(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	const runID = "run-active-trace"
+	if _, err := storage.Create(root, runID, storage.Manifest{
+		Provider: "claude", CWD: repo, StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	held, err := lock.Acquire(context.Background(), filepath.Join(filepath.Dir(root), locksDirName), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { held.Release() })
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { handler.Close() })
+	var detail struct {
+		Recording viewRecordingStatus `json:"recording"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &detail)
+	if detail.Recording.State != "active" || detail.Recording.Activity != "quiet" || detail.Recording.Evidence != "repository_recorder" {
+		t.Errorf("held trace recording = %+v, want active/quiet/repository_recorder", detail.Recording)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &detail)
+	if detail.Recording.State != "unknown" {
+		t.Errorf("released trace recording state = %q, want unknown", detail.Recording.State)
+	}
+}
+
+func TestViewRecordingStatusUsesRecorderObservedEventTimeAcrossRefreshes(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const (
+		runID     = "run-observed-event"
+		sessionID = "session-observed-event"
+	)
+	bundle, err := storage.Create(root, runID, storage.Manifest{
+		Provider: "claude", CWD: repo, StartedAt: time.Now(),
+		Mode: storage.ModeSession, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, 9, 28, 8, 40, 0, 123000000, time.UTC)
+	recorder := &sessionRecorder{
+		bundle: bundle, runID: runID, sessionID: sessionID, provider: "claude",
+		cwd: repo, canonicalCWD: repo, repoRoot: repo, stderr: io.Discard,
+	}
+	if ended := recorder.take(delivery{
+		raw: sessionEvent(t, sessionID, repo, hookPostToolUse, map[string]any{
+			"tool_name": "Read", "tool_use_id": "tool-observed",
+		}),
+		at: observedAt,
+	}); ended {
+		t.Fatal("PostToolUse ended the recording")
+	}
+
+	socket, err := sessionSocketPath(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, lock, err := listenSession(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close(); lock.Close() })
+	probesDone := make(chan struct{})
+	go func() {
+		defer close(probesDone)
+		for range 2 {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = io.ReadAll(conn)
+			_, _ = conn.Write(sessionProbeAck(sessionID))
+			_ = conn.Close()
+		}
+	}()
+
+	type recordingDetail struct {
+		Recording struct {
+			State             string    `json:"state"`
+			RefreshedAt       time.Time `json:"refreshedAt"`
+			LastObservedEvent *struct {
+				Name       string    `json:"name"`
+				ObservedAt time.Time `json:"observedAt"`
+			} `json:"lastObservedEvent"`
+		} `json:"recording"`
+	}
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { handler.Close() })
+	var first, second recordingDetail
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &first)
+	time.Sleep(time.Millisecond)
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &second)
+
+	for i, detail := range []recordingDetail{first, second} {
+		if detail.Recording.State != "active" {
+			t.Errorf("refresh %d recording state = %q, want active", i+1, detail.Recording.State)
+		}
+		if detail.Recording.LastObservedEvent == nil {
+			t.Errorf("refresh %d omitted the recorder-observed event", i+1)
+			continue
+		}
+		if detail.Recording.LastObservedEvent.Name != hookPostToolUse || !detail.Recording.LastObservedEvent.ObservedAt.Equal(observedAt) {
+			t.Errorf("refresh %d last observed event = %+v, want %s at %s", i+1, detail.Recording.LastObservedEvent, hookPostToolUse, observedAt)
+		}
+	}
+	if !second.Recording.RefreshedAt.After(first.Recording.RefreshedAt) {
+		t.Errorf("refresh time did not advance: first %s, second %s", first.Recording.RefreshedAt, second.Recording.RefreshedAt)
+	}
+	if first.Recording.LastObservedEvent != nil && second.Recording.LastObservedEvent != nil &&
+		!first.Recording.LastObservedEvent.ObservedAt.Equal(second.Recording.LastObservedEvent.ObservedAt) {
+		t.Errorf("browser refresh changed observed event time: first %s, second %s", first.Recording.LastObservedEvent.ObservedAt, second.Recording.LastObservedEvent.ObservedAt)
+	}
+	select {
+	case <-probesDone:
+	case <-time.After(time.Second):
+		t.Error("recording refreshes did not probe the session-bound recorder")
+	}
+}
+
+func TestViewRecordingStatusClassifiesFinalAndUnavailableEvidence(t *testing.T) {
+	endedAt := time.Date(2026, 9, 28, 13, 10, 0, 0, time.UTC)
+	tests := []struct {
+		name            string
+		manifest        storage.Manifest
+		receiptRaw      []byte
+		wantState       string
+		wantEvidence    string
+		wantPersistence string
+	}{
+		{
+			name:      "clean session end",
+			manifest:  storage.Manifest{Mode: storage.ModeSession, EndedAt: &endedAt, ExitReason: reasonSessionEnded},
+			wantState: "ended", wantEvidence: "finalized_manifest", wantPersistence: "finalized",
+		},
+		{
+			name:      "explicit storage failure",
+			manifest:  storage.Manifest{EndedAt: &endedAt, ExitReason: "storage_error"},
+			wantState: "failed", wantEvidence: "finalized_manifest", wantPersistence: "finalized",
+		},
+		{
+			name:      "unfinished without live recorder proof",
+			manifest:  storage.Manifest{Mode: storage.ModeSession},
+			wantState: "unknown", wantEvidence: "unavailable", wantPersistence: "not_proven",
+		},
+		{
+			name:       "malformed receipt",
+			manifest:   storage.Manifest{EndedAt: &endedAt, ExitReason: reasonSessionEnded},
+			receiptRaw: []byte(`{"schema":1,"eventName":"SessionEnd"}`),
+			wantState:  "unavailable", wantEvidence: "unavailable", wantPersistence: "not_proven",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := viewRecording(tt.manifest, tt.receiptRaw)
+			if got.State != tt.wantState || got.Evidence != tt.wantEvidence || got.Persistence != tt.wantPersistence {
+				t.Errorf("recording = %q/%q/%q, want %q/%q/%q", got.State, got.Evidence, got.Persistence, tt.wantState, tt.wantEvidence, tt.wantPersistence)
+			}
+		})
+	}
+}
+
 func TestViewLiveEndCursorAndWorkingTree(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)

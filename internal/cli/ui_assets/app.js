@@ -123,6 +123,27 @@
       '{loaded} loaded of {total} recorded — load more to widen this count': '기록된 {total}개 중 {loaded}개를 불러왔습니다. 더 보기로 이 집계 범위를 넓히세요',
       'Counts cover loaded runs only. A verification result is evidence recorded for that run, not independent proof the task succeeded.': '집계는 불러온 실행만 포함합니다. 검증 결과는 해당 실행에 기록된 증거이며, 작업이 성공했다는 독립적인 증명은 아닙니다.',
       'Copy evidence link': '증거 링크 복사',
+      'Recording status': '기록 상태',
+      'Recording state': '기록 상태',
+      'Recording mode': '기록 방식',
+      'Active': '활성',
+      'Ended': '종료됨',
+      'Failed': '실패',
+      'Unknown': '알 수 없음',
+      'Unavailable': '사용 불가',
+      'quiet': '조용함',
+      'Session recording': '세션 기록',
+      'Supervised trace': '감독된 추적',
+      'Last event observed': '마지막 이벤트 관측',
+      'No recorder-observed event available': '레코더가 관측한 이벤트 없음',
+      'Status refreshed': '상태 새로고침',
+      'Recording evidence': '기록 증거',
+      'Session recorder responded for this session': '이 세션의 레코더가 응답함',
+      'Finalized manifest': '완료된 매니페스트',
+      'Recording evidence unavailable': '기록 증거를 사용할 수 없음',
+      'Persistence': '영속성',
+      'Finalized': '완료됨',
+      'Not proven': '입증되지 않음',
       'Copied': '복사됨',
       'Local evidence URL': '로컬 증거 URL',
       'Clipboard unavailable or denied. Select and copy the local URL manually.': '클립보드를 사용할 수 없거나 권한이 거부되었습니다. 로컬 URL을 선택하여 직접 복사하세요.',
@@ -482,6 +503,27 @@
       '{loaded} loaded of {total} recorded — load more to widen this count': '記録{total}件のうち{loaded}件を読み込み済みです。さらに読み込むと集計範囲が広がります',
       'Counts cover loaded runs only. A verification result is evidence recorded for that run, not independent proof the task succeeded.': '集計は読み込んだ実行のみが対象です。検証結果はその実行について記録された証拠であり、タスクの成功を独立して証明するものではありません。',
       'Copy evidence link': '証拠リンクをコピー',
+      'Recording status': '記録状態',
+      'Recording state': '記録状態',
+      'Recording mode': '記録方式',
+      'Active': '稼働中',
+      'Ended': '終了',
+      'Failed': '失敗',
+      'Unknown': '不明',
+      'Unavailable': '利用不可',
+      'quiet': 'イベント待ち',
+      'Session recording': 'セッション記録',
+      'Supervised trace': '監督付きトレース',
+      'Last event observed': '最終イベント観測',
+      'No recorder-observed event available': 'レコーダーが観測したイベントはありません',
+      'Status refreshed': '状態更新',
+      'Recording evidence': '記録証拠',
+      'Session recorder responded for this session': 'このセッションのレコーダーが応答',
+      'Finalized manifest': '確定済みマニフェスト',
+      'Recording evidence unavailable': '記録証拠を利用できません',
+      'Persistence': '永続化',
+      'Finalized': '確定済み',
+      'Not proven': '未証明',
       'Copied': 'コピーしました',
       'Local evidence URL': 'ローカル証拠URL',
       'Clipboard unavailable or denied. Select and copy the local URL manually.': 'クリップボードを利用できないか、許可されていません。ローカルURLを選択して手動でコピーしてください。',
@@ -841,6 +883,27 @@
       '{loaded} loaded of {total} recorded — load more to widen this count': '已记录{total}个，已加载{loaded}个。加载更多可扩大统计范围',
       'Counts cover loaded runs only. A verification result is evidence recorded for that run, not independent proof the task succeeded.': '统计仅涵盖已加载的运行。验证结果是该运行记录的证据，并非任务成功的独立证明。',
       'Copy evidence link': '复制证据链接',
+      'Recording status': '记录状态',
+      'Recording state': '记录状态',
+      'Recording mode': '记录方式',
+      'Active': '活动中',
+      'Ended': '已结束',
+      'Failed': '失败',
+      'Unknown': '未知',
+      'Unavailable': '不可用',
+      'quiet': '静默',
+      'Session recording': '会话记录',
+      'Supervised trace': '受监督跟踪',
+      'Last event observed': '最近观测事件',
+      'No recorder-observed event available': '没有记录器观测到的事件',
+      'Status refreshed': '状态刷新',
+      'Recording evidence': '记录证据',
+      'Session recorder responded for this session': '此会话的记录器已响应',
+      'Finalized manifest': '已最终确定的清单',
+      'Recording evidence unavailable': '记录证据不可用',
+      'Persistence': '持久化',
+      'Finalized': '已最终确定',
+      'Not proven': '未证明',
       'Copied': '已复制',
       'Local evidence URL': '本地证据URL',
       'Clipboard unavailable or denied. Select and copy the local URL manually.': '剪贴板不可用或权限被拒绝。请选择并手动复制本地URL。',
@@ -3261,6 +3324,47 @@ function shortID(id) {
     link.href = `?run=${encodeURIComponent(data.run.id)}&focus=actions&action=${encodeURIComponent(message.actionId)}&actionCursor=${message.offset || 0}`;
   }
 
+  function recordingItem(label, value, tone = '') {
+    const item = node('div', 'recording-status-item');
+    item.append(node('div', 'recording-status-label', t(label)), node('div', `recording-status-value ${tone}`.trim(), value));
+    return item;
+  }
+
+  function recordingTime(value) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? t('Unavailable') : date.toLocaleString(state.lang);
+  }
+
+  function renderRecordingStatus() {
+    const card = $('recording-status');
+    const recording = state.run.recording || { state: 'unavailable', evidence: 'unavailable', persistence: 'not_proven' };
+    const states = { active: 'Active', ended: 'Ended', failed: 'Failed', unknown: 'Unknown', unavailable: 'Unavailable' };
+    const stateLabel = states[recording.state] || 'Unknown';
+    const activity = recording.activity === 'quiet' ? ` · ${t('quiet')}` : '';
+    const event = recording.lastObservedEvent;
+    const observed = event && event.name && event.observedAt
+      ? `${event.name} · ${recordingTime(event.observedAt)}`
+      : t('No recorder-observed event available');
+    const evidence = recording.evidence === 'session_recorder'
+      ? t('Session recorder responded for this session')
+      : recording.evidence === 'finalized_manifest'
+        ? t('Finalized manifest')
+        : t('Recording evidence unavailable');
+    const persistence = recording.persistence === 'finalized' ? t('Finalized') : t('Not proven');
+    const mode = state.run.run.mode === 'session' ? t('Session recording') : t('Supervised trace');
+    const title = node('h2', '', t('Recording status'));
+    title.id = 'recording-status-title';
+    card.replaceChildren(
+      title,
+      recordingItem('Recording state', `${t(stateLabel)}${activity}`, recording.state === 'failed' ? 'fail' : recording.state === 'active' ? 'active' : ''),
+      recordingItem('Recording mode', mode),
+      recordingItem('Last event observed', observed),
+      recordingItem('Status refreshed', recording.refreshedAt ? recordingTime(recording.refreshedAt) : t('Unavailable')),
+      recordingItem('Recording evidence', evidence),
+      recordingItem('Persistence', persistence),
+    );
+  }
+
   // renderRunHeader draws everything above the timeline from state.run; a live tick redraws it without touching the timeline.
   function renderRunHeader() {
     const data = state.run;
@@ -3268,6 +3372,7 @@ function shortID(id) {
     $('run-provider').textContent = run.provider || t('unknown');
     $('run-project').textContent = run.project || t('unknown');
     renderRunIdentity();
+    renderRecordingStatus();
     renderRequest();
     renderRequestIndex();
     renderReply();
