@@ -355,13 +355,33 @@ func TestStatusFailsWhenLatestRecordingEvidenceCannotBeRead(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, runID, storage.RecordingReceiptFile), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	writeRun(t, root, "run-trashed", "codex", time.Now().Add(-2*time.Hour), "completed")
+	if err := trashRun(root, "run-trashed"); err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(filepath.Dir(root), viewCacheDirName)
+	if err := os.MkdirAll(cache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "status-test"), []byte("cache"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	var stdout, stderr strings.Builder
 	if code := runStatus(nil, &stdout, &stderr); code != exitFailure {
 		t.Fatalf("status exit = %d, want %d; stdout:\n%s\nstderr:\n%s", code, exitFailure, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "recording unavailable for "+runID) {
-		t.Fatalf("status stdout = %q, want recording-unavailable diagnostic", stdout.String())
+	out := stdout.String()
+	for _, want := range []string{
+		"recording unavailable for " + runID,
+		"trash     1 run(s)",
+		"cache     5 B in " + cache,
+		"claude    ",
+		"codex     ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status stdout lacks %q:\n%s", want, out)
+		}
 	}
 }
 
