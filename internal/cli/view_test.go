@@ -925,6 +925,13 @@ func TestViewRequestPagesAreBoundedAndPreserveExactPromptIdentity(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	padding, err := json.Marshal(map[string]string{"command": strings.Repeat("x", viewPageBytes+1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteAction(action.Action{ID: "large-first-action", Type: action.TypeToolCall, Provider: "claude", Assurance: action.AssuranceProviderReported, Status: "completed", Input: padding}); err != nil {
+		t.Fatal(err)
+	}
 	longCJK := strings.Repeat("界", 170)
 	for i := 0; i < viewPageSize+1; i++ {
 		id := fmt.Sprintf("prompt-%03d", i)
@@ -990,6 +997,9 @@ func TestViewRequestPagesAreBoundedAndPreserveExactPromptIdentity(t *testing.T) 
 	}
 	if first.Items[0].Rank != 1 || first.Items[viewPageSize-1].Rank != viewPageSize {
 		t.Fatalf("request ranks = %d...%d", first.Items[0].Rank, first.Items[viewPageSize-1].Rank)
+	}
+	if first.Items[0].Offset <= viewPageBytes {
+		t.Fatalf("first request offset = %d, want beyond first %d-byte action page", first.Items[0].Offset, viewPageBytes)
 	}
 	if utf8.RuneCountInString(first.Items[0].Preview) != 160 || !first.Items[0].Truncated || strings.Contains(first.Items[0].Preview, "synthetic-request-index-secret") {
 		t.Fatalf("safe bounded preview = %q (truncated %v)", first.Items[0].Preview, first.Items[0].Truncated)

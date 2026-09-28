@@ -6682,7 +6682,7 @@ test('request index distinguishes intentional empty data from an unreadable page
   unreadable.requests = () => { throw new Error('synthetic unreadable request page'); };
   const unreadableDOM = await renderFixture(unreadable);
   t.after(() => unreadableDOM.window.close());
-  assert.match(unreadableDOM.window.document.querySelector('#request-index-empty').textContent, /Could not load request index: synthetic unreadable request page/);
+  assert.match(unreadableDOM.window.document.querySelector('#request-index-empty').textContent, /Could not load request index: .*synthetic unreadable request page/);
   assert.doesNotMatch(unreadableDOM.window.document.querySelector('#request-index-empty').textContent, /No recorded prompts/);
 });
 
@@ -6760,16 +6760,17 @@ test('request index count, caveat, and CJK previews localize in every supported 
   const dom = await renderFixture(data);
   t.after(() => dom.window.close());
   const w = dom.window, d = w.document;
-  for (const [lang, title, count, unavailable] of [
-    ['en', 'Recorded requests', '2 of 2 recorded requests', 'Preview unavailable'],
-    ['ko', '기록된 요청', '기록된 요청 2개 중 2개', '미리보기 없음'],
-    ['ja', '記録されたリクエスト', '記録されたリクエスト2件中2件', 'プレビューなし'],
-    ['zh-CN', '已记录的请求', '已记录 2 个请求，已加载 2 个', '无预览'],
+  for (const [lang, title, count, unavailable, caveat] of [
+    ['en', 'Recorded requests', '2 of 2 recorded requests', 'Preview unavailable', 'Provider-recorded prompts in record order; no authorship or response pairing is inferred.'],
+    ['ko', '기록된 요청', '기록된 요청 2개 중 2개', '미리보기 없음', '프로바이더가 기록한 프롬프트를 기록 순서로 표시합니다. 작성 주체나 응답 연결은 추론하지 않습니다.'],
+    ['ja', '記録されたリクエスト', '記録されたリクエスト2件中2件', 'プレビューなし', 'プロバイダーが記録したプロンプトを記録順に表示します。作成者や応答との対応は推測しません。'],
+    ['zh-CN', '已记录的请求', '已记录 2 个请求，已加载 2 个', '无预览', '按记录顺序显示提供方记录的提示，不推断作者身份或请求与回复的对应关系。'],
   ]) {
     d.querySelector('#lang').value = lang;
     d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
     assert.equal(d.querySelector('#request-index summary').textContent.includes(title), true, lang);
     assert.equal(d.querySelector('#request-index-count').textContent, count, lang);
+    assert.equal(d.querySelector('#request-index .request-index-note').textContent, caveat, lang);
     assert.equal(d.querySelectorAll('.request-index-preview')[0].textContent, '긴 요청 日本語 中文', lang);
     assert.equal(d.querySelectorAll('.request-index-preview')[1].textContent, unavailable, lang);
   }

@@ -3197,11 +3197,14 @@ function shortID(id) {
     const index = state.requests;
     const total = state.run?.promptCount || 0;
     const card = $('request-index');
-    card.classList.toggle('hidden', total === 0);
-    if (total === 0 || !index) return;
+    card.classList.remove('hidden');
+    if (!index) return;
     const loaded = index.items.length;
     $('request-index-count').textContent = t('{loaded} of {total} recorded requests', { loaded, total });
     const list = $('request-index-list');
+    const focusedRequest = list.contains(document.activeElement)
+      ? Array.from(list.querySelectorAll('button')).indexOf(document.activeElement)
+      : -1;
     list.replaceChildren();
     const linked = actionFromURL();
     for (const request of index.items) {
@@ -3216,6 +3219,7 @@ function shortID(id) {
       button.addEventListener('click', () => navigateRun(state.run.run.id, request.offset, 'push', '', request.id || '', true));
       list.append(button);
     }
+    if (focusedRequest >= 0) list.querySelectorAll('button')[focusedRequest]?.focus({ preventScroll: true });
     const empty = $('request-index-empty');
     let message = '';
     if (index.loading && loaded === 0) message = t('Loading request index…');
@@ -3346,7 +3350,7 @@ function shortID(id) {
       if (generation === state.loadGeneration && index === state.requests) {
         index.loading = false;
         renderRequestIndex();
-        if (focusNew && document.activeElement === moreControl) {
+        if (focusNew) {
           $('request-index-list').querySelectorAll('button')[from]?.focus({ preventScroll: true });
         }
       }
@@ -4262,11 +4266,17 @@ function shortID(id) {
     try {
       const fresh = await getJSON(`/api/runs/${encodeURIComponent(state.run.run.id)}`);
       if (generation !== state.loadGeneration) return;
+      const previousPromptCount = state.run.promptCount || 0;
       const grew = { actions: (fresh.actionCount || 0) > (state.run.actionCount || 0), events: (fresh.eventCount || 0) > (state.run.eventCount || 0) };
+      const requestsGrew = (fresh.promptCount || 0) > previousPromptCount;
       const signature = runSignature(fresh);
       state.run = fresh;
       const running = isLive();
-      if (signature !== live.signature) {
+      const requestsMissing = (fresh.promptCount || 0) > (state.requests?.items.length || 0);
+      if (requestsMissing && state.requests?.loaded && !state.requests.loading && state.requests.nextCursor === null) {
+        await loadRequestPage(state.requests.items.length, true, generation);
+      }
+      if (signature !== live.signature || requestsGrew) {
         live.signature = signature;
         renderRunHeader();
         // The visible stream's "Loaded n of total" reads the new total; pages still to come are fetched from the new snapshot.

@@ -496,6 +496,8 @@ html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
   .run-header-side { width: 100%; align-items: flex-start; }
   h1 { font-size: 20px; }
   .request-summary { gap: 8px; }
+  .request-index-card .request-summary { grid-template-columns: minmax(0,1fr) max-content; }
+  .request-index-card #request-index-count { grid-column: 1 / -1; white-space: normal; text-overflow: clip; }
   .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .metric-primary { grid-column: 1 / -1; border-left: 0; }
   .metric:nth-child(2) { border-top: 1px solid var(--border-subtle); }
