@@ -8,7 +8,7 @@
   const MAX_EXPANDED_ACTION_GROUPS = 250;
   let earlierRunsExpanded = false;
   let requestRunId = '';
-  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', runUnreadableByPage: new Map(), initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, requests: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', runUnreadableByPage: new Map(), initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, requests: null, requestScope: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -47,6 +47,13 @@
       'No recorded prompts.': '기록된 프롬프트가 없습니다.',
       'Preview unavailable': '미리보기 없음',
       '{loaded} of {total} recorded requests': '기록된 요청 {total}개 중 {loaded}개',
+      'Entire timeline': '전체 타임라인',
+      'Recorded interval {rank} of {total} · ends before recorded request {next}.': '기록된 구간 {rank} / {total} · 기록된 요청 {next} 직전에 끝납니다.',
+      'Recorded interval {rank} of {total} · end not loaded yet.': '기록된 구간 {rank} / {total} · 끝 경계는 아직 불러오지 않았습니다.',
+      'Recorded interval {rank} of {total} · through the snapshot end.': '기록된 구간 {rank} / {total} · 스냅샷 끝까지입니다.',
+      'Recorded interval {rank} of {total} · Open through the current snapshot; the end is not yet observed.': '기록된 구간 {rank} / {total} · 현재 스냅샷까지 열려 있으며 끝은 아직 관측되지 않았습니다.',
+      'Could not load recorded interval: {error}': '기록된 구간을 불러오지 못했습니다: {error}',
+      '{loaded} loaded actions in recorded interval': '기록된 구간에서 액션 {loaded}개 불러옴',
       'Last message from {provider}': '{provider}의 마지막 메시지',
       'the agent': '에이전트',
       'Show message': '메시지 보기',
@@ -427,6 +434,13 @@
       'No recorded prompts.': '記録されたプロンプトはありません。',
       'Preview unavailable': 'プレビューなし',
       '{loaded} of {total} recorded requests': '記録されたリクエスト{total}件中{loaded}件',
+      'Entire timeline': 'タイムライン全体',
+      'Recorded interval {rank} of {total} · ends before recorded request {next}.': '記録区間 {rank} / {total} · 記録されたリクエスト {next} の直前までです。',
+      'Recorded interval {rank} of {total} · end not loaded yet.': '記録区間 {rank} / {total} · 終端はまだ読み込まれていません。',
+      'Recorded interval {rank} of {total} · through the snapshot end.': '記録区間 {rank} / {total} · スナップショットの末尾までです。',
+      'Recorded interval {rank} of {total} · Open through the current snapshot; the end is not yet observed.': '記録区間 {rank} / {total} · 現在のスナップショットまで開いており、終端はまだ観測されていません。',
+      'Could not load recorded interval: {error}': '記録区間を読み込めませんでした: {error}',
+      '{loaded} loaded actions in recorded interval': '記録区間のアクションを {loaded} 件読み込み済み',
       'Last message from {provider}': '{provider} の最後のメッセージ',
       'the agent': 'エージェント',
       'Show message': 'メッセージを表示',
@@ -807,6 +821,13 @@
       'No recorded prompts.': '没有已记录的提示。',
       'Preview unavailable': '无预览',
       '{loaded} of {total} recorded requests': '已记录 {total} 个请求，已加载 {loaded} 个',
+      'Entire timeline': '完整时间线',
+      'Recorded interval {rank} of {total} · ends before recorded request {next}.': '记录区间 {rank} / {total} · 截止于已记录请求 {next} 之前。',
+      'Recorded interval {rank} of {total} · end not loaded yet.': '记录区间 {rank} / {total} · 尚未加载结束边界。',
+      'Recorded interval {rank} of {total} · through the snapshot end.': '记录区间 {rank} / {total} · 直到快照末尾。',
+      'Recorded interval {rank} of {total} · Open through the current snapshot; the end is not yet observed.': '记录区间 {rank} / {total} · 当前快照内仍处于开放状态，尚未观测到结束边界。',
+      'Could not load recorded interval: {error}': '无法加载记录区间：{error}',
+      '{loaded} loaded actions in recorded interval': '记录区间内已加载 {loaded} 个操作',
       'Last message from {provider}': '{provider} 的最后一条消息',
       'the agent': '代理',
       'Show message': '显示消息',
@@ -1635,6 +1656,15 @@ function shortID(id) {
     return Number.isSafeInteger(cursor) ? { id, cursor } : null;
   }
 
+  function requestScopeFromURL() {
+    const params = new URLSearchParams(location.search);
+    if (params.get('scope') !== 'request') return null;
+    const raw = params.get('scopeStart');
+    if (!/^(0|[1-9][0-9]*)$/.test(raw || '')) return null;
+    const cursor = Number(raw);
+    return Number.isSafeInteger(cursor) ? { cursor } : null;
+  }
+
   function changedFileFromURL() {
     const params = new URLSearchParams(location.search);
     const path = params.get('focus') === 'changes' ? params.get('change') : '';
@@ -1697,6 +1727,8 @@ function shortID(id) {
     if (name === 'focus' || name === 'run') {
       url.searchParams.delete('action');
       url.searchParams.delete('actionCursor');
+      url.searchParams.delete('scope');
+      url.searchParams.delete('scopeStart');
       url.searchParams.delete('change');
       url.searchParams.delete('changeCursor');
     }
@@ -2278,7 +2310,9 @@ function shortID(id) {
   function loadMore(streamName, manual = false) {
     const stream = state.streams && state.streams[streamName];
     if (!stream || stream.loading || stream.nextCursor === null || (stream.error && !manual)) return;
-    loadStreamPage(streamName, stream.nextCursor, true, state.loadGeneration, manual);
+    const retryScopeStart = streamName === 'actions' && state.requestScope && stream.error && stream.items.length === 0;
+    const cursor = retryScopeStart ? state.requestScope.start : stream.nextCursor;
+    loadStreamPage(streamName, cursor, !retryScopeStart, state.loadGeneration, manual);
   }
 
   const groupedStream = (streamName) => (streamName === 'changes' && state.changeView === 'folders')
@@ -2307,7 +2341,12 @@ function shortID(id) {
         tail.append(sentinel, more);
       }
     }
-    if (stream.items.length) tail.append(node('div', 'pager-label', t('Loaded {loaded} of {total}', { loaded: stream.items.length, total: MODES[streamName].total(stream) })));
+    if (stream.items.length) {
+      const label = streamName === 'actions' && state.requestScope
+        ? t('{loaded} loaded actions in recorded interval', { loaded: stream.items.length })
+        : t('Loaded {loaded} of {total}', { loaded: stream.items.length, total: MODES[streamName].total(stream) });
+      tail.append(node('div', 'pager-label', label));
+    }
     timeline.append(tail);
     const sentinel = tail.querySelector('.stream-sentinel');
     if (observer && sentinel) observer.observe(sentinel);
@@ -2323,7 +2362,28 @@ function shortID(id) {
     if (message) timeline.append(node('div', 'timeline-empty', t(message)));
   }
 
+  function renderRequestScope() {
+    const controls = $('request-scope-controls');
+    const scope = state.mode === 'actions' ? state.requestScope : null;
+    controls.classList.toggle('hidden', !scope);
+    $('request-scope-exit').classList.toggle('hidden', !scope);
+    if (!scope) {
+      $('request-scope-label').textContent = '';
+      return;
+    }
+    const values = { rank: scope.rank || '—', total: scope.total || '—', next: scope.nextRank || '—' };
+    const key = scope.boundary === 'next'
+      ? 'Recorded interval {rank} of {total} · ends before recorded request {next}.'
+      : scope.boundary === 'snapshot' && isLive()
+        ? 'Recorded interval {rank} of {total} · Open through the current snapshot; the end is not yet observed.'
+        : scope.boundary === 'snapshot'
+          ? 'Recorded interval {rank} of {total} · through the snapshot end.'
+          : 'Recorded interval {rank} of {total} · end not loaded yet.';
+    $('request-scope-label').textContent = t(key, values);
+  }
+
   function renderActionViewStatus(liveLoaded) {
+    renderRequestScope();
     for (const [mode, name] of [['actions', 'action'], ['changes', 'change'], ['events', 'event']]) $(`${name}-view-controls`).classList.toggle('hidden', state.mode !== mode);
     if (state.mode === 'actions') {
       $('all-actions-toggle').checked = state.actionView === 'all';
@@ -2859,7 +2919,10 @@ function shortID(id) {
     if (!selected) state.selected = null;
     const stream = state.streams[streamName];
     stream.shown = 0;
-    if (stream.error) timeline.append(node('div', 'timeline-empty stream-error', t(MODES[streamName].error, { error: stream.error })));
+    if (stream.error) {
+      const errorKey = streamName === 'actions' && state.requestScope ? 'Could not load recorded interval: {error}' : MODES[streamName].error;
+      timeline.append(node('div', 'timeline-empty stream-error', t(errorKey, { error: stream.error })));
+    }
     if (streamName === 'changes') {
       if (stream.loaded && stream.status === 'unavailable') {
         const pending = fieldsMap(state.run.evidence.repository).get('Status') === 'PENDING';
@@ -2974,6 +3037,10 @@ function shortID(id) {
     url.searchParams.set('focus', action ? 'actions' : 'changes');
     url.searchParams.set(selected.kind, target);
     url.searchParams.set(`${selected.kind}Cursor`, String(cursor));
+    if (action && state.requestScope) {
+      url.searchParams.set('scope', 'request');
+      url.searchParams.set('scopeStart', String(state.requestScope.start));
+    }
     return url.href;
   }
 
@@ -3279,7 +3346,7 @@ function shortID(id) {
       );
       const current = linked && linked.cursor === request.offset && (!linked.id || linked.id === (request.id || ''));
       if (current) button.setAttribute('aria-current', 'true');
-      button.addEventListener('click', () => navigateRun(state.run.run.id, request.offset, 'push', '', request.id || '', true));
+      button.addEventListener('click', () => navigateRun(state.run.run.id, request.offset, 'push', '', request.id || '', true, true));
       list.append(button);
     }
     if (focusedRequest >= 0) list.querySelectorAll('button')[focusedRequest]?.focus({ preventScroll: true });
@@ -3494,6 +3561,68 @@ function shortID(id) {
     }
   }
 
+  function projectRequestScopePage(items, append, cursor, nextCursor, endCursor) {
+    const scope = state.requestScope;
+    if (!scope) return { items, nextCursor, endCursor };
+    let from = 0;
+    if (!append) {
+      const first = items[0];
+      if (!first || first.type !== 'user.prompt' || first.offset !== scope.start || cursor !== scope.start) {
+        throw new Error('selected byte offset is not a recorded user.prompt');
+      }
+      if (!Number.isSafeInteger(first.promptRank) || first.promptRank < 1 || !Number.isSafeInteger(scope.total) || first.promptRank > scope.total) {
+        throw new Error('selected user.prompt has no valid recorded rank');
+      }
+      let previousOffset = -1;
+      for (const item of items) {
+        if (!Number.isSafeInteger(item?.offset) || item.offset <= previousOffset) {
+          throw new Error('recorded interval page does not advance by exact byte offset');
+        }
+        previousOffset = item.offset;
+      }
+      scope.rank = first.promptRank;
+      from = 1;
+    } else {
+      const loaded = state.streams?.actions?.items || [];
+      const lastOffset = loaded.at(-1)?.offset;
+      if (!Number.isSafeInteger(lastOffset) || lastOffset < 0) throw new Error('loaded recorded interval has no exact byte offset');
+      let firstNew = 0;
+      while (firstNew < items.length) {
+        const item = items[firstNew];
+        const offset = item?.offset;
+        if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('recorded interval continuation has no exact byte offset');
+        if (offset > lastOffset) break;
+        const prior = loaded.find((loadedItem) => loadedItem.offset === offset);
+        if (!prior || prior.id !== item.id || prior.type !== item.type) {
+          throw new Error('recorded interval continuation has conflicting overlap');
+        }
+        firstNew += 1;
+      }
+      items = items.slice(firstNew);
+      let previousOffset = lastOffset;
+      for (const item of items) {
+        if (!Number.isSafeInteger(item?.offset) || item.offset <= previousOffset) {
+          throw new Error('recorded interval continuation does not advance by exact byte offset');
+        }
+        previousOffset = item.offset;
+      }
+    }
+    const boundary = items.slice(from).findIndex((item) => item.type === 'user.prompt');
+    if (boundary >= 0) {
+      const index = from + boundary;
+      const prompt = items[index];
+      scope.boundary = 'next';
+      scope.nextRank = Number.isSafeInteger(prompt.promptRank) && prompt.promptRank > 0 ? prompt.promptRank : 0;
+      return { items: items.slice(0, index), nextCursor: null, endCursor: prompt.offset };
+    }
+    if (nextCursor === null && scope.rank > 0 && scope.total > scope.rank) {
+      throw new Error('recorded interval ended before the next recorded user.prompt');
+    }
+    scope.boundary = nextCursor === null ? 'snapshot' : 'unknown';
+    scope.nextRank = 0;
+    return { items, nextCursor, endCursor };
+  }
+
   // loadStreamPage fetches one page: append=false starts the stream over from cursor, append=true adds the page to what is loaded.
   // focusNew moves focus onto the first appended row, for a "Load more" button that is gone once its page lands.
   async function loadStreamPage(streamName, cursor = 0, append = false, generation = state.loadGeneration, focusNew = false, signal) {
@@ -3501,15 +3630,27 @@ function shortID(id) {
     const stream = state.streams && state.streams[streamName];
     if (!stream || stream.loading || cursor === null) return;
     const ownsFocus = focusNew && streamName === state.mode && document.activeElement?.matches('.stream-tail .load-more');
+    const snapshotID = state.run.snapshotId;
+    let retryFreshSnapshot = false;
     stream.loading = true;
     stream.currentCursor = cursor;
+    if (streamName === 'actions' && state.requestScope && !append) stream.nextCursor = cursor;
     const from = append ? stream.items.length : 0;
     if (streamName === state.mode) renderTail(streamName);
     try {
-      const page = await getJSON(`/api/snapshots/${encodeURIComponent(state.run.snapshotId)}/${streamName}?cursor=${cursor}`, signal);
+      const page = await getJSON(`/api/snapshots/${encodeURIComponent(snapshotID)}/${streamName}?cursor=${cursor}`, signal);
       // A page for a cursor this stream no longer waits on is stale and dropped.
       if (generation !== state.loadGeneration || cursor !== stream.currentCursor) return;
-      const items = requireArrayField(page, 'items');
+      if (state.run?.snapshotId !== snapshotID) {
+        retryFreshSnapshot = true;
+        return;
+      }
+      let items = requireArrayField(page, 'items');
+      let nextCursor = page.nextCursor === undefined ? null : page.nextCursor;
+      let endCursor = page.endCursor;
+      if (streamName === 'actions' && state.requestScope) {
+        ({ items, nextCursor, endCursor } = projectRequestScopePage(items, append, cursor, nextCursor, endCursor));
+      }
       if (!append) stream.startCursor = cursor;
       if (streamName === 'actions' || streamName === 'events') {
         const cursors = items.map(() => cursor);
@@ -3517,8 +3658,8 @@ function shortID(id) {
       }
       stream.items = append ? stream.items.concat(items) : items;
       stream.error = '';
-      stream.nextCursor = page.nextCursor === undefined ? null : page.nextCursor;
-      if (page.endCursor !== undefined) stream.endCursor = page.endCursor;
+      stream.nextCursor = nextCursor;
+      if (endCursor !== undefined) stream.endCursor = endCursor;
       stream.loaded = true;
       if (streamName === 'changes') {
         stream.total = page.total || 0;
@@ -3531,10 +3672,15 @@ function shortID(id) {
     } catch (error) {
       if (generation === state.loadGeneration) {
         stream.error = error instanceof Error ? error.message : String(error);
+        if (streamName === 'actions' && state.requestScope && !append) stream.nextCursor = cursor;
         showError(error);
       }
     } finally {
       stream.loading = false;
+      if (retryFreshSnapshot && generation === state.loadGeneration && stream === state.streams?.[streamName] && cursor === stream.currentCursor) {
+        await loadStreamPage(streamName, cursor, append, generation, focusNew);
+        return;
+      }
       if (generation === state.loadGeneration && streamName === state.mode) {
         // Removing the initiating button leaves BODY focused. A user's new focus wins.
         const restoreManualFocus = ownsFocus && document.activeElement === document.body;
@@ -4376,6 +4522,7 @@ function shortID(id) {
       const requestsGrew = (fresh.promptCount || 0) > previousPromptCount;
       const signature = runSignature(fresh);
       state.run = fresh;
+      if (state.requestScope) state.requestScope.total = fresh.promptCount || 0;
       const running = isLive();
       const requestsMissing = (fresh.promptCount || 0) > (state.requests?.items.length || 0);
       if (requestsMissing && state.requests?.loaded && !state.requests.loading && state.requests.nextCursor === null) {
@@ -4386,7 +4533,11 @@ function shortID(id) {
         renderRunHeader();
         // The visible stream's "Loaded n of total" reads the new total; pages still to come are fetched from the new snapshot.
         const label = $('timeline').querySelector('.stream-tail .pager-label');
-        if (label && MODES[state.mode] && state.streams[state.mode].items.length) label.textContent = t('Loaded {loaded} of {total}', { loaded: state.streams[state.mode].items.length, total: MODES[state.mode].total(state.streams[state.mode]) });
+        if (label && MODES[state.mode] && state.streams[state.mode].items.length) {
+          label.textContent = state.mode === 'actions' && state.requestScope
+            ? t('{loaded} loaded actions in recorded interval', { loaded: state.streams.actions.items.length })
+            : t('Loaded {loaded} of {total}', { loaded: state.streams[state.mode].items.length, total: MODES[state.mode].total(state.streams[state.mode]) });
+        }
       } else {
         renderLivePill();
       }
@@ -4565,6 +4716,18 @@ function shortID(id) {
 
   // quiet loads (auto-selection) report failure in the empty state rather than a toast, so the poll can retry without nagging.
   // cursor starts the first actions page at a byte offset, for a search hit: the page there begins with the hit's action.
+  async function loadScopedLinkedAction(target, generation, signal) {
+    const stream = state.streams?.actions;
+    const matches = () => stream.items.some((item) => item.offset === target.cursor && (!target.id || item.id === target.id));
+    const seen = new Set();
+    while (!matches() && stream.nextCursor !== null && stream.nextCursor <= target.cursor && !seen.has(stream.nextCursor)) {
+      const cursor = stream.nextCursor;
+      seen.add(cursor);
+      await loadStreamPage('actions', cursor, true, generation, false, signal);
+      if (generation !== state.loadGeneration || stream.error) return;
+    }
+  }
+
   async function loadRun(id, quiet = false, cursor = 0, linked = false) {
     stopLive();
     const previousRunID = state.run?.run.id;
@@ -4588,6 +4751,10 @@ function shortID(id) {
       if (!compare.cwdTouched && run.run.cwd) $('compare-cwd').value = run.run.cwd;
       Object.assign(live, { updatedAt: new Date(), signature: runSignature(run), changes: null, error: '', refreshError: '' });
       $('live-status').textContent = '';
+      const scopedRequest = requestScopeFromURL();
+      state.requestScope = scopedRequest
+        ? { start: scopedRequest.cursor, rank: 0, total: state.run.promptCount || 0, boundary: 'unknown', nextRank: 0 }
+        : null;
       // shown counts the rows the filter lets through, across every page loaded so far.
       state.requests = { items: [], currentCursor: 0, nextCursor: state.run.promptCount === 0 ? null : 0, loading: false, loaded: state.run.promptCount === 0, error: '' };
       state.streams = {
@@ -4600,6 +4767,10 @@ function shortID(id) {
       renderRun();
       await loadRequestPage(0, false, generation, controller.signal);
       await loadStreamPage(state.mode, cursor, false, generation, false, controller.signal);
+      const linkedAction = actionFromURL();
+      if (state.mode === 'actions' && state.requestScope && linkedAction && !state.streams.actions.error) {
+        await loadScopedLinkedAction(linkedAction, generation, controller.signal);
+      }
       if (state.mode !== 'actions') await loadStreamPage('actions', 0, false, generation, false, controller.signal);
       if (state.mode !== 'changes') await loadStreamPage('changes', 0, false, generation, false, controller.signal);
       if (generation !== state.loadGeneration) return;
@@ -4626,7 +4797,7 @@ function shortID(id) {
     }
   }
 
-  async function navigateRun(id, cursor = 0, mode = 'push', changedPath = '', actionID = '', exactAction = false) {
+  async function navigateRun(id, cursor = 0, mode = 'push', changedPath = '', actionID = '', exactAction = false, requestScope = false) {
     const url = new URL(location.href);
     url.searchParams.set('run', id);
     url.searchParams.delete('action');
@@ -4635,6 +4806,13 @@ function shortID(id) {
       url.searchParams.set('focus', 'actions');
       if (actionID) url.searchParams.set('action', actionID);
       url.searchParams.set('actionCursor', String(cursor));
+    }
+    if (requestScope) {
+      url.searchParams.set('scope', 'request');
+      url.searchParams.set('scopeStart', String(cursor));
+    } else {
+      url.searchParams.delete('scope');
+      url.searchParams.delete('scopeStart');
     }
     if (changedPath) {
       url.searchParams.set('focus', 'changes');
@@ -4649,7 +4827,8 @@ function shortID(id) {
     const action = actionFromURL();
     if (changedFile) state.mode = 'changes';
     if (actionID || exactAction) state.mode = 'actions';
-    await loadRun(id, false, changedFile ? changedFile.cursor : action ? action.cursor : 0, true);
+    const scope = requestScopeFromURL();
+    await loadRun(id, false, changedFile ? changedFile.cursor : scope ? scope.cursor : action ? action.cursor : 0, true);
     if (!state.run || state.run.run.id !== id) return;
     focusRunEvidenceFromURL();
   }
@@ -4835,9 +5014,10 @@ function shortID(id) {
       const linkedRun = new URLSearchParams(location.search).get('run');
       const linkedChange = changedFileFromURL();
       const linkedAction = actionFromURL();
+      const linkedScope = requestScopeFromURL();
       if (linkedChange) state.mode = 'changes';
       if (linkedAction) state.mode = 'actions';
-      if (linkedRun) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : linkedAction ? linkedAction.cursor : 0, true);
+      if (linkedRun) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : linkedScope ? linkedScope.cursor : linkedAction ? linkedAction.cursor : 0, true);
       else await autoSelect(list);
       if (linkedRun && state.run && state.run.run.id === linkedRun) focusRunEvidenceFromURL();
       const reopen = /^#compare=([^,]+),(.+)$/.exec(location.hash);
@@ -4886,10 +5066,11 @@ function shortID(id) {
     const linkedRun = new URLSearchParams(location.search).get('run');
     const linkedChange = changedFileFromURL();
     const linkedAction = actionFromURL();
+    const linkedScope = requestScopeFromURL();
     if (linkedChange) state.mode = 'changes';
     if (linkedAction) state.mode = 'actions';
     const leavingExactPage = state.selected || (state.streams && (state.streams.changes.startCursor > 0 || state.streams.actions.startCursor > 0));
-    if (linkedRun && (!state.run || state.run.run.id !== linkedRun || linkedChange || linkedAction || leavingExactPage)) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : linkedAction ? linkedAction.cursor : 0, true);
+    if (linkedRun && (!state.run || state.run.run.id !== linkedRun || linkedChange || linkedAction || leavingExactPage)) await loadRun(linkedRun, true, linkedChange ? linkedChange.cursor : linkedScope ? linkedScope.cursor : linkedAction ? linkedAction.cursor : 0, true);
     if (linkedRun && state.run && state.run.run.id === linkedRun) focusRunEvidenceFromURL('actions');
     if (!linkedRun) {
       state.run = null;
@@ -4903,6 +5084,15 @@ function shortID(id) {
   // The last-message card links to its action through the same deep-link path
   // search hits use: the server's byte offset is the page cursor, so the action
   // is reached even when it sits beyond the pages loaded so far.
+  $('request-scope-exit').addEventListener('click', async (event) => {
+    if (!state.run) return;
+    const exit = event.currentTarget;
+    const ownsFocus = document.activeElement === exit;
+    await navigateRun(state.run.run.id, 0, 'push');
+    if (ownsFocus && (document.activeElement === exit || document.activeElement === document.body)) {
+      $('timeline-tab-actions').focus({ preventScroll: true });
+    }
+  });
   $('reply-action-link').addEventListener('click', (event) => {
     event.preventDefault();
     const { actionId, offset } = event.currentTarget.dataset;

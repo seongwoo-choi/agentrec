@@ -157,7 +157,9 @@ prove receipt, health or durable persistence.
   verification result and project.
 - **Run detail** — the request and the agent's last message side by side; a
   bounded **Recorded requests** index opens any recorded prompt at its exact
-  timeline record without loading the full action stream; a recording-status
+  timeline record or limits the view to its recorded interval, ending before
+  the next recorded prompt (or at the current snapshot boundary), without
+  loading the full action stream; a recording-status
   block keeps active/ended/failed/unknown and persistence evidence explicit; a four-card summary
   (process, verification, repository, warnings); failure triage on failed runs;
   **Verify now** or, without `--allow-run`, the command to verify later.
