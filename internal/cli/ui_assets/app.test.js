@@ -6511,6 +6511,30 @@ test('conversation expand context localizes after a run re-render', async (t) =>
   assert.equal(document.activeElement, current, 'the corresponding disclosure retains focus across the rerender');
 });
 
+test('request index paging stays manual and moves focus to the first appended request', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 251;
+  data.details.actionCount = 1;
+  const item = (rank) => ({ id: `prompt-${rank}`, rank, offset: rank * 100, preview: `request ${rank}`, truncated: false });
+  data.requests = (cursor) => cursor === 0
+    ? { items: Array.from({ length: 250 }, (_, index) => item(index + 1)), nextCursor: 250 }
+    : { items: [item(251)], nextCursor: null };
+  data.actions = [{ id: 'action', offset: 0, type: 'tool.call', input: { command: 'true' } }];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  assert.equal(d.querySelectorAll('#request-index-list button').length, 250);
+  assert.equal(dom.window.__fetchPaths.filter((path) => path.includes('/requests?')).length, 1);
+  const more = d.querySelector('#request-index-more');
+  more.focus();
+  more.click();
+  await settle();
+  const buttons = [...d.querySelectorAll('#request-index-list button')];
+  assert.equal(buttons.length, 251);
+  assert.equal(dom.window.__fetchPaths.filter((path) => path.includes('/requests?')).length, 2);
+  assert.equal(d.activeElement, buttons[250]);
+});
+
 test('recorded request index opens duplicate and missing IDs at exact offsets', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.promptCount = 3;
@@ -6539,7 +6563,7 @@ test('recorded request index opens duplicate and missing IDs at exact offsets', 
   let params = new URLSearchParams(location.search);
   assert.equal(params.get('action'), 'duplicate');
   assert.equal(params.get('actionCursor'), '98765');
-  assert.equal(d.querySelector('.action-row[aria-current="true"]').dataset.index, '0');
+  assert.equal(d.querySelector('.conversation-select[aria-current="true"]').closest('.action-row').dataset.index, '0');
   assert.match(d.querySelector('#inspector').textContent, /second request/);
 
   [...d.querySelectorAll('#request-index-list button')][2].click();
@@ -6547,7 +6571,7 @@ test('recorded request index opens duplicate and missing IDs at exact offsets', 
   params = new URLSearchParams(location.search);
   assert.equal(params.has('action'), false);
   assert.equal(params.get('actionCursor'), '99234');
-  assert.equal(d.querySelector('.action-row[aria-current="true"]').dataset.index, '0');
+  assert.equal(d.querySelector('.conversation-select[aria-current="true"]').closest('.action-row').dataset.index, '0');
 });
 
 
