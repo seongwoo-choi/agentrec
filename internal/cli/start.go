@@ -428,9 +428,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, " (%d unreadable)", unreadable)
 	}
 	fmt.Fprintf(stdout, ", %s on disk\n", humanBytes(storeBytes(root)))
-	if err := printLatestRecordingStatus(stdout, root, runs); err != nil {
-		return exitFailure
-	}
+	recordingErr := printLatestRecordingStatus(stdout, root, runs)
 	trashed, trashUnreadable, err := listTrash(root, nil)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -451,6 +449,9 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 			continue
 		}
 		fmt.Fprintf(stdout, "%-9s %s\n", provider, describeHooks(path, provider))
+	}
+	if recordingErr != nil {
+		return exitFailure
 	}
 	return 0
 }
