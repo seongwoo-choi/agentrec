@@ -183,6 +183,49 @@ func TestViewRecordingStatusUsesRecorderObservedEventTimeAcrossRefreshes(t *test
 	}
 }
 
+func TestViewRecordingStatusClassifiesFinalAndUnavailableEvidence(t *testing.T) {
+	endedAt := time.Date(2026, 9, 28, 13, 10, 0, 0, time.UTC)
+	tests := []struct {
+		name            string
+		manifest        storage.Manifest
+		receiptRaw      []byte
+		wantState       string
+		wantEvidence    string
+		wantPersistence string
+	}{
+		{
+			name:      "clean session end",
+			manifest:  storage.Manifest{Mode: storage.ModeSession, EndedAt: &endedAt, ExitReason: reasonSessionEnded},
+			wantState: "ended", wantEvidence: "finalized_manifest", wantPersistence: "finalized",
+		},
+		{
+			name:      "explicit storage failure",
+			manifest:  storage.Manifest{EndedAt: &endedAt, ExitReason: "storage_error"},
+			wantState: "failed", wantEvidence: "finalized_manifest", wantPersistence: "finalized",
+		},
+		{
+			name:      "unfinished without live recorder proof",
+			manifest:  storage.Manifest{Mode: storage.ModeSession},
+			wantState: "unknown", wantEvidence: "unavailable", wantPersistence: "not_proven",
+		},
+		{
+			name:       "malformed receipt",
+			manifest:   storage.Manifest{EndedAt: &endedAt, ExitReason: reasonSessionEnded},
+			receiptRaw: []byte(`{"schema":1,"eventName":"SessionEnd"}`),
+			wantState:  "unavailable", wantEvidence: "unavailable", wantPersistence: "not_proven",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := viewRecording(tt.manifest, tt.receiptRaw)
+			if got.State != tt.wantState || got.Evidence != tt.wantEvidence || got.Persistence != tt.wantPersistence {
+				t.Errorf("recording = %q/%q/%q, want %q/%q/%q", got.State, got.Evidence, got.Persistence, tt.wantState, tt.wantEvidence, tt.wantPersistence)
+			}
+		})
+	}
+}
+
 func TestViewLiveEndCursorAndWorkingTree(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
