@@ -6562,11 +6562,16 @@ test('request index paging restores focus after the browser drops focus from its
   const { document: d } = dom.window;
   const release = deferFetch(dom.window, (url) => url.endsWith('/requests?cursor=250'));
   const more = d.querySelector('#request-index-more');
+  d.body.tabIndex = -1;
+  const toggle = more.classList.toggle.bind(more.classList);
+  more.classList.toggle = (token, force) => {
+    const result = toggle(token, force);
+    if (token === 'hidden' && force) d.body.focus();
+    return result;
+  };
   more.focus();
   more.click();
   await settle();
-  d.body.tabIndex = -1;
-  d.body.focus();
   assert.equal(d.activeElement, d.body);
   release();
   await settle();
@@ -6608,6 +6613,8 @@ test('live refresh exposes newly recorded requests without resetting exact selec
   assert.equal(d.querySelector('#request-index-list [aria-current="true"]')?.textContent, '1 of 1first request');
   assert.match(d.querySelector('#inspector').textContent, /first request/);
   const exactURL = dom.window.location.href;
+  d.querySelector('#request-index-list [aria-current="true"]').focus();
+  assert.equal(d.activeElement, d.querySelector('#request-index-list [aria-current="true"]'));
   assert.equal(typeof liveTick, 'function');
 
   refresh = true;
@@ -6616,6 +6623,7 @@ test('live refresh exposes newly recorded requests without resetting exact selec
 
   assert.equal(dom.window.location.href, exactURL);
   assert.match(d.querySelector('#inspector').textContent, /first request/);
+  assert.equal(d.activeElement, d.querySelector('#request-index-list [aria-current="true"]'));
   assert.equal(d.querySelectorAll('#request-index-list button').length, 2);
   assert.equal(d.querySelector('#request-index-count').textContent, '2 of 2 recorded requests');
 });
