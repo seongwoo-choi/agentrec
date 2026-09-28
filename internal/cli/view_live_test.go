@@ -20,6 +20,72 @@ import (
 // Every stream page names the offset after its last item, so a page can
 // follow a run as it grows; a running session's working tree can be looked
 // at now, labelled as a look; a run that has ended cannot.
+func TestStatusReportsLatestRecordingFactsWithoutInferringHealth(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const (
+		runID     = "run-status-active"
+		sessionID = "session-status-active"
+	)
+	bundle, err := storage.Create(root, runID, storage.Manifest{
+		Provider: "claude", CWD: repo, StartedAt: time.Now(), Mode: storage.ModeSession, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedAt := time.Date(2026, 9, 28, 8, 40, 0, 123000000, time.UTC)
+	if err := bundle.WriteRecordingReceipt(storage.RecordingReceipt{Schema: 1, EventName: hookPostToolUse, ObservedAt: observedAt}); err != nil {
+		t.Fatal(err)
+	}
+	socket, err := sessionSocketPath(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, lock, err := listenSession(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close(); lock.Close() })
+	probeDone := make(chan struct{})
+	go func() {
+		defer close(probeDone)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.ReadAll(conn)
+		_, _ = conn.Write(sessionProbeAck(sessionID))
+	}()
+
+	var stdout, stderr strings.Builder
+	if code := runStatus(nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("status exit %d: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"recording active (quiet)",
+		"run        run-status-active (session recording)",
+		"last event PostToolUse observed by recorder at 2026-09-28T08:40:00.123Z",
+		"persistence not proven",
+		"status refreshed",
+		"configuration does not prove event receipt",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "healthy") || strings.Contains(out, "durable") {
+		t.Errorf("status inferred health or durability:\n%s", out)
+	}
+	select {
+	case <-probeDone:
+	case <-time.After(time.Second):
+		t.Error("status did not probe the session-bound recorder")
+	}
+}
+
 func TestViewRecordingStatusKeepsActiveQuietSessionNeutral(t *testing.T) {
 	root := home(t)
 	repo := cleanRepo(t)
