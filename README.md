@@ -132,6 +132,10 @@ agentrec show latest
 agentrec events latest --json
 ```
 
+`status` reports the latest recording state, recorder-observed event time and
+refresh time separately. Hook configuration is diagnostic only: it does not
+prove receipt, health or durable persistence.
+
 ## The Viewer
 
 <table align="center">
@@ -153,7 +157,8 @@ agentrec events latest --json
   verification result and project.
 - **Run detail** — the request and the agent's last message side by side; a
   bounded **Recorded requests** index opens any recorded prompt at its exact
-  timeline record without loading the full action stream; a four-card summary
+  timeline record without loading the full action stream; a recording-status
+  block keeps active/ended/failed/unknown and persistence evidence explicit; a four-card summary
   (process, verification, repository, warnings); failure triage on failed runs;
   **Verify now** or, without `--allow-run`, the command to verify later.
 - **Timeline** — **Reading view** folds routine tool actions and keeps prompts
