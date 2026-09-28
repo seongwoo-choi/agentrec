@@ -549,5 +549,8 @@ func describeHooks(path, provider string) string {
 	case installed < len(hookEvents[provider]):
 		return fmt.Sprintf("hook configuration partial (%d of %d events) in %s; configuration does not prove event receipt; hooks installed for %d of %d events; run %s to complete", installed, len(hookEvents[provider]), displayPath(path), installed, len(hookEvents[provider]), setup)
 	}
+	if provider == "codex" {
+		return fmt.Sprintf("hook configuration complete in %s; configuration does not prove event receipt; hooks installed in %s; run /hooks inside Codex to check or establish trust", displayPath(path), displayPath(path))
+	}
 	return fmt.Sprintf("hook configuration complete in %s; configuration does not prove event receipt; hooks installed in %s", displayPath(path), displayPath(path))
 }
