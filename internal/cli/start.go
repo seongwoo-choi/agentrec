@@ -428,7 +428,9 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, " (%d unreadable)", unreadable)
 	}
 	fmt.Fprintf(stdout, ", %s on disk\n", humanBytes(storeBytes(root)))
-	printLatestRecordingStatus(stdout, root, runs)
+	if err := printLatestRecordingStatus(stdout, root, runs); err != nil {
+		return exitFailure
+	}
 	trashed, trashUnreadable, err := listTrash(root, nil)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -453,29 +455,29 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func printLatestRecordingStatus(stdout io.Writer, root string, runs []runSummary) {
+func printLatestRecordingStatus(stdout io.Writer, root string, runs []runSummary) error {
 	if len(runs) == 0 {
 		fmt.Fprintln(stdout, "recording unavailable (no recorded run)")
-		return
+		return nil
 	}
 	run := runs[0]
 	runRoot, err := openRunRoot(root, run.ID)
 	if err != nil {
 		fmt.Fprintf(stdout, "recording unavailable for %s: %v\n", oneLine(run.ID), err)
-		return
+		return err
 	}
 	defer runRoot.Close()
 	manifest, err := readManifestFromRoot(runRoot)
 	if err != nil {
 		fmt.Fprintf(stdout, "recording unavailable for %s: %v\n", oneLine(run.ID), err)
-		return
+		return err
 	}
 	receipt, err := readDocumentFromRoot(runRoot, storage.RecordingReceiptFile)
 	if errors.Is(err, os.ErrNotExist) {
 		receipt = nil
 	} else if err != nil {
 		fmt.Fprintf(stdout, "recording unavailable for %s: %v\n", oneLine(run.ID), err)
-		return
+		return err
 	}
 	status := viewRecordingWithLocks(context.Background(), manifest, receipt, filepath.Join(filepath.Dir(root), locksDirName))
 	activity := ""
@@ -500,6 +502,7 @@ func printLatestRecordingStatus(stdout io.Writer, root string, runs []runSummary
 	}
 	fmt.Fprintf(stdout, "evidence   %s\n", oneLine(status.Evidence))
 	fmt.Fprintf(stdout, "status refreshed %s\n", status.RefreshedAt.UTC().Format(time.RFC3339Nano))
+	return nil
 }
 
 // describeHooks says whether the recorder's hooks are configured for a

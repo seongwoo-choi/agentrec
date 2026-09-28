@@ -60,5 +60,8 @@ jobs:
       - name: Test release script boundaries
         run: sh scripts/build-release_test.sh
 
+      - name: Test release workflow boundaries
+        run: sh scripts/release-workflow_test.sh
+
       - name: Build
         run: go build ./...

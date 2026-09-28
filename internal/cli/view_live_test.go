@@ -308,10 +308,16 @@ func TestViewRecordingStatusClassifiesFinalAndUnavailableEvidence(t *testing.T) 
 			wantState: "unknown", wantEvidence: "unavailable", wantPersistence: "not_proven",
 		},
 		{
-			name:       "malformed receipt",
+			name:       "malformed receipt does not mask finalization",
 			manifest:   storage.Manifest{EndedAt: &endedAt, ExitReason: reasonSessionEnded},
 			receiptRaw: []byte(`{"schema":1,"eventName":"SessionEnd"}`),
-			wantState:  "unavailable", wantEvidence: "unavailable", wantPersistence: "not_proven",
+			wantState:  "ended", wantEvidence: "finalized_manifest", wantPersistence: "finalized",
+		},
+		{
+			name:       "malformed receipt does not mask storage failure",
+			manifest:   storage.Manifest{EndedAt: &endedAt, ExitReason: "storage_error"},
+			receiptRaw: []byte(`{"schema":1,"eventName":"SessionEnd"}`),
+			wantState:  "failed", wantEvidence: "finalized_manifest", wantPersistence: "finalized",
 		},
 	}
 
@@ -322,6 +328,40 @@ func TestViewRecordingStatusClassifiesFinalAndUnavailableEvidence(t *testing.T) 
 				t.Errorf("recording = %q/%q/%q, want %q/%q/%q", got.State, got.Evidence, got.Persistence, tt.wantState, tt.wantEvidence, tt.wantPersistence)
 			}
 		})
+	}
+}
+
+func TestViewRecordingFinalizedKeepsValidReceiptEvidence(t *testing.T) {
+	endedAt := time.Date(2026, 9, 28, 13, 10, 0, 0, time.UTC)
+	observedAt := endedAt.Add(-time.Second)
+	receiptRaw, err := json.Marshal(storage.RecordingReceipt{Schema: 1, EventName: hookPostToolUse, ObservedAt: observedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, exitReason := range []string{reasonSessionEnded, "storage_error"} {
+		t.Run(exitReason, func(t *testing.T) {
+			got := viewRecording(storage.Manifest{EndedAt: &endedAt, ExitReason: exitReason}, receiptRaw)
+			if got.LastObservedEvent == nil || got.LastObservedEvent.Name != hookPostToolUse || !got.LastObservedEvent.ObservedAt.Equal(observedAt) {
+				t.Fatalf("last observed event = %+v, want %s at %s", got.LastObservedEvent, hookPostToolUse, observedAt)
+			}
+		})
+	}
+}
+
+func TestStatusFailsWhenLatestRecordingEvidenceCannotBeRead(t *testing.T) {
+	root := home(t)
+	const runID = "run-unreadable-receipt"
+	writeRun(t, root, runID, "claude", time.Now(), "completed")
+	if err := os.Mkdir(filepath.Join(root, runID, storage.RecordingReceiptFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr strings.Builder
+	if code := runStatus(nil, &stdout, &stderr); code != exitFailure {
+		t.Fatalf("status exit = %d, want %d; stdout:\n%s\nstderr:\n%s", code, exitFailure, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "recording unavailable for "+runID) {
+		t.Fatalf("status stdout = %q, want recording-unavailable diagnostic", stdout.String())
 	}
 }
 
