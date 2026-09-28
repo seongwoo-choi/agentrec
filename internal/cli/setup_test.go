@@ -404,6 +404,33 @@ func TestStatusSeparatesHookConfigurationFromEventReceipt(t *testing.T) {
 	}
 }
 
+func TestStatusKeepsCodexTrustSeparateFromCompleteHookConfiguration(t *testing.T) {
+	home(t)
+	userHome := setupHome(t, ".codex")
+	path := filepath.Join(userHome, ".codex", "hooks.json")
+	raw, err := json.Marshal(hookFragment("codex", "/usr/local/bin/agentrec", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run(t, "status")
+	if code != 0 {
+		t.Fatalf("status exit %d: %s", code, stderr)
+	}
+	for _, want := range []string{
+		"codex     hook configuration complete",
+		"configuration does not prove event receipt",
+		"run /hooks inside Codex to check or establish trust",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("status lacks %q:\n%s", want, stdout)
+		}
+	}
+}
+
 // setupState reads the state setup printed for one event.
 func setupState(stdout, event string) string {
 	for _, line := range strings.Split(stdout, "\n") {
