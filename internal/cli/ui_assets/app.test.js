@@ -14,7 +14,7 @@ const response = (body) => Promise.resolve({
   json: async () => body,
 });
 
-async function renderFixture({ list, details, actions = [], changes = [], events = [], live = null, search = { hits: [], truncated: false }, configure = () => {}, intercept = () => null }) {
+async function renderFixture({ list, details, actions = [], requests = [], changes = [], events = [], live = null, search = { hits: [], truncated: false }, configure = () => {}, intercept = () => null }) {
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
     url: 'http://localhost:42817/',
@@ -51,6 +51,7 @@ async function renderFixture({ list, details, actions = [], changes = [], events
       }
       if (currentDetails && url.pathname === `/api/runs/${currentDetails.run.id}`) return response(currentDetails);
     }
+    if (url.pathname.includes('/requests')) return response(typeof requests === 'function' ? requests(Number(url.searchParams.get('cursor') || 0)) : { items: requests, nextCursor: null });
     if (url.pathname.includes('/actions')) return response(typeof actions === 'function' ? actions(Number(url.searchParams.get('cursor') || 0)) : { items: actions, nextCursor: null });
     if (url.pathname.endsWith('/live') && live) return response(typeof live === 'function' ? live() : live);
     if (url.pathname.includes('/events')) {
@@ -6510,7 +6511,45 @@ test('conversation expand context localizes after a run re-render', async (t) =>
   assert.equal(document.activeElement, current, 'the corresponding disclosure retains focus across the rerender');
 });
 
-// --- Notification-shaped prompts do not assert an operator (DESIGN.md section 22) ---
+test('recorded request index opens duplicate and missing IDs at exact offsets', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 3;
+  data.details.actionCount = 3;
+  data.requests = [
+    { id: 'duplicate', rank: 1, offset: 0, preview: 'first request', truncated: false },
+    { id: 'duplicate', rank: 2, offset: 98765, preview: 'second request', truncated: false },
+    { rank: 3, offset: 99234, preview: '', truncated: false },
+  ];
+  data.actions = (cursor) => {
+    if (cursor === 0) return { items: [{ id: 'duplicate', offset: 0, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 }], nextCursor: 98765 };
+    if (cursor === 98765) return { items: [{ id: 'duplicate', offset: 98765, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 }], nextCursor: 99234 };
+    if (cursor === 99234) return { items: [{ id: '', offset: 99234, type: 'user.prompt', input: { prompt: '' }, promptRank: 3 }], nextCursor: null };
+    assert.fail(`unexpected action cursor ${cursor}`);
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d, location } = dom.window;
+  const buttons = [...d.querySelectorAll('#request-index-list button')];
+  assert.equal(buttons.length, 3);
+  assert.equal(buttons[1].textContent, '2 of 3second request');
+  assert.match(buttons[2].textContent, /3 of 3.*Preview unavailable/);
+
+  buttons[1].click();
+  await settle();
+  let params = new URLSearchParams(location.search);
+  assert.equal(params.get('action'), 'duplicate');
+  assert.equal(params.get('actionCursor'), '98765');
+  assert.equal(d.querySelector('.action-row[aria-current="true"]').dataset.index, '0');
+  assert.match(d.querySelector('#inspector').textContent, /second request/);
+
+  [...d.querySelectorAll('#request-index-list button')][2].click();
+  await settle();
+  params = new URLSearchParams(location.search);
+  assert.equal(params.has('action'), false);
+  assert.equal(params.get('actionCursor'), '99234');
+  assert.equal(d.querySelector('.action-row[aria-current="true"]').dataset.index, '0');
+});
+
 
 test('a user.prompt with notification-shaped text uses a cautious shape label', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
