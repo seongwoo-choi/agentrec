@@ -200,6 +200,15 @@ h1 { margin: 6px 0; font: 600 24px/1.35 var(--sans); letter-spacing: -.015em; ov
 .request-card[open] .request-expand { display: none; }
 .request-card[open] .request-collapse { display: inline; }
 .request-card pre { margin: 0; padding: 0 0 12px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.6 var(--sans); max-height: 240px; overflow: auto; }
+.request-index-note, .request-index-empty { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.request-index-list { display: grid; gap: 4px; margin-bottom: 10px; }
+.request-index-item { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 10px; align-items: baseline; width: 100%; min-height: 36px; border: 1px solid transparent; border-radius: 8px; background: transparent; padding: 7px 9px; color: var(--text); text-align: left; cursor: pointer; }
+.request-index-item:hover { background: var(--surface-hover); }
+.request-index-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.request-index-item[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.request-index-rank { color: var(--muted); font: 12px/1.4 var(--mono); white-space: nowrap; }
+.request-index-preview { min-width: 0; overflow: hidden; color: var(--secondary); font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.request-index-card > .load-more { margin: 0 0 10px; }
 /* the agent's last message: same card as the request, a record not a verdict */
 .reply-card .section-label { white-space: nowrap; }
 .reply-meta { margin: 0 0 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
