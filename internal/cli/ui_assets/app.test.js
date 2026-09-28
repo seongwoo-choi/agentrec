@@ -6548,6 +6548,31 @@ test('request index paging stays manual and moves focus to the first appended re
   assert.equal(d.activeElement, buttons[250]);
 });
 
+test('request index paging restores focus after the browser drops focus from its hidden control', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 251;
+  data.details.actionCount = 1;
+  const item = (rank) => ({ id: `prompt-${rank}`, rank, offset: rank * 100, preview: `request ${rank}`, truncated: false });
+  data.requests = (cursor) => cursor === 0
+    ? { items: Array.from({ length: 250 }, (_, index) => item(index + 1)), nextCursor: 250 }
+    : { items: [item(251)], nextCursor: null };
+  data.actions = [{ id: 'action', offset: 0, type: 'tool.call', input: { command: 'true' } }];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const { document: d } = dom.window;
+  const release = deferFetch(dom.window, (url) => url.endsWith('/requests?cursor=250'));
+  const more = d.querySelector('#request-index-more');
+  more.focus();
+  more.click();
+  await settle();
+  d.body.tabIndex = -1;
+  d.body.focus();
+  assert.equal(d.activeElement, d.body);
+  release();
+  await settle();
+  assert.equal(d.activeElement, d.querySelectorAll('#request-index-list button')[250]);
+});
+
 test('live refresh exposes newly recorded requests without resetting exact selection', async (t) => {
   let liveTick;
   let refresh = false;
