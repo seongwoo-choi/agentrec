@@ -215,7 +215,20 @@ func viewRecording(manifest storage.Manifest, receiptRaw []byte) viewRecordingSt
 		}
 		status.LastObservedEvent = &viewLastObservedEvent{Name: receipt.EventName, ObservedAt: receipt.ObservedAt}
 	}
-	if manifest.Mode != storage.ModeSession || manifest.EndedAt != nil || manifest.SessionID == "" {
+	if manifest.EndedAt != nil {
+		status.Evidence = "finalized_manifest"
+		status.Persistence = "finalized"
+		if viewStatusClass(manifest.ExitReason) == "fail" {
+			status.State = "failed"
+		} else {
+			switch strings.ToLower(manifest.ExitReason) {
+			case "completed", "success", reasonSessionEnded:
+				status.State = "ended"
+			}
+		}
+		return status
+	}
+	if manifest.Mode != storage.ModeSession || manifest.SessionID == "" {
 		return status
 	}
 	socket, err := sessionSocketPath(manifest.SessionID)
