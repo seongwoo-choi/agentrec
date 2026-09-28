@@ -739,6 +739,7 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 		s.store(err)
 	}
 
+	ended = false
 	switch env.HookEventName {
 	case hookUserPromptSubmit:
 		// The prompt file holds one prompt, so it takes the first of the
@@ -753,9 +754,14 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 	case hookPostToolUse, hookPostToolUseFailure:
 		s.recordAction(env, dropped, d.at)
 	case hookSessionEnd:
-		return true
+		ended = true
 	}
-	return false
+	if s.storageErr == nil && env.HookEventName != "" {
+		s.store(s.bundle.WriteRecordingReceipt(storage.RecordingReceipt{
+			Schema: 1, EventName: env.HookEventName, ObservedAt: d.at,
+		}))
+	}
+	return ended
 }
 
 // recordAction files a tool call the session's hook reported on. The hook

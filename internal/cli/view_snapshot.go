@@ -92,6 +92,7 @@ type viewSnapshot struct {
 
 var viewSnapshotFiles = []string{
 	manifestFile,
+	storage.RecordingReceiptFile,
 	promptFile,
 	actionsFile,
 	providerEventsFile,
@@ -109,6 +110,7 @@ var viewSnapshotFiles = []string{
 
 var viewSnapshotFileLimits = map[string]int64{
 	manifestFile:                                  maxDocumentBytes,
+	storage.RecordingReceiptFile:                  maxDocumentBytes,
 	promptFile:                                    maxDocumentBytes,
 	actionsFile:                                   maxActionStreamBytes,
 	providerEventsFile:                            maxEventStreamBytes,
@@ -904,6 +906,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	if !sameViewFingerprint(before, after) {
 		return fail(errors.New("cli: run changed while the viewer snapshot was being created; retry"))
 	}
+	receiptRaw := snapshot.documents[storage.RecordingReceiptFile]
 	snapshot.documents = nil
 	if err := sourceRoot.Close(); err != nil {
 		return fail(fmt.Errorf("cli: close source run after viewer snapshot: %w", err))
@@ -939,7 +942,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 			VersionUnverified: manifest.VersionUnverified,
 			Mode:              manifest.Mode, SessionID: manifest.SessionID,
 		},
-		Recording:      viewRecording(manifest),
+		Recording:      viewRecording(manifest, receiptRaw),
 		ProviderEvents: viewProviderEvents{Attribution: "provider_reported", Present: snapshot.events != nil},
 		Changes:        summarizeViewChanges(snapshot),
 		Evidence:       evidence,

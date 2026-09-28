@@ -203,9 +203,17 @@ type viewLastObservedEvent struct {
 	ObservedAt time.Time `json:"observedAt"`
 }
 
-func viewRecording(manifest storage.Manifest) viewRecordingStatus {
+func viewRecording(manifest storage.Manifest, receiptRaw []byte) viewRecordingStatus {
 	status := viewRecordingStatus{
 		State: "unknown", Evidence: "unavailable", Persistence: "not_proven", RefreshedAt: time.Now(),
+	}
+	if receiptRaw != nil {
+		var receipt storage.RecordingReceipt
+		if err := json.Unmarshal(receiptRaw, &receipt); err != nil || receipt.Schema != 1 || receipt.EventName == "" || receipt.ObservedAt.IsZero() {
+			status.State = "unavailable"
+			return status
+		}
+		status.LastObservedEvent = &viewLastObservedEvent{Name: receipt.EventName, ObservedAt: receipt.ObservedAt}
 	}
 	if manifest.Mode != storage.ModeSession || manifest.EndedAt != nil || manifest.SessionID == "" {
 		return status
