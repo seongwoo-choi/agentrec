@@ -345,6 +345,9 @@ func outcome(a action.Action) (string, string) {
 		if code, ok := exitCode(a.Result); ok {
 			return "Exit", code
 		}
+		if a.Status == "completed" {
+			return "Result", "completed (exit code not reported)"
+		}
 	}
 	return "Result", statusText(a.Status)
 }

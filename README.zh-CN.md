@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.16.1.md) ·
+[发布说明](docs/releases/v0.17.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -60,14 +60,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.16.1_darwin_arm64.tar.gz
+archive=agentrec_0.17.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.16.1_darwin_arm64/agentrec version
+./agentrec_0.17.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.16.1
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.17.0
 ```
 
 每个版本附带 `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64` 四个归档包和一个
@@ -175,6 +175,9 @@ agentrec events latest --json
 | 基线 | 进程启动前固定 | `SessionStart` 钩子到达时固定 |
 | 检出状态 | 必须干净；每个仓库一次运行 | 脏检出和并发会话照样记录，不拒绝 |
 | 验证 | `--verify` 在启动前固定 `.agentrec.yaml` | 仅对带 `--verify` 打印的片段，且仅当 `.agentrec.yaml` 已被跟踪并与 `HEAD` 一致时 |
+
+已完成的 shell 操作如果没有报告整数退出码，会显示为
+`completed (exit code not reported)`，而不是判定为成功。
 
 Codex 不发送 `PostToolUseFailure`，因此失败的命令表现为一条响应中写明失败的已完成操作；
 其 `apply_patch` 编辑在补丁头中写明文件。会话禁用的钩子留下的是空缺，而不是"不存在"。
@@ -313,7 +316,7 @@ agentrec 不主张的事：
 
 ## 文档
 
-- [发布说明](docs/releases/) — 每个版本一个文件，最新为 [v0.16.1](docs/releases/v0.16.1.md)
+- [发布说明](docs/releases/) — 每个版本一个文件，最新为 [v0.17.0](docs/releases/v0.17.0.md)
 - [Flight recorder 设计](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——记录器](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [Viewer 设计契约](DESIGN.md) · [第三方声明](THIRD_PARTY_NOTICES.md)
@@ -328,7 +331,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.16.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.17.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 只在本地构建归档，不发布任何东西。`release.yml` 在 `v*.*.*` 标签上

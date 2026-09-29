@@ -40,7 +40,7 @@
 이를 섞지 않습니다. 그래서 코드 리뷰, 장애 조사, 인수인계, 새 에이전트 버전을
 믿을지에 대한 판단이 요약이 아니라 관측된 사실에서 출발합니다.
 
-[릴리스 노트](docs/releases/v0.16.1.md) ·
+[릴리스 노트](docs/releases/v0.17.0.md) ·
 [설계 노트](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 증거](docs/dogfood/2026-07-28-evidence.md) ·
@@ -62,14 +62,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.16.1_darwin_arm64.tar.gz
+archive=agentrec_0.17.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.16.1_darwin_arm64/agentrec version
+./agentrec_0.17.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.16.1
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.17.0
 ```
 
 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64` 아카이브와
@@ -184,6 +184,9 @@ agentrec events latest --json
 | 기준선 | 프로세스 시작 전에 고정 | `SessionStart` 훅이 도착할 때 고정 |
 | 체크아웃 상태 | 깨끗해야 하고 저장소당 실행 하나 | 더러운 체크아웃과 동시 세션도 거부하지 않고 기록 |
 | 검증 | `--verify`가 실행 전에 `.agentrec.yaml`을 고정 | `--verify`로 출력한 fragment에서만, 그리고 `.agentrec.yaml`이 추적되며 `HEAD`와 같을 때만 |
+
+완료된 shell 액션에 정수 종료 코드가 없으면 성공으로 단정하지 않고
+`completed (exit code not reported)`로 표시합니다.
 
 Codex는 `PostToolUseFailure`를 보내지 않으므로 실패한 명령은 응답에 실패가 적힌
 완료 액션으로 나타나고, `apply_patch` 편집은 패치 헤더에 파일을 적습니다. 세션이
@@ -331,7 +334,7 @@ agentrec이 주장하지 않는 것:
 
 ## 문서
 
-- [릴리스 노트](docs/releases/) — 릴리스마다 파일 하나, 최신은 [v0.16.1](docs/releases/v0.16.1.md)
+- [릴리스 노트](docs/releases/) — 릴리스마다 파일 하나, 최신은 [v0.17.0](docs/releases/v0.17.0.md)
 - [Flight recorder 설계](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 증거 — 레코더](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [뷰어 설계 계약](DESIGN.md) · [서드파티 고지](THIRD_PARTY_NOTICES.md)
@@ -346,7 +349,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.16.1 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.17.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 아카이브를 로컬에서 만들 뿐 아무것도 배포하지 않습니다.
