@@ -8,7 +8,7 @@
   const MAX_EXPANDED_ACTION_GROUPS = 250;
   let earlierRunsExpanded = false;
   let requestRunId = '';
-  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', runUnreadableByPage: new Map(), initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, requests: null, requestScope: null, searchTimer: null, loadGeneration: 0, runAbortController: null, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
+  const state = { lang: 'en', runs: [], runTotal: 0, runNextCursor: '', runGeneration: '', runUnreadableByPage: new Map(), initialRunId: '', run: null, runError: null, runListError: null, mode: 'actions', actionView: 'reading', changeView: 'folders', eventView: 'summary', expandedActionGroups: new Set(), expandedChangeFolders: new Set(), expandedEventGroups: new Set(), query: '', activeTypes: new Set(), selected: null, streams: null, requests: null, requestScope: null, searchTimer: null, loadGeneration: 0, runAbortController: null, runDetailLoading: false, pollTimer: null, pollController: null, pollError: '', runsSignature: '', errorOwner: '', errorTimer: null, toastTimer: null, confirmDelete: false, restoringNavigation: false, token: '', allowRun: false, storeBytes: 0, trashBytes: 0 };
   const $ = (id) => document.getElementById(id);
   const node = (tag, className, text) => {
     const el = document.createElement(tag);
@@ -23,6 +23,13 @@
   const LANGS = ['en', 'ko', 'ja', 'zh-CN'];
   const STRINGS = {
     ko: {
+      'View stored text': '저장된 텍스트 보기',
+      'Loading stored text…': '저장된 텍스트 불러오는 중…',
+      'RECORDED SANITIZED TEXT — NOT CAUSAL PROOF': '기록된 정제 텍스트 — 인과관계의 증거 아님',
+      'Stored text was not recorded for this file.': '이 파일의 텍스트는 저장되지 않았습니다.',
+      'Invalid stored text response': '잘못된 저장 텍스트 응답',
+      'Stored text loaded.': '저장된 텍스트를 불러왔습니다.',
+      'Stored text unavailable: {error}': '저장된 텍스트를 사용할 수 없음: {error}',
       'Action Timeline': '액션 타임라인',
       'Filter by project': '프로젝트로 필터링',
       'All projects': '모든 프로젝트',
@@ -410,6 +417,13 @@
       'Observed by verification checks, run later': '검증 체크가 관측 (사후 실행)'
     },
     ja: {
+      'View stored text': '保存済みテキストを表示',
+      'Loading stored text…': '保存済みテキストを読み込んでいます…',
+      'RECORDED SANITIZED TEXT — NOT CAUSAL PROOF': '記録されたサニタイズ済みテキスト — 因果関係の証明ではありません',
+      'Stored text was not recorded for this file.': 'このファイルのテキストは保存されていません。',
+      'Invalid stored text response': '保存済みテキストの応答が無効です',
+      'Stored text loaded.': '保存済みテキストを読み込みました。',
+      'Stored text unavailable: {error}': '保存済みテキストを利用できません: {error}',
       'Action Timeline': 'アクションタイムライン',
       'Filter by project': 'プロジェクトで絞り込む',
       'All projects': 'すべてのプロジェクト',
@@ -797,6 +811,13 @@
       'Observed by verification checks, run later': '検証チェックが観測（事後実行）'
     },
     'zh-CN': {
+      'View stored text': '查看已存储文本',
+      'Loading stored text…': '正在加载已存储文本…',
+      'RECORDED SANITIZED TEXT — NOT CAUSAL PROOF': '已记录的脱敏文本 — 不构成因果关系证明',
+      'Stored text was not recorded for this file.': '此文件的文本未存储。',
+      'Invalid stored text response': '已存储文本响应无效',
+      'Stored text loaded.': '已存储文本加载完成。',
+      'Stored text unavailable: {error}': '已存储文本不可用：{error}',
       'Action Timeline': '操作时间线',
       'Filter by project': '按项目筛选',
       'All projects': '所有项目',
@@ -2772,6 +2793,7 @@ function shortID(id) {
   // renderLiveChanges draws the working tree of a running run. A tick redraws it in place: selection, focus and scroll
   // are kept by path, and a selected file that is no longer listed clears the inspector.
   function renderLiveChanges(focusedInspectorJump = document.activeElement?.classList.contains('timeline-inspector-jump')) {
+    if (state.runDetailLoading) return renderTimeline();
     const timeline = $('timeline');
     const files = live.changes ? live.changes.files || [] : [];
     const selectedPath = state.selected && state.selected.kind === 'live' ? state.selected.value.path : '';
@@ -2894,6 +2916,13 @@ function shortID(id) {
   function renderTimeline() {
     if (!state.run) return;
     const timeline = $('timeline');
+    timeline.setAttribute('aria-busy', String(state.runDetailLoading));
+    if (state.runDetailLoading) {
+      timeline.replaceChildren(node('div', 'timeline-empty', t('Loading recorded evidence…')));
+      $('type-filters').replaceChildren();
+      renderInspector();
+      return;
+    }
     const streamName = state.mode;
     const runID = state.run.run.id;
     const sameStream = timeline.dataset.stream === streamName && timeline.dataset.runId === runID;
@@ -3170,6 +3199,26 @@ function shortID(id) {
           controls.append(previous, node('span', 'pager-label', t('bounded patch page')), next);
           holder.append(controls);
         }
+      } else if (value.stored && value.kind === 'file') {
+        const selected = state.selected;
+        const button = node('button', 'load-more', t('View stored text'));
+        button.type = 'button';
+        button.disabled = !!selected.textLoading;
+        button.setAttribute('aria-controls', 'inspector');
+        button.addEventListener('click', () => loadStoredText(selected));
+        holder.append(button);
+        if (selected.textLoading) holder.append(node('p', 'stored-text-status', t('Loading stored text…')));
+        else if (selected.textError) {
+          const message = t('Stored text unavailable: {error}', { error: selected.textError });
+          holder.append(node('p', 'stored-text-status', message));
+          announceInspector(message);
+        }
+        else if (selected.storedText !== undefined) {
+          holder.append(node('div', 'payload-label', t('RECORDED SANITIZED TEXT — NOT CAUSAL PROOF')));
+          holder.append(node('pre', 'payload stored-text', selected.storedText));
+        }
+      } else {
+        holder.append(node('p', 'stored-text-status', t('Stored text was not recorded for this file.')));
       }
     } else if (kind === 'live') {
       meta.append(node('span', 'pill', value.status), labelled('span', 'pill', t('Working tree'), live.changes ? live.changes.note : ''));
@@ -3525,6 +3574,39 @@ function shortID(id) {
         if (focusNew) {
           $('request-index-list').querySelectorAll('button')[from]?.focus({ preventScroll: true });
         }
+      }
+    }
+  }
+
+  async function loadStoredText(selected) {
+    if (state.selected !== selected || selected.textLoading) return;
+    const generation = state.loadGeneration;
+    const snapshotID = state.run?.snapshotId;
+    const path = selected.value.path;
+    const request = {};
+    selected.textRequest = request;
+    const ownsLoading = () => generation === state.loadGeneration && selected === state.selected
+      && selected.value.path === path && selected.textRequest === request;
+    const current = () => ownsLoading() && snapshotID === state.run?.snapshotId;
+    selected.textLoading = true;
+    selected.textError = '';
+    renderInspector();
+    announceInspector(t('Loading stored text…'));
+    try {
+      const page = await getJSON(`/api/snapshots/${encodeURIComponent(snapshotID)}/stored-text?path=${encodeURIComponent(path)}`);
+      if (!current()) return;
+      if (page.path !== path || typeof page.text !== 'string') throw new Error(t('Invalid stored text response'));
+      selected.storedText = page.text;
+      announceInspector(t('Stored text loaded.'));
+    } catch (error) {
+      if (current()) {
+        selected.textError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (ownsLoading()) {
+        selected.textRequest = null;
+        selected.textLoading = false;
+        renderInspector();
       }
     }
   }
@@ -4735,9 +4817,17 @@ function shortID(id) {
     const controller = new AbortController();
     state.runAbortController = controller;
     const generation = ++state.loadGeneration;
+    // Cross-run rows already fail closed on run identity. Same-run outgoing
+    // rows must not be re-rendered with this generation before detail resets.
+    state.runDetailLoading = previousRunID === id;
+    if (state.runDetailLoading) {
+      state.selected = null;
+      renderTimeline();
+    }
     try {
       const run = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`, controller.signal);
       if (generation !== state.loadGeneration) return;
+      state.runDetailLoading = false;
       state.run = run;
       if (previousRunID !== run.run.id) {
         state.expandedActionGroups.clear();
@@ -4793,7 +4883,11 @@ function shortID(id) {
         showError(error);
       }
     } finally {
-      if (state.runAbortController === controller) state.runAbortController = null;
+      if (state.runAbortController === controller) {
+        state.runAbortController = null;
+        state.runDetailLoading = false;
+        $('timeline').setAttribute('aria-busy', 'false');
+      }
     }
   }
 
@@ -4828,8 +4922,9 @@ function shortID(id) {
     if (changedFile) state.mode = 'changes';
     if (actionID || exactAction) state.mode = 'actions';
     const scope = requestScopeFromURL();
+    const generation = state.loadGeneration + 1;
     await loadRun(id, false, changedFile ? changedFile.cursor : scope ? scope.cursor : action ? action.cursor : 0, true);
-    if (!state.run || state.run.run.id !== id) return;
+    if (generation !== state.loadGeneration || !state.run || state.run.run.id !== id) return;
     focusRunEvidenceFromURL();
   }
 
@@ -5061,6 +5156,7 @@ function shortID(id) {
     if (state.runAbortController) {
       state.runAbortController.abort();
       state.runAbortController = null;
+      state.runDetailLoading = false;
       state.loadGeneration += 1;
     }
     const linkedRun = new URLSearchParams(location.search).get('run');

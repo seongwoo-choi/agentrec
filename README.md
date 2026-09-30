@@ -168,6 +168,7 @@ prove receipt, health or durable persistence.
   **Changes** groups files by directory; **Provider events** folds `PostToolUse`
   and hook-lifecycle records. **All actions / files / events** is one toggle
   away, and every row opens its original record in the inspector.
+- **Stored new-file text** — select an untracked file in Changes, then choose **View stored text**. Reads only its recorded sanitized body after a digest check, up to 1 MiB; missing, unverified or larger bodies stay explicitly unavailable. The current workspace is never read.
 - **Across runs** — search every run for a word and land on the matching action
   or changed file; compare any two runs side by side; copy a local evidence link
   to the exact row.

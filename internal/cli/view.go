@@ -1002,6 +1002,16 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 						writeViewJSON(w, page)
 					}
 					return err
+				case "stored-text":
+					query := r.URL.Query()
+					if len(query) != 1 || len(query["path"]) != 1 {
+						return errors.New("stored text requires only one recorded path")
+					}
+					text, err := readViewStoredText(r.Context(), snapshot, query.Get("path"))
+					if err == nil {
+						writeViewJSON(w, text)
+					}
+					return err
 				case "patch":
 					changePath := r.URL.Query().Get("path")
 					if changePath == "" || !utf8.ValidString(changePath) {

@@ -474,3 +474,22 @@ Two same-page actions can carry the same recorded ID. Selecting the later action
 - Every action page projects the exact JSONL byte offset of each returned record. Evidence links use that record offset rather than the page boundary; older responses without per-record offsets retain the page-boundary fallback.
 - Exact-link restoration requires the action ID and record offset to match when offsets are present; it does not substitute a same-ID record at another offset. Existing IDs, Reading groups, stream pagination, search hits, loaded-position labels and canonical action records remain unchanged.
 - Acceptance: a copied link from the second of two same-ID actions carries the second record's byte offset, and a fresh Viewer load restores that action's evidence rather than the first duplicate.
+
+## Stored untracked text inspection
+
+Two actual project recordings retained sanitized new-file text but the Changes inspector exposed only metadata. A selected stored regular file now offers an explicit **View stored text** action. It reads the recorded artifact, never the current workspace, and renders plain text without HTML interpretation.
+
+- Bind the selected display path to the snapshot's untracked inventory. Only the current confined `untracked/<64 lowercase hex>.txt` storage form, a sanitized hash basis and a valid SHA-256 identity are supported. Do not derive storage names from redacted display paths.
+- Retain a confined source root for the snapshot lifetime, read on demand rather than scanning every body, and close roots on failure, eviction and store shutdown. Reject symlinks and nonregular files; opens must not block on a substituted FIFO.
+- Validate the entire body and digest before returning text. The limit is 1 MiB of stored bytes; invalid UTF-8, missing/changed bodies, unsupported identity and oversize files are explicitly unavailable, never silently truncated. Empty verified text is valid.
+- Preserve metadata, exact file links and noncausal attribution. Guard async results by run generation, snapshot and selection; loading, failure, absence and empty text remain distinct in EN/KO/JA/ZH.
+- Acceptance: bounded HTTP/security regressions, handle-lifetime checks, literal-text and stale-response DOM tests, and real recorded-body digest comparison through the browser.
+
+## Pending same-run navigation cannot erase newer evidence selection
+
+A native-pointer reproduction twice accepted a file selection after request-scope exit and a rapid Changes-tab switch; the pending same-run detail response then cleared the inspector while retaining the exact file URL.
+
+- A navigation continuation must still own its load generation before restoring focus or selection.
+- During same-run detail replacement, outgoing timeline evidence is visibly loading and noninteractive. Abort and error paths clear the busy state; an obsolete response cannot make old rows current.
+- After the replacement arrives, ordinary file selection restores URL, current row and inspector agreement. No delay-based workaround, removed row guard or source-record mutation.
+- Acceptance: deterministic abort/deferred-response regressions, browser reproduction with native clicks and independently released old responses, and unchanged stored-text selection behavior.
