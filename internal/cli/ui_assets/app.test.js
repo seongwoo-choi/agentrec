@@ -69,6 +69,29 @@ async function renderFixture({ list, details, actions = [], requests = [], chang
   return dom;
 }
 
+test('stored text requires explicit activation and renders literal recorded text', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const path = 'notes/[REDACTED:1] & new.txt';
+  const text = '<img src=x onerror="alert(1)"><script>alert(2)</script>한글';
+  const dom = await renderFixture({ ...data,
+    changes: [{ path, kind: 'file', tracked: false, stored: true }],
+    configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=${encodeURIComponent(path)}`),
+    intercept: (url) => url.pathname.endsWith('/stored-text') ? response({ path, text, attribution: 'observed during run, not causal proof' }) : null,
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(dom.window.__fetchPaths.filter((p) => p.includes('/stored-text')).length, 0);
+  const button = [...document.querySelectorAll('#inspector button')].find((b) => b.textContent === 'View stored text');
+  assert.ok(button, 'stored regular untracked file has an explicit activation button');
+  button.click();
+  await settle();
+  assert.equal(document.querySelector('#inspector pre.stored-text').textContent, text);
+  assert.equal(document.querySelector('#inspector img, #inspector script'), null);
+  assert.equal(dom.window.__fetchPaths.filter((p) => p.includes('/stored-text')).length, 1);
+  assert.ok(dom.window.__fetchPaths.includes(`/api/snapshots/${data.details.snapshotId}/stored-text?path=${encodeURIComponent(path)}`));
+  assert.match(document.querySelector('#inspector').textContent, /not causal proof/i);
+});
+
 function paginatedChanges(targetPath) {
   const items = Array.from({ length: 251 }, (_, index) => ({ path: index === 250 ? targetPath : `prefix/file-${index}.go`, kind: 'added', tracked: false }));
   return (cursor) => ({ items: items.slice(cursor, cursor + 250), nextCursor: cursor + 250 < items.length ? cursor + 250 : null, total: items.length, status: 'available' });
