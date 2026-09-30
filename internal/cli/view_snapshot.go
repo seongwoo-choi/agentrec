@@ -79,6 +79,7 @@ type viewSnapshot struct {
 	unparsed          *os.File
 	patch             *os.File
 	patchSize         int64
+	sourceRoot        *os.Root
 	patchSections     map[string]viewPatchSection
 	changes           []viewChange
 	changePaths       map[string]struct{}
@@ -135,6 +136,10 @@ type viewFileIdentity struct {
 
 func (s *viewSnapshot) Close() error {
 	var errs []error
+	if s.sourceRoot != nil {
+		errs = append(errs, s.sourceRoot.Close())
+		s.sourceRoot = nil
+	}
 	if s.actions != nil {
 		errs = append(errs, s.actions.Close())
 		s.actions = nil
@@ -908,9 +913,9 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	}
 	receiptRaw := snapshot.documents[storage.RecordingReceiptFile]
 	snapshot.documents = nil
-	if err := sourceRoot.Close(); err != nil {
-		return fail(fmt.Errorf("cli: close source run after viewer snapshot: %w", err))
-	}
+	// Transfer ownership only after capture validation. fail and eviction now
+	// close it through snapshot.Close, never through both owners.
+	snapshot.sourceRoot = sourceRoot
 	sourceRoot = nil
 	if err := ctx.Err(); err != nil {
 		return fail(err)

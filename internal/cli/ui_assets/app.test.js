@@ -69,6 +69,268 @@ async function renderFixture({ list, details, actions = [], requests = [], chang
   return dom;
 }
 
+test('stored text requires explicit activation and renders literal recorded text', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const path = 'notes/[REDACTED:1] & new.txt';
+  const text = '<img src=x onerror="alert(1)"><script>alert(2)</script>한글';
+  const dom = await renderFixture({ ...data,
+    changes: [{ path, kind: 'file', tracked: false, stored: true }],
+    configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=${encodeURIComponent(path)}&changeCursor=0`),
+    intercept: (url) => url.pathname.endsWith('/stored-text') ? response({ path, text, attribution: 'observed during run, not causal proof' }) : null,
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  assert.equal(document.querySelector('.inspector-title')?.textContent, path, 'deep link selects the exact record');
+  assert.equal(dom.window.__fetchPaths.filter((p) => p.includes('/stored-text')).length, 0);
+  const button = [...document.querySelectorAll('#inspector button')].find((b) => b.textContent === 'View stored text');
+  assert.ok(button, 'stored regular untracked file has an explicit activation button');
+  button.click();
+  await settle();
+  assert.equal(document.querySelector('#inspector pre.stored-text').textContent, text);
+  assert.equal(document.querySelector('#inspector img, #inspector script'), null);
+  assert.equal(dom.window.__fetchPaths.filter((p) => p.includes('/stored-text')).length, 1);
+  assert.ok(dom.window.__fetchPaths.includes(`/api/snapshots/${data.details.snapshotId}/stored-text?path=${encodeURIComponent(path)}`));
+  assert.match(document.querySelector('#inspector').textContent, /not causal proof/i);
+});
+
+test('stored text distinguishes loading, empty, error and not-stored states', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  let fail = false;
+  const dom = await renderFixture({ ...data,
+    changes: [{ path: 'new.txt', kind: 'file', stored: true }, { path: 'metadata.txt', kind: 'file', stored: false }],
+    configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=new.txt&changeCursor=0`),
+    intercept: (url) => url.pathname.endsWith('/stored-text') ? (fail ? Promise.resolve({ ok: false, status: 400, json: async () => ({ error: 'digest mismatch' }) }) : pending) : null,
+  });
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  document.querySelector('#inspector button.load-more').click();
+  assert.match(document.querySelector('#inspector').textContent, /Loading stored text/);
+  assert.equal(document.querySelector('#inspector button.load-more').disabled, true);
+  release(await response({ path: 'new.txt', text: '', attribution: 'observed during run, not causal proof' }));
+  await settle();
+  assert.equal(document.querySelector('#inspector pre.stored-text')?.textContent, '');
+  fail = true;
+  document.querySelector('#inspector button.load-more').click();
+  await settle();
+  assert.match(document.querySelector('#inspector').textContent, /Stored text unavailable: digest mismatch/);
+  assert.equal(document.querySelector('#inspector pre.stored-text'), null);
+  assert.equal(document.querySelector('#inspector button.load-more').disabled, false);
+  document.querySelector('.change-row[data-path="metadata.txt"]').click();
+  await settle();
+  assert.match(document.querySelector('#inspector').textContent, /Stored text was not recorded/);
+  assert.equal(document.querySelector('#inspector button.load-more'), null);
+});
+
+for (const navigation of ['selection', 'run']) for (const result of ['success', 'error']) {
+  test(`stored text late ${result} cannot overwrite new ${navigation}`, async (t) => {
+    const data = fixture('completed', 'pass', 'PASS');
+    const incoming = { ...data.details, snapshotId: 'snapshot-b', run: { ...data.details.run, id: 'run-b' } };
+    let resolve, reject;
+    const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const dom = await renderFixture({ ...data,
+      list: { ...data.list, runs: [...data.list.runs, incoming.run], total: 2 },
+      details: (id) => id === 'run-b' ? incoming : data.details,
+      changes: [{ path: 'old.txt', kind: 'file', stored: true }, { path: 'new.txt', kind: 'file', stored: true }],
+      configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=old.txt&changeCursor=0`),
+      intercept: (url) => url.pathname.endsWith('/stored-text') ? pending : null,
+    });
+    t.after(() => dom.window.close());
+    const { document } = dom.window;
+    document.querySelector('#inspector button.load-more').click();
+    if (navigation === 'run') {
+      document.querySelector('.run-item[data-run-id="run-b"]').click();
+      await settle();
+      document.querySelector('#timeline-tab-changes').click();
+      await settle();
+    }
+    document.querySelector('.change-row[data-path="new.txt"]').click();
+    await settle();
+    if (result === 'success') resolve(await response({ path: 'old.txt', text: 'stale body', attribution: 'observed during run, not causal proof' }));
+    else reject(new Error('stale failure'));
+    await settle();
+    assert.equal(document.querySelector('.inspector-title').textContent, 'new.txt');
+    assert.doesNotMatch(document.querySelector('#inspector').textContent, /stale body|stale failure|Loading stored text/);
+    assert.equal(document.querySelector('#inspector pre.stored-text'), null);
+    assert.equal(document.querySelector('#inspector button.load-more').disabled, false);
+  });
+}
+
+for (const [lang, label] of [['en', 'View stored text'], ['ko', '저장된 텍스트 보기'], ['ja', '保存済みテキストを表示'], ['zh-CN', '查看已存储文本']]) {
+  test(`stored text activation is localized in ${lang}`, async (t) => {
+    const data = fixture('completed', 'pass', 'PASS');
+    const dom = await renderFixture({ ...data,
+      changes: [{ path: 'new.txt', kind: 'file', stored: true }],
+      configure: (w) => {
+        w.localStorage.setItem('agentrec.lang', lang);
+        w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=new.txt&changeCursor=0`);
+      },
+    });
+    t.after(() => dom.window.close());
+    assert.equal(dom.window.document.querySelector('#inspector button.load-more')?.textContent, label);
+  });
+}
+
+for (const result of ['success', 'error']) {
+  test(`correction: stored text snapshot refresh settles deferred ${result} and retries latest snapshot`, async (t) => {
+    const data = fixture('session_ended', '', 'session_ended');
+    data.list.generation = 'generation';
+    data.list.runs[0].verification = 'PENDING';
+    let details = { ...data.details, snapshotId: 'snapshot-before', evidence: { ...data.details.evidence, verification: [{ name: 'Status', value: 'PENDING' }] } };
+    let poll, release, reject;
+    const pending = new Promise((yes, no) => { release = yes; reject = no; });
+    const paths = [];
+    const dom = await renderFixture({ ...data,
+      details: () => details,
+      changes: [{ path: 'new.txt', kind: 'file', stored: true }],
+      configure: (w) => {
+        w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=new.txt&changeCursor=0`);
+        w.setInterval = (callback, delay) => { if (delay === 5000) poll = callback; return delay; };
+        w.clearInterval = () => {};
+      },
+      intercept: (url) => {
+        if (!url.pathname.endsWith('/stored-text')) return null;
+        paths.push(url.pathname);
+        return paths.length === 1 ? pending : response({ path: 'new.txt', text: 'fresh body' });
+      },
+    });
+    t.after(() => dom.window.close());
+    const d = dom.window.document;
+    d.querySelector('#inspector button.load-more').click();
+    const loadingButton = d.querySelector('#inspector button.load-more');
+    details = { ...details, snapshotId: 'snapshot-after', evidence: { ...details.evidence, verification: [{ name: 'Status', value: 'PASS' }] } };
+    data.list.runs[0] = { ...data.list.runs[0], verification: 'PASS' };
+    await poll();
+    assert.equal(d.querySelector('#inspector button.load-more'), loadingButton, 'poll retains the existing selection/inspector');
+    assert.match(d.querySelector('#evidence-verification').textContent, /PASS/);
+    if (result === 'success') release(await response({ path: 'new.txt', text: 'stale body' }));
+    else reject(new dom.window.Error('stale failure'));
+    await settle();
+    assert.equal(d.querySelector('#run-view').classList.contains('hidden'), false);
+    assert.equal(d.querySelector('#inspector button.load-more').disabled, false, 'settled old snapshot must release its loading owner');
+    assert.doesNotMatch(d.querySelector('#inspector').textContent, /stale body|stale failure|Loading stored text/);
+    assert.equal(d.querySelector('#inspector pre.stored-text'), null);
+    d.querySelector('#inspector button.load-more').click();
+    await settle();
+    assert.deepEqual(paths, ['/api/snapshots/snapshot-before/stored-text', '/api/snapshots/snapshot-after/stored-text']);
+    assert.equal(d.querySelector('#inspector pre.stored-text').textContent, 'fresh body');
+  });
+}
+
+for (const [lang, wrapper] of [['ko', '저장된 텍스트를 사용할 수 없음: '], ['ja', '保存済みテキストを利用できません: '], ['zh-CN', '已存储文本不可用：']]) {
+  test(`correction: stored text HTTP error rerenders English to ${lang} without changing diagnostics`, async (t) => {
+    const data = fixture('completed', 'pass', 'PASS');
+    const diagnostic = 'digest mismatch <raw> [E42]';
+    const dom = await renderFixture({ ...data,
+      changes: [{ path: 'new.txt', kind: 'file', stored: true }],
+      configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=new.txt&changeCursor=0`),
+      intercept: (url) => url.pathname.endsWith('/stored-text') ? Promise.resolve({ ok: false, status: 400, json: async () => ({ error: diagnostic }) }) : null,
+    });
+    t.after(() => dom.window.close());
+    const w = dom.window, d = w.document;
+    d.querySelector('#inspector button.load-more').click();
+    await settle();
+    assert.equal(d.querySelector('.stored-text-status').textContent, `Stored text unavailable: ${diagnostic}`);
+    assert.equal(d.querySelector('#inspector-status').textContent, `Stored text unavailable: ${diagnostic}`);
+    const before = w.location.href;
+    d.querySelector('#lang').value = lang;
+    d.querySelector('#lang').dispatchEvent(new w.Event('change', { bubbles: true }));
+    assert.equal(d.querySelector('#run-view').classList.contains('hidden'), false);
+    assert.equal(d.querySelector('.inspector-title').textContent, 'new.txt');
+    assert.equal(w.location.href, before);
+    assert.equal(d.querySelector('.stored-text-status').textContent, wrapper + diagnostic);
+    assert.equal(d.querySelector('#inspector-status').textContent, wrapper + diagnostic);
+    assert.equal(d.querySelector('#inspector pre.stored-text, #inspector raw'), null);
+    assert.equal(w.__fetchPaths.filter((p) => p.includes('/stored-text')).length, 1);
+  });
+}
+
+test('correction: same-run scope exit then Changes detail HTTP400 shows visible failure and allows retry', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 1;
+  data.details.actionCount = 1;
+  data.actions = [{ id: 'p', offset: 0, promptRank: 1, type: 'user.prompt', input: { prompt: 'request' } }];
+  data.requests = [{ id: 'p', rank: 1, offset: 0, preview: 'request', truncated: false }];
+  data.changes = [{ path: 'alpha.txt', kind: 'file', stored: false }];
+  let armed = false;
+  const gates = [];
+  data.intercept = (url, { signal }) => {
+    if (!armed || url.pathname !== `/api/runs/${data.details.run.id}`) return null;
+    return new Promise((resolve, reject) => {
+      gates.push({ signal, release: () => resolve({ ok: false, status: 400, json: async () => ({ error: 'controlled detail failure' }) }) });
+      signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+    });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const d = dom.window.document;
+  d.querySelector('#request-index-list button').click();
+  await settle();
+  armed = true;
+  d.querySelector('#request-scope-exit').click();
+  d.querySelector('#timeline-tab-changes').click();
+  assert.equal(gates.length, 2);
+  assert.equal(gates[0].signal.aborted, true);
+  assert.equal(d.querySelector('#run-view').classList.contains('hidden'), false);
+  assert.match(d.querySelector('#timeline').textContent, /Loading recorded evidence/);
+  gates[1].release();
+  await settle();
+  assert.notEqual(d.querySelector('#timeline').getAttribute('aria-busy'), 'true');
+  assert.equal(d.querySelector('#run-view').classList.contains('hidden'), true, 'failed detail must not leave the old loading timeline visible');
+  const failure = d.querySelector('#workspace-empty');
+  assert.equal(failure.classList.contains('hidden'), false, 'failure workspace is actually visible');
+  assert.equal(d.querySelector('#workspace-empty-title').textContent, 'Could not load selected run');
+  assert.match(failure.textContent, /controlled detail failure/);
+  assert.doesNotMatch(failure.textContent, /Loading recorded evidence/);
+  assert.equal(d.activeElement, failure);
+  armed = false;
+  const retry = d.querySelector(`.run-item[data-run-id="${data.details.run.id}"]`);
+  assert.ok(retry && !retry.closest('.hidden'), 'the same run remains available as an actionable retry');
+  retry.click();
+  await settle();
+  assert.equal(d.querySelector('#run-view').classList.contains('hidden'), false);
+  assert.equal(failure.classList.contains('hidden'), true);
+  assert.notEqual(d.querySelector('#timeline').getAttribute('aria-busy'), 'true');
+  assert.doesNotMatch(d.querySelector('#timeline').textContent, /Loading recorded evidence/);
+  const row = d.querySelector('.change-row[data-path="alpha.txt"]');
+  assert.ok(row, 'retry loads current Changes evidence');
+  row.click();
+  assert.equal(d.querySelector('.inspector-title').textContent, 'alpha.txt');
+});
+
+for (const result of ['success', 'error']) {
+  test(`correction: late stored text ${result} cannot clear a newer pending request`, async (t) => {
+    const data = fixture('completed', 'pass', 'PASS');
+    const gates = [];
+    const dom = await renderFixture({ ...data,
+      changes: [{ path: 'old.txt', kind: 'file', stored: true }, { path: 'new.txt', kind: 'file', stored: true }],
+      configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=changes&change=old.txt&changeCursor=0`),
+      intercept: (url) => url.pathname.endsWith('/stored-text') ? new Promise((resolve, reject) => gates.push({ resolve, reject })) : null,
+    });
+    t.after(() => dom.window.close());
+    const d = dom.window.document;
+    d.querySelector('#inspector button.load-more').click();
+    d.querySelector('.change-row[data-path="new.txt"]').click();
+    d.querySelector('#inspector button.load-more').click();
+    assert.equal(gates.length, 2);
+    if (result === 'success') gates[0].resolve(await response({ path: 'old.txt', text: 'stale body' }));
+    else gates[0].reject(new dom.window.Error('stale failure'));
+    await settle();
+    assert.equal(d.querySelector('#inspector button.load-more').disabled, true, 'only the newer request owns the loading control');
+    assert.match(d.querySelector('#inspector').textContent, /Loading stored text/);
+    assert.doesNotMatch(d.querySelector('#inspector').textContent, /stale body|stale failure/);
+    gates[1].resolve(await response({ path: 'new.txt', text: 'new request body' }));
+    await settle();
+    assert.equal(d.querySelector('#inspector button.load-more').disabled, false);
+    assert.equal(d.querySelector('#inspector pre.stored-text').textContent, 'new request body');
+  });
+}
+
 function paginatedChanges(targetPath) {
   const items = Array.from({ length: 251 }, (_, index) => ({ path: index === 250 ? targetPath : `prefix/file-${index}.go`, kind: 'added', tracked: false }));
   return (cursor) => ({ items: items.slice(cursor, cursor + 250), nextCursor: cursor + 250 < items.length ? cursor + 250 : null, total: items.length, status: 'available' });
@@ -7598,4 +7860,133 @@ test('the prompt ordinal is localized', async (t) => {
     t.after(() => dom.window.close());
     assert.equal([...dom.window.document.querySelectorAll('.conversation-row.prompt .speaker')].pop().textContent, expected, lang);
   }
+});
+
+// Same-run detail navigation must not re-stamp outgoing evidence as current.
+for (const boundary of ['continuation ownership', 'pending evidence interactivity']) {
+  test(`same-run scope exit then Changes preserves ${boundary}`, async (t) => {
+    const data = fixture('completed', 'pass', 'PASS');
+    data.details.promptCount = 2;
+    data.details.actionCount = 4;
+    data.requests = [
+      { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+      { id: 'p2', rank: 2, offset: 400, preview: 'second request', truncated: false },
+    ];
+    const actions = [
+      { id: 'before', offset: 0, type: 'tool.call', input: { command: 'before' } },
+      { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+      { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'inside' } },
+      { id: 'p2', offset: 400, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+    ];
+    data.actions = (cursor) => ({ items: actions.filter((action) => action.offset >= cursor), nextCursor: null, endCursor: 500 });
+    data.changes = [{ path: 'alpha.txt', kind: 'added', tracked: false }, { path: 'beta.txt', kind: 'added', tracked: false }];
+    let armed = false;
+    const gates = [];
+    data.intercept = (url, { signal }) => {
+      if (!armed || url.pathname !== `/api/runs/${data.details.run.id}`) return null;
+      // Unlike a merely deferred fixture promise, fetch rejects on actual abort.
+      return new Promise((resolve, reject) => {
+        const gate = { signal, aborted: false, release: () => resolve(response(data.details)) };
+        const abort = () => {
+          gate.aborted = true;
+          const error = new Error('The operation was aborted');
+          error.name = 'AbortError';
+          reject(error);
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+        gates.push(gate);
+      });
+    };
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const w = dom.window, d = w.document;
+    d.querySelector('#request-index-list button').click();
+    await settle();
+    assert.equal(new URLSearchParams(w.location.search).get('scope'), 'request');
+    assert.ok(d.querySelector('[aria-current="true"]'), 'scoped evidence is selected before exit');
+
+    armed = true;
+    d.querySelector('#request-scope-exit').click();
+    assert.equal(gates.length, 1, 'scope exit detail request is held');
+    const tab = d.querySelector('#timeline-tab-changes');
+    tab.click();
+    assert.equal(gates.length, 2, 'ordinary Changes supersedes the held detail request');
+    assert.equal(gates[0].signal.aborted, true);
+    assert.equal(gates[0].aborted, true, 'the obsolete fetch rejected via its abort event');
+    let obsoleteRestorations = 0;
+    tab.addEventListener('click', () => { obsoleteRestorations += 1; });
+    await settle(); // Drain the aborted caller continuation while both response gates stay closed.
+    if (boundary === 'continuation ownership') {
+      assert.equal(obsoleteRestorations, 0, 'aborted same-run navigateRun must not restore the newer tab');
+    } else {
+      const assertLoading = () => {
+        assert.equal(d.querySelectorAll('#timeline .action-row').length, 0, 'outgoing evidence cannot become selectable during detail replacement');
+        assert.match(d.querySelector('#timeline').textContent, /Loading recorded evidence/);
+        assert.equal(d.querySelector('#timeline').getAttribute('aria-busy'), 'true');
+      };
+      assertLoading();
+      // A normal display rerender must not stamp old rows with the new generation.
+      d.querySelector('#all-changes-toggle').dispatchEvent(new w.Event('change', { bubbles: true }));
+      assertLoading();
+    }
+    armed = false;
+    gates[1].release();
+    await settle();
+    assert.notEqual(d.querySelector('#timeline').getAttribute('aria-busy'), 'true');
+    const row = d.querySelector('.change-row[data-path="alpha.txt"]');
+    assert.ok(row?.isConnected, 'replacement evidence becomes selectable after detail delivery');
+    row.click();
+    const selectedURL = w.location.href;
+    const assertExactSelection = () => {
+      assert.equal(w.location.href, selectedURL);
+      assert.equal(new URLSearchParams(w.location.search).get('change'), 'alpha.txt');
+      assert.equal(new URLSearchParams(w.location.search).get('changeCursor'), '0');
+      assert.equal(d.querySelectorAll('.change-row[aria-current="true"]').length, 1);
+      assert.equal(d.querySelector('.change-row[aria-current="true"]').dataset.path, 'alpha.txt');
+      assert.equal(d.querySelector('.inspector-title')?.textContent, 'alpha.txt');
+    };
+    assertExactSelection();
+    gates[0].release(); // Late delivery cannot undo native fetch's abort or the accepted selection.
+    await settle();
+    assertExactSelection();
+  });
+}
+
+test('cancelling a same-run detail load via ordinary history navigation clears its loading boundary', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ id: 'ordinary-action', offset: 0, type: 'tool.call', input: { command: 'current evidence' } }];
+  let armed = false, release, aborted = false;
+  data.intercept = (url, { signal }) => {
+    if (!armed || url.pathname !== `/api/runs/${data.details.run.id}`) return null;
+    return new Promise((resolve, reject) => {
+      release = () => resolve(response(data.details));
+      signal.addEventListener('abort', () => {
+        aborted = true;
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+    });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  armed = true;
+  d.querySelector(`.run-item[data-run-id="${data.details.run.id}"]`).click();
+  assert.equal(d.querySelector('#timeline').getAttribute('aria-busy'), 'true');
+  w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions`);
+  w.dispatchEvent(new w.PopStateEvent('popstate'));
+  await settle();
+  assert.equal(aborted, true);
+  assert.notEqual(d.querySelector('#timeline').getAttribute('aria-busy'), 'true', 'cancelled detail owner must not leave the current timeline permanently busy');
+  const row = d.querySelector('.action-row');
+  assert.ok(row, 'ordinary page-zero evidence is usable after cancellation');
+  row.click();
+  const selectedURL = w.location.href;
+  release();
+  await settle();
+  assert.equal(w.location.href, selectedURL);
+  assert.ok(d.querySelector('[aria-current="true"]'));
+  assert.match(d.querySelector('#inspector').textContent, /current evidence/);
 });

@@ -45,6 +45,9 @@ type viewChange struct {
 	Size      int64  `json:"size,omitempty"`
 	Stored    bool   `json:"stored,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	storedAs  string
+	sha256    string
+	hashBasis string
 }
 
 type viewChangePage struct {
@@ -245,6 +248,7 @@ func prepareViewChangesContext(ctx context.Context, snapshot *viewSnapshot) erro
 		snapshot.changes = append(snapshot.changes, viewChange{
 			Path: file.Path, Kind: file.Kind, Tracked: false,
 			Mode: file.Mode, Size: file.Size, Stored: file.Stored, Reason: file.Reason,
+			storedAs: file.StoredAs, sha256: file.SHA256, hashBasis: file.HashBasis,
 		})
 	}
 	if stored != untracked.Stored || stored != result.StoredTextFiles {
