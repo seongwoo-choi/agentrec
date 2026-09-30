@@ -7622,3 +7622,94 @@ test('the prompt ordinal is localized', async (t) => {
     assert.equal([...dom.window.document.querySelectorAll('.conversation-row.prompt .speaker')].pop().textContent, expected, lang);
   }
 });
+
+// Same-run detail navigation must not re-stamp outgoing evidence as current.
+for (const boundary of ['continuation ownership', 'pending evidence interactivity']) {
+  test(`same-run scope exit then Changes preserves ${boundary}`, async (t) => {
+    const data = fixture('completed', 'pass', 'PASS');
+    data.details.promptCount = 2;
+    data.details.actionCount = 4;
+    data.requests = [
+      { id: 'p1', rank: 1, offset: 100, preview: 'first request', truncated: false },
+      { id: 'p2', rank: 2, offset: 400, preview: 'second request', truncated: false },
+    ];
+    const actions = [
+      { id: 'before', offset: 0, type: 'tool.call', input: { command: 'before' } },
+      { id: 'p1', offset: 100, type: 'user.prompt', input: { prompt: 'first request' }, promptRank: 1 },
+      { id: 'inside', offset: 200, type: 'tool.call', input: { command: 'inside' } },
+      { id: 'p2', offset: 400, type: 'user.prompt', input: { prompt: 'second request' }, promptRank: 2 },
+    ];
+    data.actions = (cursor) => ({ items: actions.filter((action) => action.offset >= cursor), nextCursor: null, endCursor: 500 });
+    data.changes = [{ path: 'alpha.txt', kind: 'added', tracked: false }, { path: 'beta.txt', kind: 'added', tracked: false }];
+    let armed = false;
+    const gates = [];
+    data.intercept = (url, { signal }) => {
+      if (!armed || url.pathname !== `/api/runs/${data.details.run.id}`) return null;
+      // Unlike a merely deferred fixture promise, fetch rejects on actual abort.
+      return new Promise((resolve, reject) => {
+        const gate = { signal, aborted: false, release: () => resolve(response(data.details)) };
+        const abort = () => {
+          gate.aborted = true;
+          const error = new Error('The operation was aborted');
+          error.name = 'AbortError';
+          reject(error);
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+        gates.push(gate);
+      });
+    };
+    const dom = await renderFixture(data);
+    t.after(() => dom.window.close());
+    const w = dom.window, d = w.document;
+    d.querySelector('#request-index-list button').click();
+    await settle();
+    assert.equal(new URLSearchParams(w.location.search).get('scope'), 'request');
+    assert.ok(d.querySelector('[aria-current="true"]'), 'scoped evidence is selected before exit');
+
+    armed = true;
+    d.querySelector('#request-scope-exit').click();
+    assert.equal(gates.length, 1, 'scope exit detail request is held');
+    const tab = d.querySelector('#timeline-tab-changes');
+    tab.click();
+    assert.equal(gates.length, 2, 'ordinary Changes supersedes the held detail request');
+    assert.equal(gates[0].signal.aborted, true);
+    assert.equal(gates[0].aborted, true, 'the obsolete fetch rejected via its abort event');
+    let obsoleteRestorations = 0;
+    tab.addEventListener('click', () => { obsoleteRestorations += 1; });
+    await settle(); // Drain the aborted caller continuation while both response gates stay closed.
+    if (boundary === 'continuation ownership') {
+      assert.equal(obsoleteRestorations, 0, 'aborted same-run navigateRun must not restore the newer tab');
+    } else {
+      const assertLoading = () => {
+        assert.equal(d.querySelectorAll('#timeline .action-row').length, 0, 'outgoing evidence cannot become selectable during detail replacement');
+        assert.match(d.querySelector('#timeline').textContent, /Loading recorded evidence/);
+        assert.equal(d.querySelector('#timeline').getAttribute('aria-busy'), 'true');
+      };
+      assertLoading();
+      // A normal display rerender must not stamp old rows with the new generation.
+      d.querySelector('#all-changes-toggle').dispatchEvent(new w.Event('change', { bubbles: true }));
+      assertLoading();
+    }
+    armed = false;
+    gates[1].release();
+    await settle();
+    assert.notEqual(d.querySelector('#timeline').getAttribute('aria-busy'), 'true');
+    const row = d.querySelector('.change-row[data-path="alpha.txt"]');
+    assert.ok(row?.isConnected, 'replacement evidence becomes selectable after detail delivery');
+    row.click();
+    const selectedURL = w.location.href;
+    const assertExactSelection = () => {
+      assert.equal(w.location.href, selectedURL);
+      assert.equal(new URLSearchParams(w.location.search).get('change'), 'alpha.txt');
+      assert.equal(new URLSearchParams(w.location.search).get('changeCursor'), '0');
+      assert.equal(d.querySelectorAll('.change-row[aria-current="true"]').length, 1);
+      assert.equal(d.querySelector('.change-row[aria-current="true"]').dataset.path, 'alpha.txt');
+      assert.equal(d.querySelector('.inspector-title')?.textContent, 'alpha.txt');
+    };
+    assertExactSelection();
+    gates[0].release(); // Late delivery cannot undo native fetch's abort or the accepted selection.
+    await settle();
+    assertExactSelection();
+  });
+}
