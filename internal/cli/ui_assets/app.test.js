@@ -7713,3 +7713,41 @@ for (const boundary of ['continuation ownership', 'pending evidence interactivit
     assertExactSelection();
   });
 }
+
+test('cancelling a same-run detail load via ordinary history navigation clears its loading boundary', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ id: 'ordinary-action', offset: 0, type: 'tool.call', input: { command: 'current evidence' } }];
+  let armed = false, release, aborted = false;
+  data.intercept = (url, { signal }) => {
+    if (!armed || url.pathname !== `/api/runs/${data.details.run.id}`) return null;
+    return new Promise((resolve, reject) => {
+      release = () => resolve(response(data.details));
+      signal.addEventListener('abort', () => {
+        aborted = true;
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+    });
+  };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  armed = true;
+  d.querySelector(`.run-item[data-run-id="${data.details.run.id}"]`).click();
+  assert.equal(d.querySelector('#timeline').getAttribute('aria-busy'), 'true');
+  w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions`);
+  w.dispatchEvent(new w.PopStateEvent('popstate'));
+  await settle();
+  assert.equal(aborted, true);
+  assert.notEqual(d.querySelector('#timeline').getAttribute('aria-busy'), 'true', 'cancelled detail owner must not leave the current timeline permanently busy');
+  const row = d.querySelector('.action-row');
+  assert.ok(row, 'ordinary page-zero evidence is usable after cancellation');
+  row.click();
+  const selectedURL = w.location.href;
+  release();
+  await settle();
+  assert.equal(w.location.href, selectedURL);
+  assert.ok(d.querySelector('[aria-current="true"]'));
+  assert.match(d.querySelector('#inspector').textContent, /current evidence/);
+});
