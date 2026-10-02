@@ -4477,6 +4477,7 @@ function shortID(id) {
       if (doc && !fresh.evidence.posthocVerification) fresh.evidence.posthocVerification = doc;
       if (state.run && state.run.run.id === id) {
         state.run = fresh;
+        renderSessionRecords();
         live.signature = runSignature(fresh);
         renderRunHeader();
       }
@@ -4808,6 +4809,7 @@ function shortID(id) {
       const requestsGrew = (fresh.promptCount || 0) > previousPromptCount;
       const signature = runSignature(fresh);
       state.run = fresh;
+      renderSessionRecords();
       if (state.requestScope) state.requestScope.total = fresh.promptCount || 0;
       renderRequestScope();
       const running = isLive();
@@ -5254,6 +5256,7 @@ function shortID(id) {
     if (!summary && verification !== 'PENDING') return;
     const differs = !summary
       || summary.exit !== state.run.run.exitReason
+      || summary.sessionGroup !== state.run.run.sessionGroup
       || summary.verification !== verification
       || summary.statusClass !== state.run.run.statusClass
       || summary.statusLabel !== state.run.run.statusLabel
@@ -5265,6 +5268,7 @@ function shortID(id) {
     const fresh = await getJSONRetrying(`/api/runs/${encodeURIComponent(id)}`, state.pollController.signal);
     if (generation !== state.loadGeneration || !state.run || state.run.run.id !== id) return;
     state.run = fresh;
+    renderSessionRecords();
     live.signature = runSignature(fresh);
     renderRequestScope();
     renderRunHeader();
