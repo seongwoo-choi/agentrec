@@ -493,3 +493,15 @@ A native-pointer reproduction twice accepted a file selection after request-scop
 - During same-run detail replacement, outgoing timeline evidence is visibly loading and noninteractive. Abort and error paths clear the busy state; an obsolete response cannot make old rows current.
 - After the replacement arrives, ordinary file selection restores URL, current row and inspector agreement. No delay-based workaround, removed row guard or source-record mutation.
 - Acceptance: deterministic abort/deferred-response regressions, browser reproduction with native clicks and independently released old responses, and unchanged stored-text selection behavior.
+
+## Loaded request observations
+
+A selected recorded request interval offers a native collapsed observation index. Its loaded-only caveat remains visible when collapsed. It is not a request outcome, complete file inventory, causal change attribution, or an inferred prompt/reply pairing.
+
+- Project accepted loaded actions only, independent of timeline filters. Recognized file read/write/edit records and shell records retain chronological order; show at most eight rows per section with exact shown/loaded record counts. Original records retain all details.
+- Previews are bounded and literal, preserve Unicode characters, and signal truncation. No new patch parser, recursive payload traversal, automatic retry classifier or stdout-derived success/failure verdict.
+- Keep recorded status and directly reported integer exit fields separate. Missing, invalid or contradictory exits remain unknown/uncertain; completed is not success. Unknown record types remain in the unchanged timeline rather than being guessed into a category.
+- Exact original-action anchors retain run, request scope start and record byte offset, with an ID when present. Missing exact identity is unavailable, not a page-start substitute. Stale run, generation, snapshot, scope or detached controls cannot navigate.
+- The run-wide independent verification link is explicitly not this request's verdict. Partial/open/error boundaries remain visible and are not upgraded to completeness by the index.
+- Expansion performs no data fetch. Keep disclosure/focus through safe rerenders, refresh bindings on snapshot/live updates, and hide the index and its ancillary controls immediately on scope exit or replacement. Expanded content has its own bounded scrolling area.
+- Acceptance: scoped projection and uncertainty regressions; duplicate/absent IDs and exact offsets; paging errors and stale bindings; four-language keyboard/responsive checks; actual recorded intervals and source-inspector agreement.

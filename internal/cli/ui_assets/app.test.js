@@ -104,6 +104,7 @@ test('request results: collapsed caveat and separate run verification stay visib
   d.querySelector('#request-scope-exit').click();
   assert.ok(note.classList.contains('hidden'));
   assert.ok(link.classList.contains('hidden'));
+  await settle();
 });
 
 test('request results: changed URL scope invalidates retained anchors', async (t) => {
