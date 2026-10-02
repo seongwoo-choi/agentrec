@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.18.0.md) ·
+[发布说明](docs/releases/v0.19.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -60,14 +60,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.18.0_darwin_arm64.tar.gz
+archive=agentrec_0.19.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.18.0_darwin_arm64/agentrec version
+./agentrec_0.19.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.18.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.19.0
 ```
 
 每个版本附带 `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64` 四个归档包和一个
@@ -154,6 +154,7 @@ agentrec events latest --json
   未知状态可见；**变更** 按目录分组文件；**提供方事件** 折叠 `PostToolUse` 和钩子生命周期
   记录。**全部操作/文件/事件** 只需一次切换，每一行都能在检查器中打开原始记录。
 - **新文件的已保存正文** — 在变更标签页选择未跟踪文件，再查看已保存的文本。仅在哈希校验通过后读取记录时已脱敏的正文，上限为 1 MiB。正文缺失、无法校验或超过上限时明确显示不可用，不会改读当前工作区的文件。
+- **按请求查看观测记录** — 在所选请求区间汇总已加载的文件提及和命令记录，列表有明确上限，并可直达对应的原始操作。保留部分加载、尚未结束区间和未知结果的区别，不把整次运行的独立验证当作单个请求的结论。
 - **跨运行** — 在所有运行中搜索一个词，直达匹配的操作或变更文件；并排比较任意两个运行；复制
   指向精确行的本地证据链接。
 - **实时** — 仍在进行的运行会自动刷新页面，并显示当前的工作树。
@@ -317,7 +318,7 @@ agentrec 不主张的事：
 
 ## 文档
 
-- [发布说明](docs/releases/) — 每个版本一个文件，最新为 [v0.18.0](docs/releases/v0.18.0.md)
+- [发布说明](docs/releases/) — 每个版本一个文件，最新为 [v0.19.0](docs/releases/v0.19.0.md)
 - [Flight recorder 设计](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——记录器](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [Viewer 设计契约](DESIGN.md) · [第三方声明](THIRD_PARTY_NOTICES.md)
@@ -332,7 +333,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.18.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.19.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 只在本地构建归档，不发布任何东西。`release.yml` 在 `v*.*.*` 标签上

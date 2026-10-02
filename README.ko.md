@@ -40,7 +40,7 @@
 이를 섞지 않습니다. 그래서 코드 리뷰, 장애 조사, 인수인계, 새 에이전트 버전을
 믿을지에 대한 판단이 요약이 아니라 관측된 사실에서 출발합니다.
 
-[릴리스 노트](docs/releases/v0.18.0.md) ·
+[릴리스 노트](docs/releases/v0.19.0.md) ·
 [설계 노트](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 증거](docs/dogfood/2026-07-28-evidence.md) ·
@@ -62,14 +62,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.18.0_darwin_arm64.tar.gz
+archive=agentrec_0.19.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.18.0_darwin_arm64/agentrec version
+./agentrec_0.19.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.18.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.19.0
 ```
 
 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64` 아카이브와
@@ -162,6 +162,7 @@ agentrec events latest --json
   묶고, **프로바이더 이벤트**는 `PostToolUse`와 훅 수명주기 기록을 접습니다. **전체
   액션/파일/이벤트**는 토글 하나 거리이고, 모든 행은 인스펙터에서 원본 기록을 엽니다.
 - **새 파일의 저장된 본문** — 변경 탭에서 미추적 파일을 선택한 뒤 **저장된 텍스트 보기**를 누릅니다. 기록 당시 정제된 본문만 해시를 확인해 최대 1 MiB까지 읽습니다. 본문이 없거나 검증할 수 없거나 한도를 넘으면 읽을 수 없다고 표시하며, 현재 작업 파일을 대신 읽지 않습니다.
+- **요청별 관측 기록** — 선택한 요청 구간에서 불러온 파일 언급과 명령 기록을 제한된 목록으로 모아 보고, 정확한 원본 액션으로 이동합니다. 부분 로딩·진행 중 구간·알 수 없는 결과를 구분하며, 실행 전체의 독립 검증을 해당 요청의 판정으로 사용하지 않습니다.
 - **실행을 가로질러** — 모든 실행에서 단어를 검색해 해당 액션이나 변경 파일에 바로
   도착. 두 실행을 나란히 비교. 정확한 행으로 가는 로컬 증거 링크 복사.
 - **라이브** — 아직 진행 중인 실행은 페이지가 스스로 갱신되고, 지금의 작업 트리를
@@ -335,7 +336,7 @@ agentrec이 주장하지 않는 것:
 
 ## 문서
 
-- [릴리스 노트](docs/releases/) — 릴리스마다 파일 하나, 최신은 [v0.18.0](docs/releases/v0.18.0.md)
+- [릴리스 노트](docs/releases/) — 릴리스마다 파일 하나, 최신은 [v0.19.0](docs/releases/v0.19.0.md)
 - [Flight recorder 설계](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 증거 — 레코더](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [뷰어 설계 계약](DESIGN.md) · [서드파티 고지](THIRD_PARTY_NOTICES.md)
@@ -350,7 +351,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.18.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.19.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 아카이브를 로컬에서 만들 뿐 아무것도 배포하지 않습니다.

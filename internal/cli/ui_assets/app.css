@@ -1,5 +1,13 @@
 /* agentrec viewer — light tokens on :root, dark tokens under prefers-color-scheme.
    Neutral scale is slate-tinted; muted/quiet text passes WCAG AA on panel and page backgrounds in both themes. */
+.request-results { flex-basis: 100%; min-width: 0; padding: .6rem; border: 1px solid var(--border); border-radius: 6px; }
+#request-results-body { max-height: min(40vh, 20rem); overflow: auto; }
+.request-results-hint { flex-basis: 100%; min-width: 0; margin: .15rem 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.request-results summary { cursor: pointer; padding: .4rem; font-weight: 600; }
+.request-results p, .request-results li { overflow-wrap: anywhere; white-space: pre-wrap; }
+.request-results li { margin-block: .5rem; }
+.request-results a { color: var(--accent); }
+.request-results summary:focus-visible, .request-results a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 :root {
   color-scheme: light dark;
   --bg: #f4f5f7;

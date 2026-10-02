@@ -23,6 +23,22 @@
   const LANGS = ['en', 'ko', 'ja', 'zh-CN'];
   const STRINGS = {
     ko: {
+      "Request observations": "요청 관측 기록",
+      "Loaded observations only": "불러온 관측 기록만 표시",
+      "Run-wide independent verification — not this request’s verdict": "실행 전체의 독립 검증 — 이 요청의 판정이 아님",
+      "Loaded observations only; not a request outcome or proof of causality.": "불러온 관측 기록만 표시합니다. 요청 결과나 인과관계의 증거가 아닙니다.",
+      "File mentions": "파일 언급",
+      "Shell observations": "셸 관측 기록",
+      "{shown} shown / {loaded} loaded": "{loaded}개 로드 중 {shown}개 표시",
+      "Path not recorded": "경로 기록 없음",
+      "Command not recorded": "명령 기록 없음",
+      "Recorded status": "기록된 상태",
+      "Status not recorded": "상태 기록 없음",
+      "Recorded exit: {exit}": "기록된 종료 코드: {exit}",
+      "Exit not recorded": "종료 코드 기록 없음",
+      "Exit uncertain": "종료 코드 불확실",
+      "Original record": "원본 기록",
+      "Exact link unavailable": "정확한 링크 없음",
       'View stored text': '저장된 텍스트 보기',
       'Loading stored text…': '저장된 텍스트 불러오는 중…',
       'RECORDED SANITIZED TEXT — NOT CAUSAL PROOF': '기록된 정제 텍스트 — 인과관계의 증거 아님',
@@ -417,6 +433,22 @@
       'Observed by verification checks, run later': '검증 체크가 관측 (사후 실행)'
     },
     ja: {
+      "Request observations": "リクエストの観測記録",
+      "Loaded observations only": "読み込み済みの観測記録のみ",
+      "Run-wide independent verification — not this request’s verdict": "run 全体の独立検証 — このリクエストの判定ではありません",
+      "Loaded observations only; not a request outcome or proof of causality.": "読み込み済みの観測記録のみ。リクエストの結果や因果関係の証拠ではありません。",
+      "File mentions": "ファイルへの言及",
+      "Shell observations": "シェルの観測記録",
+      "{shown} shown / {loaded} loaded": "読み込み済み {loaded} 件中 {shown} 件表示",
+      "Path not recorded": "パスの記録なし",
+      "Command not recorded": "コマンドの記録なし",
+      "Recorded status": "記録された状態",
+      "Status not recorded": "状態の記録なし",
+      "Recorded exit: {exit}": "記録された終了コード: {exit}",
+      "Exit not recorded": "終了コードの記録なし",
+      "Exit uncertain": "終了コードは不確か",
+      "Original record": "元の記録",
+      "Exact link unavailable": "正確なリンクなし",
       'View stored text': '保存済みテキストを表示',
       'Loading stored text…': '保存済みテキストを読み込んでいます…',
       'RECORDED SANITIZED TEXT — NOT CAUSAL PROOF': '記録されたサニタイズ済みテキスト — 因果関係の証明ではありません',
@@ -811,6 +843,22 @@
       'Observed by verification checks, run later': '検証チェックが観測（事後実行）'
     },
     'zh-CN': {
+      "Request observations": "请求观测记录",
+      "Loaded observations only": "仅显示已加载的观测记录",
+      "Run-wide independent verification — not this request’s verdict": "整次运行的独立验证 — 不是此请求的结论",
+      "Loaded observations only; not a request outcome or proof of causality.": "仅显示已加载的观测记录；不代表请求结果或因果关系证据。",
+      "File mentions": "文件提及",
+      "Shell observations": "Shell 观测记录",
+      "{shown} shown / {loaded} loaded": "已加载 {loaded} 条，显示 {shown} 条",
+      "Path not recorded": "未记录路径",
+      "Command not recorded": "未记录命令",
+      "Recorded status": "记录的状态",
+      "Status not recorded": "未记录状态",
+      "Recorded exit: {exit}": "记录的退出码：{exit}",
+      "Exit not recorded": "未记录退出码",
+      "Exit uncertain": "退出码不确定",
+      "Original record": "原始记录",
+      "Exact link unavailable": "精确链接不可用",
       'View stored text': '查看已存储文本',
       'Loading stored text…': '正在加载已存储文本…',
       'RECORDED SANITIZED TEXT — NOT CAUSAL PROOF': '已记录的脱敏文本 — 不构成因果关系证明',
@@ -2383,6 +2431,108 @@ function shortID(id) {
     if (message) timeline.append(node('div', 'timeline-empty', t(message)));
   }
 
+  // Projection of accepted loaded records only. No payload walking or outcome inference.
+  let requestResultsBinding = null;
+  function renderRequestResults() {
+    const panel = $('request-results'), scope = state.requestScope, stream = state.streams?.actions;
+    const first = stream?.items[0];
+    const valid = state.mode === 'actions' && !state.runDetailLoading && scope?.rank > 0
+      && first?.type === 'user.prompt' && first.offset === scope.start
+      && new URLSearchParams(location.search).get('run') === state.run?.run.id
+      && requestScopeFromURL()?.cursor === scope.start;
+    panel.classList.toggle('hidden', !valid);
+    $('request-results-note').classList.toggle('hidden', !valid);
+    $('request-results-note').textContent = t('Loaded observations only');
+    const verificationLink = $('request-results-verification');
+    verificationLink.classList.toggle('hidden', !valid);
+    if (!valid) {
+      panel.open = false;
+      requestResultsBinding = null;
+      verificationLink.removeAttribute('href');
+      $('request-results-body').replaceChildren();
+      return;
+    }
+    const prior = requestResultsBinding;
+    const binding = { scope, stream, run: state.run.run.id, generation: state.loadGeneration, snapshot: state.run.snapshotId };
+    if (prior && (prior.scope !== scope || prior.generation !== binding.generation)) panel.open = false;
+    requestResultsBinding = binding;
+    $('request-results-summary').textContent = t('Request observations');
+    const body = $('request-results-body');
+    const focusOffset = body.contains(document.activeElement) ? document.activeElement.dataset.offset : null;
+    body.replaceChildren(node('p', '', t('Loaded observations only; not a request outcome or proof of causality.')));
+    body.append(node('p', '', $('request-scope-label').textContent));
+    if (stream.error) body.append(node('p', 'stream-error', t('Could not load recorded interval: {error}', { error: stream.error })));
+    const files = [], shells = [];
+    let fileCount = 0, shellCount = 0;
+    for (const action of stream.items) {
+      if (['file.read', 'file.write', 'file.edit'].includes(action.type)) {
+        fileCount += 1;
+        if (files.length < 8) files.push(action);
+      } else if (action.type === 'shell.exec') {
+        shellCount += 1;
+        if (shells.length < 8) shells.push(action);
+      }
+    }
+    const short = (value, fallback) => {
+      if (typeof value !== 'string' || !value.trim()) return t(fallback);
+      let preview = '', count = 0;
+      for (const char of value) {
+        if (count++ === 240) return preview + '…';
+        preview += char;
+      }
+      return preview;
+    };
+    const current = (anchor) => anchor.isConnected && requestResultsBinding === binding
+      && state.requestScope === scope && state.streams?.actions === stream && state.mode === 'actions'
+      && state.loadGeneration === binding.generation && state.run?.snapshotId === binding.snapshot
+      && state.run?.run.id === binding.run && !state.runDetailLoading
+      && new URLSearchParams(location.search).get('run') === binding.run
+      && requestScopeFromURL()?.cursor === scope.start;
+    const verificationURL = new URL(location.pathname, location.origin);
+    verificationURL.searchParams.set('run', binding.run);
+    verificationURL.searchParams.set('focus', 'verification');
+    verificationLink.href = verificationURL.href;
+    verificationLink.textContent = t('Run-wide independent verification — not this request’s verdict');
+    verificationLink.onclick = verificationLink.onauxclick = (event) => { if (!current(verificationLink)) event.preventDefault(); };
+    for (const [title, rows, count] of [['File mentions', files, fileCount], ['Shell observations', shells, shellCount]]) {
+      body.append(node('h4', '', `${t(title)} · ${t('{shown} shown / {loaded} loaded', { shown: rows.length, loaded: count })}`));
+      const list = node('ol', 'request-observations');
+      for (const action of rows) {
+        const input = action.input || {};
+        const row = node('li', '');
+        let preview;
+        if (title === 'File mentions') {
+          preview = short([input.path, input.file_path, input.filePath, action.repositoryPaths?.[0]].find((v) => typeof v === 'string' && v.trim()), 'Path not recorded');
+        } else {
+          const command = input.command ?? input.cmd;
+          preview = short(Array.isArray(command) && command.length <= 256 && command.every((v) => typeof v === 'string') ? command.slice(0, 16).map((v) => short(v, '')).join(' ') + (command.length > 16 ? '…' : '') : command, 'Command not recorded');
+        }
+        row.append(node('span', '', `${action.type} · ${preview} · ${t('Recorded status')}: ${short(action.status, 'Status not recorded')}`));
+        if (title === 'Shell observations') {
+          const fields = [action.exitCode, action.exit_code, action.output?.exitCode, action.output?.exit_code, action.result?.exitCode, action.result?.exit_code];
+          const present = fields.filter((v) => v !== undefined);
+          const exits = [...new Set(present.filter(Number.isSafeInteger))];
+          const uncertain = present.some((v) => !Number.isSafeInteger(v)) || exits.length > 1;
+          const exitText = exits.length ? t('Recorded exit: {exit}', { exit: exits.join(', ') }) : t('Exit not recorded');
+          row.append(node('span', '', ` · ${exitText}${uncertain ? ` · ${t('Exit uncertain')}` : ''}`));
+        }
+        if (Number.isSafeInteger(action.offset) && action.offset >= scope.start) {
+          const url = new URL(location.pathname, location.origin);
+          for (const [key, value] of Object.entries({ run: binding.run, focus: 'actions', scope: 'request', scopeStart: scope.start, actionCursor: action.offset })) url.searchParams.set(key, String(value));
+          if (typeof action.id === 'string' && action.id) url.searchParams.set('action', action.id);
+          const anchor = node('a', '', t('Original record'));
+          anchor.href = url.href;
+          anchor.dataset.offset = String(action.offset);
+          for (const event of ['click', 'auxclick']) anchor.addEventListener(event, (e) => { if (!current(anchor)) e.preventDefault(); });
+          row.append(' · ', anchor);
+        } else row.append(' · ', node('span', '', t('Exact link unavailable')));
+        list.append(row);
+      }
+      body.append(list);
+    }
+    if (focusOffset !== null) [...body.querySelectorAll('a')].find((a) => a.dataset.offset === focusOffset)?.focus({ preventScroll: true });
+  }
+
   function renderRequestScope() {
     const controls = $('request-scope-controls');
     const scope = state.mode === 'actions' ? state.requestScope : null;
@@ -2390,6 +2540,7 @@ function shortID(id) {
     $('request-scope-exit').classList.toggle('hidden', !scope);
     if (!scope) {
       $('request-scope-label').textContent = '';
+      renderRequestResults();
       return;
     }
     const values = { rank: scope.rank || '—', total: scope.total || '—', next: scope.nextRank || '—' };
@@ -2401,6 +2552,7 @@ function shortID(id) {
           ? 'Recorded interval {rank} of {total} · through the snapshot end.'
           : 'Recorded interval {rank} of {total} · end not loaded yet.';
     $('request-scope-label').textContent = t(key, values);
+    renderRequestResults();
   }
 
   function renderActionViewStatus(liveLoaded) {
@@ -4605,6 +4757,7 @@ function shortID(id) {
       const signature = runSignature(fresh);
       state.run = fresh;
       if (state.requestScope) state.requestScope.total = fresh.promptCount || 0;
+      renderRequestScope();
       const running = isLive();
       const requestsMissing = (fresh.promptCount || 0) > (state.requests?.items.length || 0);
       if (requestsMissing && state.requests?.loaded && !state.requests.loading && state.requests.nextCursor === null) {
@@ -4817,6 +4970,11 @@ function shortID(id) {
     const controller = new AbortController();
     state.runAbortController = controller;
     const generation = ++state.loadGeneration;
+    $('request-results').classList.add('hidden');
+    $('request-results-note').classList.add('hidden');
+    $('request-results-verification').classList.add('hidden');
+    $('request-results').open = false;
+    requestResultsBinding = null;
     // Cross-run rows already fail closed on run identity. Same-run outgoing
     // rows must not be re-rendered with this generation before detail resets.
     state.runDetailLoading = previousRunID === id;
@@ -5056,6 +5214,7 @@ function shortID(id) {
     if (generation !== state.loadGeneration || !state.run || state.run.run.id !== id) return;
     state.run = fresh;
     live.signature = runSignature(fresh);
+    renderRequestScope();
     renderRunHeader();
     if (verificationFocused) $('evidence-verification').focus({ preventScroll: true });
   }

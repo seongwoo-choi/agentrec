@@ -69,6 +69,184 @@ async function renderFixture({ list, details, actions = [], requests = [], chang
   return dom;
 }
 
+async function requestResultsFixture(extra = [], options = {}) {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 1;
+  return renderFixture({ ...data, actions: [
+    { type: 'user.prompt', id: 'prompt', offset: 100, promptRank: 1, input: { prompt: 'request' } }, ...extra,
+  ], configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&scope=request&scopeStart=100&actionCursor=100`), ...options });
+}
+
+test('request results: normalized file types and usable explicit paths only', async (t) => {
+  const dom = await requestResultsFixture([
+    { type: 'file.patch', offset: 200, input: { path: 'unrecognized-patch.txt' } },
+    { type: 'file.write', offset: 300, input: { path: '', file_path: 'recorded-file.txt' } },
+  ]);
+  t.after(() => dom.window.close());
+  const text = dom.window.document.querySelector('#request-results').textContent;
+  assert.doesNotMatch(text, /unrecognized-patch/);
+  assert.match(text, /recorded-file/);
+});
+
+test('request results: collapsed caveat and separate run verification stay visible', async (t) => {
+  const dom = await requestResultsFixture([{ type: 'shell.exec', id: 'cmd', offset: 200, input: { command: 'false' } }]);
+  t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#request-results');
+  assert.equal(panel.open, false);
+  const note = d.querySelector('#request-results-note');
+  assert.ok(note && !note.closest('details') && !note.classList.contains('hidden'));
+  assert.match(note.textContent, /Loaded observations only/);
+  const link = d.querySelector('#request-results-verification');
+  assert.ok(link && !link.classList.contains('hidden'));
+  assert.match(link.textContent, /Run-wide.*not this request/);
+  assert.equal(new URL(link.href).searchParams.get('focus'), 'verification');
+  assert.equal(new URL(link.href).searchParams.get('run'), fixture('completed', 'pass', 'PASS').details.run.id);
+  d.querySelector('#request-scope-exit').click();
+  assert.ok(note.classList.contains('hidden'));
+  assert.ok(link.classList.contains('hidden'));
+  await settle();
+});
+
+test('request results: changed URL scope invalidates retained anchors', async (t) => {
+  const dom = await requestResultsFixture([{ type: 'file.read', id: 'f', offset: 200, input: { path: 'file.txt' } }]);
+  t.after(() => dom.window.close());
+  const a = dom.window.document.querySelector('#request-results a');
+  const url = new URL(dom.window.location.href); url.searchParams.set('scopeStart', '999');
+  dom.window.history.replaceState(null, '', url);
+  const event = new dom.window.MouseEvent('click', { cancelable: true }); a.dispatchEvent(event);
+  assert.equal(event.defaultPrevented, true);
+});
+
+test('request results: bounded Unicode previews do not split characters or hide argv omission', async (t) => {
+  const dom = await requestResultsFixture([
+    { type: 'file.read', offset: 200, input: { path: 'x'.repeat(239) + '😀tail' } },
+    { type: 'shell.exec', offset: 300, input: { command: Array.from({ length: 20 }, () => 'a') } },
+  ]);
+  t.after(() => dom.window.close());
+  const rows = dom.window.document.querySelectorAll('#request-results li');
+  assert.ok(rows[0].textContent.includes('😀…'));
+  assert.ok(rows[1].textContent.includes('…'));
+});
+
+test('request results: expanded body has its own bounded scrolling surface', () => {
+  assert.match(css, /#request-results-body\s*\{[^}]*max-height:[^}]*overflow:\s*auto/s);
+});
+
+test('request results: collapsed loaded-only observations and exact original anchors', async (t) => {
+  const dom = await requestResultsFixture([
+    { type: 'file.read', id: 'same', offset: 200, input: { path: '<b>one</b>' } },
+    { type: 'shell.exec', id: 'same', offset: 300, status: 'completed', input: { command: 'echo PASS' }, output: { stdout: 'PASS' } },
+    { type: 'shell.exec', offset: 400, status: 'failed', input: { command: 'false' }, output: { exitCode: 0 } },
+  ]);
+  t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#request-results');
+  assert.ok(panel && !panel.classList.contains('hidden'));
+  assert.equal(panel.tagName, 'DETAILS');
+  assert.equal(panel.open, false);
+  assert.match(panel.textContent, /Loaded observations only/);
+  assert.match(panel.textContent, /<b>one<\/b>/);
+  assert.equal(panel.querySelector('b'), null);
+  assert.match(panel.textContent, /Exit not recorded/);
+  assert.match(panel.textContent, /failed.*Recorded exit: 0/s);
+  const links = [...panel.querySelectorAll('a')];
+  assert.deepEqual(links.map((a) => new URL(a.href).searchParams.get('actionCursor')), ['200', '300', '400']);
+  for (const a of links) assert.equal(new URL(a.href).searchParams.get('scopeStart'), '100');
+  assert.equal(new URL(links[2].href).searchParams.has('action'), false);
+  const before = dom.window.__fetchPaths.length;
+  panel.open = true;
+  panel.querySelector('summary').focus();
+  await settle();
+  assert.equal(dom.window.__fetchPaths.length, before);
+  assert.equal(d.activeElement, panel.querySelector('summary'));
+  d.querySelector('#request-scope-exit').click();
+  assert.ok(panel.classList.contains('hidden'));
+  const event = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+  links[0].dispatchEvent(event);
+  assert.equal(event.defaultPrevented, true);
+  await settle();
+});
+
+for (const [lang, label] of [['en', 'Request observations'], ['ko', '요청 관측 기록'], ['ja', 'リクエストの観測記録'], ['zh-CN', '请求观测记录']]) {
+  test(`request results: localized native disclosure ${lang}`, async (t) => {
+    const dom = await requestResultsFixture([], { configure: (w) => {
+      w.localStorage.setItem('agentrec.lang', lang);
+      w.history.replaceState(null, '', `/?run=${fixture('completed', 'pass', 'PASS').details.run.id}&focus=actions&scope=request&scopeStart=100&actionCursor=100`);
+    } });
+    t.after(() => dom.window.close());
+    assert.equal(dom.window.document.querySelector('#request-results-summary').textContent, label);
+  });
+}
+
+test('request results: bounded known lists keep uncertain direct exits separate from stdout', async (t) => {
+  const rows = Array.from({ length: 12 }, (_, i) => ({ type: 'shell.exec', offset: 200 + i * 100, status: 'completed', input: {}, output: i === 0 ? { exitCode: 0, exit_code: 2, stdout: 'PASS' } : { exitCode: '0', stdout: 'errors PASS' } }));
+  rows.push({ type: 'mystery.shell', offset: 1500, input: { command: 'unknown should not project' } }, { type: 'file.edit', offset: 1600, input: {} });
+  const dom = await requestResultsFixture(rows);
+  t.after(() => dom.window.close());
+  const panel = dom.window.document.querySelector('#request-results');
+  assert.equal(panel.querySelectorAll('li').length, 9);
+  assert.match(panel.textContent, /8 shown \/ 12 loaded/);
+  assert.match(panel.textContent, /Recorded exit: 0, 2.*Exit uncertain/);
+  assert.match(panel.textContent, /Path not recorded/);
+  assert.match(panel.textContent, /Command not recorded/);
+  assert.match(panel.textContent, /Status not recorded/);
+  assert.doesNotMatch(panel.textContent, /PASS|errors|unknown should not project/);
+  panel.open = true;
+  const link = panel.querySelector('a');
+  link.focus();
+  dom.window.document.querySelector('#all-actions-toggle').click();
+  assert.equal(panel.open, true);
+  assert.equal(dom.window.document.activeElement.dataset.offset, link.dataset.offset);
+  const stale = new dom.window.MouseEvent('click', { cancelable: true });
+  link.dispatchEvent(stale);
+  assert.equal(stale.defaultPrevented, true);
+});
+
+test('request results: snapshot-only refresh replaces stale bindings without closing disclosure', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 1;
+  let poll;
+  let details = data.details;
+  const dom = await requestResultsFixture([{ type: 'shell.exec', offset: 200, input: { command: 'pwd' } }], {
+    list: data.list, details: () => details,
+    configure: (w) => {
+      w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&scope=request&scopeStart=100&actionCursor=100`);
+      w.setInterval = (callback) => { poll = callback; return 1; };
+    },
+  });
+  t.after(() => dom.window.close());
+  const panel = dom.window.document.querySelector('#request-results');
+  panel.open = true;
+  const old = panel.querySelector('a');
+  details = { ...details, snapshotId: 'new-snapshot', run: { ...details.run, warningCount: 1 } };
+  data.list.runs[0].warningCount = 1;
+  await poll(); await settle();
+  assert.notEqual(panel.querySelector('a'), old);
+  assert.equal(panel.open, true);
+  const e = new dom.window.MouseEvent('click', { cancelable: true });
+  old.dispatchEvent(e);
+  assert.equal(e.defaultPrevented, true);
+});
+
+test('request results: partial interval preserves accepted rows on paging error and excludes adjacent prompt', async (t) => {
+  const prompt = { type: 'user.prompt', offset: 100, promptRank: 1, input: { prompt: 'start' } };
+  let fail = true;
+  const dom = await requestResultsFixture([], { actions: (cursor) => {
+    if (cursor === 100) return { items: [prompt, { type: 'shell.exec', offset: 200, input: { command: 'inside' } }], nextCursor: 300, endCursor: 300 };
+    if (fail) throw new Error('page unavailable');
+    return { items: [{ type: 'user.prompt', offset: 300, promptRank: 2 }, { type: 'shell.exec', offset: 400, input: { command: 'outside' } }], nextCursor: null };
+  } });
+  t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#request-results');
+  assert.match(panel.textContent, /end not loaded yet/);
+  d.querySelector('#timeline .load-more').click(); await settle();
+  assert.match(panel.textContent, /inside/);
+  assert.match(panel.textContent, /page unavailable/);
+  fail = false;
+  d.querySelector('#timeline .load-more').click(); await settle();
+  assert.doesNotMatch(panel.textContent, /outside|page unavailable/);
+  assert.match(panel.textContent, /before recorded request 2/);
+});
+
 test('stored text requires explicit activation and renders literal recorded text', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const path = 'notes/[REDACTED:1] & new.txt';
