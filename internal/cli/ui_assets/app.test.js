@@ -49,6 +49,32 @@ test('same-session cap partial pages locale focus and stale controls', async (t)
   assert.equal(d.activeElement.id, 'session-records-summary');
 });
 
+for (const change of ['snapshot', 'identity']) test(`same-session refreshed detail keeps current links usable: ${change}`, async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.sessionGroup = 'group-before';
+  let details = data.details;
+  const base = { ...data.list.runs[0], sessionGroup: 'group-before' };
+  data.list.runs = [base, { ...base, id: 'peer', title: 'peer' }];
+  const dom = await renderFixture({ ...data, details: () => details, configure: (w) => {
+    w.history.replaceState(null, '', `/?run=${base.id}`);
+    w.setInterval = (fn, ms) => { if (ms === 5000) poll = fn; return ms; }; w.clearInterval = () => {};
+  } });
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const old = d.querySelector('#session-records a'); assert.ok(old);
+  const group = change === 'identity' ? 'group-after' : 'group-before';
+  details = { ...data.details, snapshotId: 'snapshot-after', run: { ...data.details.run, sessionGroup: group, warningCount: change === 'snapshot' ? 1 : 0 } };
+  data.list.runs = data.list.runs.map((r) => ({ ...r, sessionGroup: group, warningCount: r.id === base.id && change === 'snapshot' ? 1 : 0 }));
+  await poll(); await settle();
+  const fresh = d.querySelector('#session-records a'); assert.ok(fresh);
+  let blocked;
+  fresh.addEventListener('click', (event) => { blocked = event.defaultPrevented; event.preventDefault(); }, { once: true });
+  fresh.dispatchEvent(new w.MouseEvent('click', { cancelable: true }));
+  assert.equal(blocked, false, 'newly refreshed links must not remain bound to the old snapshot');
+  const stale = new w.MouseEvent('auxclick', { cancelable: true }); old.dispatchEvent(stale); assert.equal(stale.defaultPrevented, true);
+});
+
 test('same-session missing identity is neutral', async (t) => {
   const dom = await renderFixture(fixture('completed', 'pass', 'PASS')); t.after(() => dom.window.close());
   const panel = dom.window.document.querySelector('#session-records');
