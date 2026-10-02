@@ -8,6 +8,22 @@ const html = await readFile(new URL('index.html', here), 'utf8');
 const app = await readFile(new URL('app.js', here), 'utf8');
 const css = await readFile(new URL('app.css', here), 'utf8');
 
+test('same-session loaded links isolate identities and clear old scope', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.sessionGroup = 'opaque-group';
+  const base = { ...data.list.runs[0], sessionGroup: 'opaque-group' };
+  data.list.runs = [base, { ...base, id: 'peer', title: '<peer>' }, { ...base, id: 'wrong-provider', provider: 'codex' }, { ...base, id: 'wrong-group', sessionGroup: 'other' }, { ...base, id: 'unknown', sessionGroup: undefined }];
+  data.configure = (w) => w.history.replaceState(null, '', `/?run=${base.id}&scope=request&scopeStart=0&action=x&change=y`);
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document;
+  const links = [...d.querySelectorAll('#session-records a')];
+  assert.equal(links.length, 1);
+  assert.equal(links[0].textContent.includes('<peer>'), true);
+  assert.equal(new URL(links[0].href).search, '?run=peer');
+  assert.equal(new URL(links[0].href).origin, dom.window.location.origin);
+  assert.match(d.querySelector('#session-records').textContent, /loaded/i);
+});
+
 const response = (body) => Promise.resolve({
   ok: true,
   status: 200,
