@@ -24,6 +24,38 @@ test('same-session loaded links isolate identities and clear old scope', async (
   assert.match(d.querySelector('#session-records').textContent, /loaded/i);
 });
 
+test('same-session cap partial pages locale focus and stale controls', async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.sessionGroup = 'g';
+  const base = { ...data.list.runs[0], sessionGroup: 'g' };
+  data.list = { runs: [base, ...Array.from({length: 10}, (_, i) => ({...base, id: `peer-${i}`}))], total: 99, nextCursor: 'more', generation: 'same' };
+  data.configure = (w) => { w.setInterval = (fn, ms) => { if (ms === 5000) poll = fn; return ms; }; w.clearInterval = () => {}; };
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const w = dom.window, d = w.document, panel = d.querySelector('#session-records');
+  assert.equal(panel.querySelectorAll('a').length, 8);
+  assert.equal(panel.open, false); panel.open = true;
+  const old = panel.querySelector('a'); old.focus();
+  for (const lang of ['ko', 'ja', 'zh-CN', 'en']) {
+    d.querySelector('#lang').value = lang; d.querySelector('#lang').dispatchEvent(new w.Event('change'));
+    assert.equal(panel.open, true); assert.equal(d.activeElement.dataset.runId, 'peer-0');
+    assert.equal(panel.querySelector('summary').textContent.includes('Same-session'), lang === 'en');
+  }
+  const detached = new w.MouseEvent('auxclick', {cancelable:true}); old.dispatchEvent(detached); assert.equal(detached.defaultPrevented, true);
+  data.list.runs = data.list.runs.map((row) => ({...row, sessionGroup: 'other'}));
+  await poll(); await settle();
+  assert.equal(panel.querySelectorAll('a').length, 0, 'identity-only polling changes remove peers');
+  assert.match(panel.textContent, /No matching records loaded/);
+  assert.equal(d.activeElement.id, 'session-records-summary');
+});
+
+test('same-session missing identity is neutral', async (t) => {
+  const dom = await renderFixture(fixture('completed', 'pass', 'PASS')); t.after(() => dom.window.close());
+  const panel = dom.window.document.querySelector('#session-records');
+  assert.match(panel.textContent, /Session identity unavailable/);
+  assert.equal(panel.querySelectorAll('a').length, 0);
+});
+
 const response = (body) => Promise.resolve({
   ok: true,
   status: 200,

@@ -939,7 +939,8 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		LastAgentMessage: lastMessage,
 		PromptCount:      promptCount,
 		Run: viewRunInfo{
-			ID: runID, Provider: manifest.Provider, ProviderVersion: manifest.ProviderVersion,
+			SessionGroup: viewSessionGroup(manifestRaw),
+			ID:           runID, Provider: manifest.Provider, ProviderVersion: manifest.ProviderVersion,
 			Project: projectName(manifest.CWD), CWD: manifest.CWD, Prompt: prompt,
 			StartedAt: manifest.StartedAt, EndedAt: manifest.EndedAt, ExitReason: exitReason,
 			StatusClass: statusClass, StatusLabel: statusLabel, ProcessFailure: evidence.processFailure,

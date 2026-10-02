@@ -23,6 +23,10 @@
   const LANGS = ['en', 'ko', 'ja', 'zh-CN'];
   const STRINGS = {
     ko: {
+      "Same-session records · loaded only": "같은 세션 기록 · 불러온 기록만",
+      "Only loaded records with complete identity can match; this is not a resume history.": "완전한 식별 정보가 있는 불러온 기록만 연결됩니다. 재개 이력이 아닙니다.",
+      "No matching records loaded.": "일치하는 불러온 기록이 없습니다.",
+      "Session identity unavailable.": "세션 식별 정보를 사용할 수 없습니다.",
       "Request observations": "요청 관측 기록",
       "Loaded observations only": "불러온 관측 기록만 표시",
       "Run-wide independent verification — not this request’s verdict": "실행 전체의 독립 검증 — 이 요청의 판정이 아님",
@@ -433,6 +437,10 @@
       'Observed by verification checks, run later': '검증 체크가 관측 (사후 실행)'
     },
     ja: {
+      "Same-session records · loaded only": "同一セッションの記録 · 読み込み済みのみ",
+      "Only loaded records with complete identity can match; this is not a resume history.": "完全な識別情報がある読み込み済み記録のみ照合します。再開履歴ではありません。",
+      "No matching records loaded.": "一致する読み込み済み記録はありません。",
+      "Session identity unavailable.": "セッション識別情報を利用できません。",
       "Request observations": "リクエストの観測記録",
       "Loaded observations only": "読み込み済みの観測記録のみ",
       "Run-wide independent verification — not this request’s verdict": "run 全体の独立検証 — このリクエストの判定ではありません",
@@ -843,6 +851,10 @@
       'Observed by verification checks, run later': '検証チェックが観測（事後実行）'
     },
     'zh-CN': {
+      "Same-session records · loaded only": "同一会话记录 · 仅已加载",
+      "Only loaded records with complete identity can match; this is not a resume history.": "仅匹配身份信息完整的已加载记录；这不是恢复历史。",
+      "No matching records loaded.": "没有已加载的匹配记录。",
+      "Session identity unavailable.": "会话身份信息不可用。",
       "Request observations": "请求观测记录",
       "Loaded observations only": "仅显示已加载的观测记录",
       "Run-wide independent verification — not this request’s verdict": "整次运行的独立验证 — 不是此请求的结论",
@@ -1851,7 +1863,45 @@ function shortID(id) {
     && (!verification || run.verification === verification)
     && (!failuresOnly || run.failure === true);
 
+  let sessionRecordsBinding = null;
+  function renderSessionRecords() {
+    const panel = $('session-records'), body = $('session-records-body');
+    const run = state.run?.run;
+    const binding = { id: run?.id, group: run?.sessionGroup, provider: run?.provider, generation: state.loadGeneration, snapshot: state.run?.snapshotId };
+    const same = sessionRecordsBinding && ['id', 'group', 'provider', 'generation'].every((key) => sessionRecordsBinding[key] === binding[key]);
+    if (!same) panel.open = false;
+    const focused = body.contains(document.activeElement) ? document.activeElement.dataset.runId : null;
+    sessionRecordsBinding = binding;
+    panel.classList.toggle('hidden', !run);
+    $('session-records-summary').textContent = t('Same-session records · loaded only');
+    body.replaceChildren(node('p', '', t('Only loaded records with complete identity can match; this is not a resume history.')));
+    if (!run) return;
+    const peers = typeof run.sessionGroup === 'string' && run.sessionGroup
+      ? state.runs.filter((row) => row.id !== run.id && row.provider === run.provider && row.sessionGroup === run.sessionGroup).slice(0, 8) : [];
+    if (!peers.length) body.append(node('p', '', t(run.sessionGroup ? 'No matching records loaded.' : 'Session identity unavailable.')));
+    const list = node('ul');
+    for (const peer of peers) {
+      const link = node('a', '', peer.title || peer.id);
+      link.dataset.runId = peer.id;
+      const url = new URL(location.pathname, location.origin); url.searchParams.set('run', peer.id); link.href = url.href;
+      link.onclick = link.onauxclick = (event) => {
+        if (!link.isConnected || sessionRecordsBinding !== binding || state.runDetailLoading
+          || state.loadGeneration !== binding.generation || state.run?.snapshotId !== binding.snapshot
+          || state.run?.run.id !== binding.id || state.run?.run.sessionGroup !== binding.group
+          || new URLSearchParams(location.search).get('run') !== binding.id
+          || !state.runs.some((row) => row.id === peer.id && row.provider === binding.provider && row.sessionGroup === binding.group)) event.preventDefault();
+      };
+      const item = node('li'); item.append(link, document.createTextNode(' · '), runStartTime(peer.startedAt)); list.append(item);
+    }
+    body.append(list);
+    if (focused) {
+      const replacement = same && [...list.querySelectorAll('a')].find((link) => link.dataset.runId === focused);
+      (replacement || $('session-records-summary')).focus({ preventScroll: true });
+    }
+  }
+
   function renderRunList() {
+    renderSessionRecords();
     const query = $('run-search').value.trim().toLowerCase();
     syncRunFilter('run-project-filter', state.runs.map((run) => run.project), 'All projects');
     const project = $('run-project-filter').value;
@@ -1863,7 +1913,7 @@ function shortID(id) {
     const applied = [exit, verification, failuresOnly].filter(Boolean).length;
     $('run-advanced-count').textContent = t(applied === 1 ? '{n} filter applied' : '{n} filters applied', { n: applied });
     const list = $('run-list');
-    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.runId : undefined;
+    const focused = list.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.runId : undefined;
     list.replaceChildren();
     const matching = state.runs.filter((run) => runMatches(run, query, exit, verification, failuresOnly, project));
     // A selected older match stays a single ordinary, keyboard-reachable row.
@@ -1922,6 +1972,7 @@ function shortID(id) {
   }
 
   function renderWorkspaceState() {
+    renderSessionRecords();
     const empty = $('workspace-empty');
     const view = $('run-view');
     if (state.run) {
@@ -3690,6 +3741,7 @@ function shortID(id) {
   }
 
   function renderRun() {
+    renderSessionRecords();
     renderRunHeader();
     renderTimeline();
     renderRunList();
@@ -5121,7 +5173,7 @@ function shortID(id) {
       ? [...previousRuns, ...incoming.filter((run) => !previousRuns.some((current) => current.id === run.id))]
       : (!append && sameGeneration ? [...incoming, ...previousRuns.filter((run) => !pageIDs.has(run.id))] : incoming);
     // ponytail: rebuild the list only when its content changed; a rebuild mid-click would swallow the click.
-    const signature = JSON.stringify(runs.map((run) => [run.id, run.title, run.provider, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.failure, run.processFailure, run.startedAt]));
+    const signature = JSON.stringify(runs.map((run) => [run.id, run.title, run.provider, run.sessionGroup, run.project, run.exit, run.verification, run.statusClass, run.statusLabel, run.warningCount, run.failure, run.processFailure, run.startedAt]));
     const changed = signature !== state.runsSignature;
     state.runListError = null;
     state.runUnreadableByPage = unreadableByPage;

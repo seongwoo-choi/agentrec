@@ -51,6 +51,7 @@ type viewField struct {
 }
 
 type viewRunSummary struct {
+	SessionGroup   string    `json:"sessionGroup,omitempty"`
 	ID             string    `json:"id"`
 	Title          string    `json:"title,omitempty"`
 	Provider       string    `json:"provider"`
@@ -108,6 +109,7 @@ func viewRunListStatus(exit, verification string) (string, string) {
 }
 
 type viewRunInfo struct {
+	SessionGroup      string     `json:"sessionGroup,omitempty"`
 	ID                string     `json:"id"`
 	Provider          string     `json:"provider"`
 	ProviderVersion   string     `json:"providerVersion,omitempty"`
@@ -453,7 +455,11 @@ func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error)
 		return runSummary{}, err
 	}
 	defer runRoot.Close()
-	manifest, err := readManifestFromRoot(runRoot)
+	manifestRaw, err := readDocumentFromRoot(runRoot, manifestFile)
+	if err != nil {
+		return runSummary{}, err
+	}
+	manifest, err := decodeManifest(manifestRaw)
 	if err != nil {
 		return runSummary{}, err
 	}
@@ -462,7 +468,8 @@ func readViewRunSummaryFromRoot(root *os.Root, runID string) (runSummary, error)
 		return runSummary{}, err
 	}
 	run := runSummary{
-		ID: runID, Title: readViewRunTitle(runRoot), Provider: manifest.Provider, Project: projectName(manifest.CWD),
+		SessionGroup: viewSessionGroup(manifestRaw),
+		ID:           runID, Title: readViewRunTitle(runRoot), Provider: manifest.Provider, Project: projectName(manifest.CWD),
 		StartedAt: manifest.StartedAt, Exit: viewExitReason(manifest, result), WarningCount: manifest.WarningCount,
 		Failure: supervisorFailed(manifest, result), ProcessFailure: supervisorFailed(manifest, result), DurationMillis: summaryDurationMillis(manifest, result),
 	}
@@ -895,7 +902,8 @@ func newViewHandlerWithIdentity(root, initialRunID string, allowRun bool, identi
 		for _, run := range page.runs {
 			statusClass, statusLabel := viewRunStatusWithFailure(run.Exit, run.Verification, run.VerificationWarnings, run.Failure)
 			out = append(out, viewRunSummary{
-				ID: run.ID, Title: run.Title, Provider: run.Provider, Project: run.Project,
+				SessionGroup: run.SessionGroup,
+				ID:           run.ID, Title: run.Title, Provider: run.Provider, Project: run.Project,
 				StartedAt: run.StartedAt, Exit: run.Exit, Verification: run.Verification,
 				StatusClass: statusClass, StatusLabel: statusLabel, WarningCount: run.WarningCount + run.VerificationWarnings,
 				Failure: run.Failure, ProcessFailure: run.ProcessFailure, DurationMillis: run.DurationMillis,
