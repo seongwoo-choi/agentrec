@@ -505,3 +505,14 @@ A selected recorded request interval offers a native collapsed observation index
 - The run-wide independent verification link is explicitly not this request's verdict. Partial/open/error boundaries remain visible and are not upgraded to completeness by the index.
 - Expansion performs no data fetch. Keep disclosure/focus through safe rerenders, refresh bindings on snapshot/live updates, and hide the index and its ancillary controls immediately on scope exit or replacement. Expanded content has its own bounded scrolling area.
 - Acceptance: scoped projection and uncertainty regressions; duplicate/absent IDs and exact offsets; paging errors and stale bindings; four-language keyboard/responsive checks; actual recorded intervals and source-inspector agreement.
+
+## Loaded same-session records
+
+Planned stop/resume during ordinary test maintenance required two manual project/identity lookups to reach earlier recording windows. The Viewer now exposes other matching loaded records without combining their evidence or executing a resume command.
+
+- List and detail derive an optional opaque grouping hint from the same captured manifest bytes used for their decoded identity. Match exact recorded provider, session ID and canonical repository root, with session mode and cwd containment; never basename, empty identity, repaired Unicode or guessed paths.
+- Duplicate/case-ambiguous identity keys, malformed/unsupported identity and noncanonical paths leave linking unavailable while ordinary record readback retains its existing behavior. The hint is neither authentication nor proof of a causal resume edge.
+- Use only the already-loaded run list, retain its order, and show at most eight other matching records. Unloaded/unreadable/identity-incomplete records may exist; do not claim an exhaustive chain or nearest chronological predecessor.
+- Same-origin links contain only the target run, clearing prior action/change/request-scope parameters. No raw-record rewrite, token/cost/verification total, additional store scan, endpoint or polling loop.
+- Rebind after detail/snapshot/live/list updates and preserve safe disclosure/focus. Stale run/generation/group/snapshot or detached controls cannot navigate. Each record keeps its own outcomes.
+- Acceptance: public list/detail identity isolation, malformed/missing identity, no manifest mutation, loaded-list cap and neutral unknowns, locale/focus/stale refresh regressions, and two actual recorded transitions through the rendered Viewer.

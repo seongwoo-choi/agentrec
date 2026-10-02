@@ -8,6 +8,80 @@ const html = await readFile(new URL('index.html', here), 'utf8');
 const app = await readFile(new URL('app.js', here), 'utf8');
 const css = await readFile(new URL('app.css', here), 'utf8');
 
+test('same-session loaded links isolate identities and clear old scope', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.sessionGroup = 'opaque-group';
+  const base = { ...data.list.runs[0], sessionGroup: 'opaque-group' };
+  data.list.runs = [base, { ...base, id: 'peer', title: '<peer>' }, { ...base, id: 'wrong-provider', provider: 'codex' }, { ...base, id: 'wrong-group', sessionGroup: 'other' }, { ...base, id: 'unknown', sessionGroup: undefined }];
+  data.configure = (w) => w.history.replaceState(null, '', `/?run=${base.id}&scope=request&scopeStart=0&action=x&change=y`);
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document;
+  const links = [...d.querySelectorAll('#session-records a')];
+  assert.equal(links.length, 1);
+  assert.equal(links[0].textContent.includes('<peer>'), true);
+  assert.equal(new URL(links[0].href).search, '?run=peer');
+  assert.equal(new URL(links[0].href).origin, dom.window.location.origin);
+  assert.match(d.querySelector('#session-records').textContent, /loaded/i);
+});
+
+test('same-session cap partial pages locale focus and stale controls', async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.sessionGroup = 'g';
+  const base = { ...data.list.runs[0], sessionGroup: 'g' };
+  data.list = { runs: [base, ...Array.from({length: 10}, (_, i) => ({...base, id: `peer-${i}`}))], total: 99, nextCursor: 'more', generation: 'same' };
+  data.configure = (w) => { w.setInterval = (fn, ms) => { if (ms === 5000) poll = fn; return ms; }; w.clearInterval = () => {}; };
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const w = dom.window, d = w.document, panel = d.querySelector('#session-records');
+  assert.equal(panel.querySelectorAll('a').length, 8);
+  assert.equal(panel.open, false); panel.open = true;
+  const old = panel.querySelector('a'); old.focus();
+  for (const lang of ['ko', 'ja', 'zh-CN', 'en']) {
+    d.querySelector('#lang').value = lang; d.querySelector('#lang').dispatchEvent(new w.Event('change'));
+    assert.equal(panel.open, true); assert.equal(d.activeElement.dataset.runId, 'peer-0');
+    assert.equal(panel.querySelector('summary').textContent.includes('Same-session'), lang === 'en');
+  }
+  const detached = new w.MouseEvent('auxclick', {cancelable:true}); old.dispatchEvent(detached); assert.equal(detached.defaultPrevented, true);
+  data.list.runs = data.list.runs.map((row) => ({...row, sessionGroup: 'other'}));
+  await poll(); await settle();
+  assert.equal(panel.querySelectorAll('a').length, 0, 'identity-only polling changes remove peers');
+  assert.match(panel.textContent, /No matching records loaded/);
+  assert.equal(d.activeElement.id, 'session-records-summary');
+});
+
+for (const change of ['snapshot', 'identity']) test(`same-session refreshed detail keeps current links usable: ${change}`, async (t) => {
+  let poll;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.sessionGroup = 'group-before';
+  let details = data.details;
+  const base = { ...data.list.runs[0], sessionGroup: 'group-before' };
+  data.list.runs = [base, { ...base, id: 'peer', title: 'peer' }];
+  const dom = await renderFixture({ ...data, details: () => details, configure: (w) => {
+    w.history.replaceState(null, '', `/?run=${base.id}`);
+    w.setInterval = (fn, ms) => { if (ms === 5000) poll = fn; return ms; }; w.clearInterval = () => {};
+  } });
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const old = d.querySelector('#session-records a'); assert.ok(old);
+  const group = change === 'identity' ? 'group-after' : 'group-before';
+  details = { ...data.details, snapshotId: 'snapshot-after', run: { ...data.details.run, sessionGroup: group, warningCount: change === 'snapshot' ? 1 : 0 } };
+  data.list.runs = data.list.runs.map((r) => ({ ...r, sessionGroup: group, warningCount: r.id === base.id && change === 'snapshot' ? 1 : 0 }));
+  await poll(); await settle();
+  const fresh = d.querySelector('#session-records a'); assert.ok(fresh);
+  let blocked;
+  fresh.addEventListener('click', (event) => { blocked = event.defaultPrevented; event.preventDefault(); }, { once: true });
+  fresh.dispatchEvent(new w.MouseEvent('click', { cancelable: true }));
+  assert.equal(blocked, false, 'newly refreshed links must not remain bound to the old snapshot');
+  const stale = new w.MouseEvent('auxclick', { cancelable: true }); old.dispatchEvent(stale); assert.equal(stale.defaultPrevented, true);
+});
+
+test('same-session missing identity is neutral', async (t) => {
+  const dom = await renderFixture(fixture('completed', 'pass', 'PASS')); t.after(() => dom.window.close());
+  const panel = dom.window.document.querySelector('#session-records');
+  assert.match(panel.textContent, /Session identity unavailable/);
+  assert.equal(panel.querySelectorAll('a').length, 0);
+});
+
 const response = (body) => Promise.resolve({
   ok: true,
   status: 200,
@@ -245,6 +319,143 @@ test('request results: partial interval preserves accepted rows on paging error 
   d.querySelector('#timeline .load-more').click(); await settle();
   assert.doesNotMatch(panel.textContent, /outside|page unavailable/);
   assert.match(panel.textContent, /before recorded request 2/);
+});
+
+const shellObservations = (panel) => [...panel.querySelectorAll('ol.request-observations')[1].querySelectorAll('li')];
+
+test('resume maintenance: canonical result exits zero and nonzero keep raw status without request verdicts', async (t) => {
+  const dom = await requestResultsFixture([
+    { type: 'shell.exec', offset: 200, status: 'failed', input: { command: 'zero-exit' }, result: { exitCode: 0, stdout: 'PASS', aggregatedOutput: 'PASS verdict' } },
+    { type: 'shell.exec', offset: 300, status: 'completed', input: { command: 'nonzero-exit' }, result: { exitCode: 1 } },
+  ]);
+  t.after(() => dom.window.close());
+  const panel = dom.window.document.querySelector('#request-results');
+  const rows = shellObservations(panel);
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /zero-exit · Recorded status: failed · Recorded exit: 0 ·/);
+  assert.match(rows[1].textContent, /nonzero-exit · Recorded status: completed · Recorded exit: 1 ·/);
+  assert.doesNotMatch(panel.textContent, /Exit uncertain|Exit not recorded/);
+  assert.doesNotMatch(panel.textContent, /PASS|verdict/);
+});
+
+test('resume maintenance: canonical result exits missing null string and out-of-safe-range stay uncertain', async (t) => {
+  const dom = await requestResultsFixture([
+    { type: 'shell.exec', offset: 200, status: 'completed', input: { command: 'missing-exit' }, result: { stdout: 'PASS' } },
+    { type: 'shell.exec', offset: 300, status: 'timeout', input: { command: 'null-exit' }, result: { exitCode: null } },
+    { type: 'shell.exec', offset: 400, status: 'FaIlEd', input: { command: 'string-exit' }, result: { exitCode: '0' } },
+    { type: 'shell.exec', offset: 500, input: { command: 'range-exit' }, result: { exitCode: Number.MAX_SAFE_INTEGER + 2 } },
+  ]);
+  t.after(() => dom.window.close());
+  const panel = dom.window.document.querySelector('#request-results');
+  const rows = shellObservations(panel);
+  assert.equal(rows.length, 4);
+  assert.match(rows[0].textContent, /missing-exit · Recorded status: completed · Exit not recorded ·/);
+  assert.doesNotMatch(rows[0].textContent, /Exit uncertain/);
+  assert.match(rows[1].textContent, /null-exit · Recorded status: timeout · Exit not recorded · Exit uncertain ·/);
+  assert.match(rows[2].textContent, /string-exit · Recorded status: FaIlEd · Exit not recorded · Exit uncertain ·/);
+  assert.match(rows[3].textContent, /range-exit · Recorded status: Status not recorded · Exit not recorded · Exit uncertain ·/);
+  assert.doesNotMatch(panel.textContent, /Recorded exit:/);
+  assert.doesNotMatch(panel.textContent, /PASS|9007199254740992/);
+});
+
+test('resume maintenance: canonical result exits conflicting fields surface every exit and uncertainty', async (t) => {
+  const dom = await requestResultsFixture([
+    { type: 'shell.exec', offset: 200, status: 'completed', input: { command: 'conflicting-exit' }, result: { exitCode: 0, exit_code: 2 } },
+    { type: 'shell.exec', offset: 300, status: 'completed', input: { command: 'agreeing-exit' }, result: { exitCode: 3, exit_code: 3 } },
+    { type: 'shell.exec', offset: 400, status: 'failed', input: { command: 'mixed-exit' }, result: { exitCode: 4, exit_code: null } },
+  ]);
+  t.after(() => dom.window.close());
+  const panel = dom.window.document.querySelector('#request-results');
+  const rows = shellObservations(panel);
+  assert.equal(rows.length, 3);
+  assert.match(rows[0].textContent, /conflicting-exit · Recorded status: completed · Recorded exit: 0, 2 · Exit uncertain ·/);
+  assert.match(rows[1].textContent, /agreeing-exit · Recorded status: completed · Recorded exit: 3 ·/);
+  assert.doesNotMatch(rows[1].textContent, /Exit uncertain/);
+  assert.match(rows[2].textContent, /mixed-exit · Recorded status: failed · Recorded exit: 4 · Exit uncertain ·/);
+  assert.doesNotMatch(panel.textContent, /Exit not recorded|PASS/);
+});
+
+test('resume maintenance: same-request continuation extends loaded observations and exact offsets', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 2;
+  const second = { type: 'shell.exec', id: 's2', offset: 500, status: 'completed', input: { command: 'second-cmd' } };
+  const pages = {
+    100: { items: [
+      { type: 'user.prompt', id: 'p1', offset: 100, promptRank: 1, input: { prompt: 'first request' } },
+      { type: 'file.read', id: 'f1', offset: 200, input: { path: 'first-file.txt' } },
+      { type: 'shell.exec', id: 's1', offset: 300, status: 'completed', input: { command: 'first-cmd' } },
+    ], nextCursor: 400, endCursor: 400 },
+    400: { items: [
+      { type: 'file.write', id: 'f2', offset: 400, input: { path: 'second-file.txt' } },
+      second,
+    ], nextCursor: 600, endCursor: 600 },
+    600: { items: [
+      second,
+      { type: 'shell.exec', id: 's3', offset: 600, status: 'completed', input: { command: 'third-cmd' } },
+      { type: 'user.prompt', id: 'p2', offset: 700, promptRank: 2, input: { prompt: 'excluded next request' } },
+    ], nextCursor: null },
+  };
+  const dom = await requestResultsFixture([], { list: data.list, details: data.details, actions: (cursor) => pages[cursor] });
+  t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#request-results');
+  const offsets = () => [...panel.querySelectorAll('a')].map((a) => new URL(a.href).searchParams.get('actionCursor'));
+  const label = () => d.querySelector('#request-scope-label').textContent;
+  const loadMore = () => d.querySelector('#timeline .load-more');
+
+  assert.deepEqual(offsets(), ['200', '300']);
+  assert.match(panel.textContent, /File mentions · 1 shown \/ 1 loaded/);
+  assert.match(panel.textContent, /Shell observations · 1 shown \/ 1 loaded/);
+  assert.equal(label(), 'Recorded interval 1 of 2 · end not loaded yet.');
+  assert.ok(loadMore());
+
+  loadMore().click(); await settle();
+  assert.deepEqual(offsets(), ['200', '400', '300', '500']);
+  assert.match(panel.textContent, /File mentions · 2 shown \/ 2 loaded/);
+  assert.match(panel.textContent, /Shell observations · 2 shown \/ 2 loaded/);
+  assert.match(panel.textContent, /first-file\.txt/);
+  assert.match(panel.textContent, /second-file\.txt/);
+  assert.match(panel.textContent, /first-cmd/);
+  assert.match(panel.textContent, /second-cmd/);
+  assert.equal(label(), 'Recorded interval 1 of 2 · end not loaded yet.');
+  assert.ok(loadMore());
+
+  loadMore().click(); await settle();
+  assert.deepEqual(offsets(), ['200', '400', '300', '500', '600']);
+  assert.match(panel.textContent, /File mentions · 2 shown \/ 2 loaded/);
+  assert.match(panel.textContent, /Shell observations · 3 shown \/ 3 loaded/);
+  assert.match(panel.textContent, /third-cmd/);
+  assert.equal(label(), 'Recorded interval 1 of 2 · ends before recorded request 2.');
+  assert.equal(loadMore(), null);
+  assert.doesNotMatch(panel.textContent, /excluded next request|first request/);
+  assert.equal(offsets().includes('700'), false);
+  assert.equal(panel.querySelector('.stream-error'), null);
+});
+
+test('resume maintenance: exact repeated commands stay ordered distinct records and never read as retries', async (t) => {
+  const command = 'go test ./...';
+  const dom = await requestResultsFixture([
+    { type: 'shell.exec', id: 's1', offset: 200, status: 'failed', input: { command }, result: { exitCode: 1 } },
+    { type: 'shell.exec', id: 's2', offset: 300, status: 'failed', input: { command }, result: { exitCode: 2 } },
+    { type: 'shell.exec', id: 's3', offset: 400, status: 'completed', input: { command }, result: { exitCode: 0 } },
+  ]);
+  t.after(() => dom.window.close());
+  const panel = dom.window.document.querySelector('#request-results');
+  const rows = shellObservations(panel);
+  assert.equal(rows.length, 3);
+  assert.match(panel.textContent, /Shell observations · 3 shown \/ 3 loaded/);
+  assert.match(rows[0].textContent, /go test \.\/\.\.\. · Recorded status: failed · Recorded exit: 1 ·/);
+  assert.match(rows[1].textContent, /go test \.\/\.\.\. · Recorded status: failed · Recorded exit: 2 ·/);
+  assert.match(rows[2].textContent, /go test \.\/\.\.\. · Recorded status: completed · Recorded exit: 0 ·/);
+  assert.doesNotMatch(panel.textContent, /Exit uncertain|Exit not recorded/);
+  assert.doesNotMatch(panel.textContent, /retr|attempt|duplicate|repeat|same as/i);
+
+  const links = [...panel.querySelectorAll('a')];
+  assert.equal(links.length, 3);
+  assert.deepEqual(links.map((a) => new URL(a.href).searchParams.get('actionCursor')), ['200', '300', '400']);
+  assert.deepEqual(links.map((a) => new URL(a.href).searchParams.get('action')), ['s1', 's2', 's3']);
+  assert.equal(new Set(links.map((a) => a.href)).size, 3);
+  assert.deepEqual(links.map((a) => a.dataset.offset), ['200', '300', '400']);
+  for (const a of links) assert.equal(new URL(a.href).searchParams.get('scopeStart'), '100');
 });
 
 test('stored text requires explicit activation and renders literal recorded text', async (t) => {

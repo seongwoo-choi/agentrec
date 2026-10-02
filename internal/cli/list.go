@@ -25,6 +25,7 @@ const (
 
 // runSummary is one row of the run table.
 type runSummary struct {
+	SessionGroup         string
 	ID                   string
 	Title                string
 	Provider             string
