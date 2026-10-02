@@ -69,6 +69,47 @@ async function renderFixture({ list, details, actions = [], requests = [], chang
   return dom;
 }
 
+async function requestResultsFixture(extra = [], options = {}) {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.promptCount = 1;
+  return renderFixture({ ...data, actions: [
+    { type: 'user.prompt', id: 'prompt', offset: 100, promptRank: 1, input: { prompt: 'request' } }, ...extra,
+  ], configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&scope=request&scopeStart=100&actionCursor=100`), ...options });
+}
+
+test('request results: collapsed loaded-only observations and exact original anchors', async (t) => {
+  const dom = await requestResultsFixture([
+    { type: 'file.read', id: 'same', offset: 200, input: { path: '<b>one</b>' } },
+    { type: 'shell.exec', id: 'same', offset: 300, status: 'completed', input: { command: 'echo PASS' }, output: { stdout: 'PASS' } },
+    { type: 'shell.exec', offset: 400, status: 'failed', input: { command: 'false' }, output: { exitCode: 0 } },
+  ]);
+  t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#request-results');
+  assert.ok(panel && !panel.classList.contains('hidden'));
+  assert.equal(panel.tagName, 'DETAILS');
+  assert.equal(panel.open, false);
+  assert.match(panel.textContent, /Loaded observations only/);
+  assert.match(panel.textContent, /<b>one<\/b>/);
+  assert.equal(panel.querySelector('b'), null);
+  assert.match(panel.textContent, /Exit not recorded/);
+  assert.match(panel.textContent, /failed.*Recorded exit: 0/s);
+  const links = [...panel.querySelectorAll('a')];
+  assert.deepEqual(links.map((a) => new URL(a.href).searchParams.get('actionCursor')), ['200', '300', '400']);
+  for (const a of links) assert.equal(new URL(a.href).searchParams.get('scopeStart'), '100');
+  assert.equal(new URL(links[2].href).searchParams.has('action'), false);
+  const before = dom.window.__fetchPaths.length;
+  panel.open = true;
+  panel.querySelector('summary').focus();
+  await settle();
+  assert.equal(dom.window.__fetchPaths.length, before);
+  assert.equal(d.activeElement, panel.querySelector('summary'));
+  d.querySelector('#request-scope-exit').click();
+  assert.ok(panel.classList.contains('hidden'));
+  const event = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+  links[0].dispatchEvent(event);
+  assert.equal(event.defaultPrevented, true);
+});
+
 test('stored text requires explicit activation and renders literal recorded text', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const path = 'notes/[REDACTED:1] & new.txt';
