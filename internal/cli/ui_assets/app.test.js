@@ -77,6 +77,17 @@ async function requestResultsFixture(extra = [], options = {}) {
   ], configure: (w) => w.history.replaceState(null, '', `/?run=${data.details.run.id}&focus=actions&scope=request&scopeStart=100&actionCursor=100`), ...options });
 }
 
+test('request results: normalized file types and usable explicit paths only', async (t) => {
+  const dom = await requestResultsFixture([
+    { type: 'file.patch', offset: 200, input: { path: 'unrecognized-patch.txt' } },
+    { type: 'file.write', offset: 300, input: { path: '', file_path: 'recorded-file.txt' } },
+  ]);
+  t.after(() => dom.window.close());
+  const text = dom.window.document.querySelector('#request-results').textContent;
+  assert.doesNotMatch(text, /unrecognized-patch/);
+  assert.match(text, /recorded-file/);
+});
+
 test('request results: collapsed caveat and separate run verification stay visible', async (t) => {
   const dom = await requestResultsFixture([{ type: 'shell.exec', id: 'cmd', offset: 200, input: { command: 'false' } }]);
   t.after(() => dom.window.close());
