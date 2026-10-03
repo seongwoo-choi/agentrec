@@ -516,3 +516,12 @@ Planned stop/resume during ordinary test maintenance required two manual project
 - Same-origin links contain only the target run, clearing prior action/change/request-scope parameters. No raw-record rewrite, token/cost/verification total, additional store scan, endpoint or polling loop.
 - Rebind after detail/snapshot/live/list updates and preserve safe disclosure/focus. Stale run/generation/group/snapshot or detached controls cannot navigate. Each record keeps its own outcomes.
 - Acceptance: public list/detail identity isolation, malformed/missing identity, no manifest mutation, loaded-list cap and neutral unknowns, locale/focus/stale refresh regressions, and two actual recorded transitions through the rendered Viewer.
+
+## Provider errors
+
+Claude Code's `StopFailure` hook ends a turn that hit an API error (rate limit, authentication, billing...). Without it, a provider that never ran a turn left a prompt with no reply, indistinguishable from an unanswered turn.
+
+- Register `StopFailure` for Claude only; Codex documents no equivalent. File it as `provider.error`, status `failed`, provider-reported, with `error`, `errorDetails` and `message` verbatim and the turn id as `failure-<turn>`. Doubled deliveries within the duplicate window are filed once.
+- The run detail carries the last recorded `provider.error` (bounded per field) with exact position/offset. The Viewer shows it as a collapsed card beside the request: literal text, provider named, explicit that it is the provider's report and not a run verdict, with a link to the exact record.
+- No status, verification or exit-reason change; no retry/billing/limit inference; no reinterpretation of Codex prompts without replies. Historical records are unchanged.
+- Acceptance: registration and setup completion counts, recorder filing with verbatim fields and turn, detail projection with offset, literal/localized UI card and absence without errors.

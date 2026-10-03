@@ -86,6 +86,10 @@
       'Show message': '메시지 보기',
       'Hide message': '메시지 숨기기',
       'Open in timeline': '타임라인에서 열기',
+      'Provider error reported by {provider}': '{provider}가 보고한 프로바이더 오류',
+      "The provider's own report of a turn it could not complete; not a verdict on the run.": '완료하지 못한 턴에 대한 프로바이더 자체 보고이며, 실행 결과 판정이 아닙니다.',
+      'Details': '세부 정보',
+      'Message': '메시지',
       'Action {n} of {total} — the final recorded action': '액션 {n}/{total} — 기록된 마지막 액션',
       'Action {n} of {total} — {after} recorded after it': '액션 {n}/{total} — 이후 {after}개 더 기록됨',
       'Shown up to 64 KiB; the full message is in the action record.': '64 KiB까지만 표시됩니다. 전체 메시지는 액션 기록에 있습니다.',
@@ -500,6 +504,10 @@
       'Show message': 'メッセージを表示',
       'Hide message': 'メッセージを隠す',
       'Open in timeline': 'タイムラインで開く',
+      'Provider error reported by {provider}': '{provider} が報告したプロバイダーエラー',
+      "The provider's own report of a turn it could not complete; not a verdict on the run.": '完了できなかったターンについてのプロバイダー自身の報告であり、run の判定ではありません。',
+      'Details': '詳細',
+      'Message': 'メッセージ',
       'Action {n} of {total} — the final recorded action': 'アクション {n}/{total} — 記録された最後のアクション',
       'Action {n} of {total} — {after} recorded after it': 'アクション {n}/{total} — この後さらに {after} 件を記録',
       'Shown up to 64 KiB; the full message is in the action record.': '64 KiB まで表示しています。全文はアクションの記録にあります。',
@@ -914,6 +922,10 @@
       'Show message': '显示消息',
       'Hide message': '隐藏消息',
       'Open in timeline': '在时间线中打开',
+      'Provider error reported by {provider}': '{provider} 报告的提供方错误',
+      "The provider's own report of a turn it could not complete; not a verdict on the run.": '这是提供方对未能完成的轮次的自行报告，不是对本次运行的结论。',
+      'Details': '详情',
+      'Message': '消息',
       'Action {n} of {total} — the final recorded action': '操作 {n}/{total} — 记录的最后一个操作',
       'Action {n} of {total} — {after} recorded after it': '操作 {n}/{total} — 之后还记录了 {after} 个',
       'Shown up to 64 KiB; the full message is in the action record.': '最多显示 64 KiB；完整消息见操作记录。',
@@ -3643,6 +3655,34 @@ function shortID(id) {
     link.href = `?run=${encodeURIComponent(data.run.id)}&focus=actions&action=${encodeURIComponent(message.actionId)}&actionCursor=${message.offset || 0}`;
   }
 
+  // renderProviderError shows the provider's own last recorded provider.error
+  // (Claude Code StopFailure: rate limit, authentication, billing...) verbatim,
+  // with its position and a link to the record. It is a report, not a verdict.
+  let providerErrorRunId = '';
+  function renderProviderError() {
+    const data = state.run;
+    const card = $('provider-error');
+    const failure = data.providerError;
+    card.classList.toggle('hidden', !failure);
+    if (!failure) return;
+    if (providerErrorRunId !== data.run.id) card.open = false;
+    providerErrorRunId = data.run.id;
+    $('provider-error-label').textContent = t('Provider error reported by {provider}', { provider: data.run.provider || t('the agent') });
+    $('provider-error-code').textContent = failure.error || '';
+    $('provider-error-details').textContent = failure.errorDetails || '';
+    $('provider-error-details-row').classList.toggle('hidden', !failure.errorDetails);
+    $('provider-error-message').textContent = failure.message || '';
+    $('provider-error-message-row').classList.toggle('hidden', !failure.message);
+    const total = data.actionCount || 0;
+    $('provider-error-position').textContent = failure.position === total
+      ? t('Action {n} of {total} — the final recorded action', { n: failure.position, total })
+      : t('Action {n} of {total} — {after} recorded after it', { n: failure.position, total, after: total - failure.position });
+    const link = $('provider-error-link');
+    link.dataset.actionId = failure.actionId;
+    link.dataset.offset = String(failure.offset || 0);
+    link.href = `?run=${encodeURIComponent(data.run.id)}&focus=actions&action=${encodeURIComponent(failure.actionId)}&actionCursor=${failure.offset || 0}`;
+  }
+
   function recordingItem(label, value, tone = '') {
     const item = node('div', 'recording-status-item');
     item.append(node('div', 'recording-status-label', t(label)), node('div', `recording-status-value ${tone}`.trim(), value));
@@ -3695,6 +3735,7 @@ function shortID(id) {
     renderRequest();
     renderRequestIndex();
     renderReply();
+    renderProviderError();
     $('action-count').textContent = String(data.actionCount || 0);
     // A language switch re-renders the run without refetching its streams:
     // a change count already loaded is kept, not zeroed.
@@ -5403,6 +5444,12 @@ function shortID(id) {
     if (ownsFocus && (document.activeElement === exit || document.activeElement === document.body)) {
       $('timeline-tab-actions').focus({ preventScroll: true });
     }
+  });
+  $('provider-error-link').addEventListener('click', (event) => {
+    event.preventDefault();
+    const { actionId, offset } = event.currentTarget.dataset;
+    if (!actionId || !state.run) return;
+    navigateRun(state.run.run.id, Number(offset), 'push', '', actionId);
   });
   $('reply-action-link').addEventListener('click', (event) => {
     event.preventDefault();

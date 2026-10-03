@@ -345,7 +345,7 @@ func TestSetupAddsTheStopHookToAnOlderInstallation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, stdout, _ := run(t, "status"); !strings.Contains(stdout, "hooks installed for 5 of 6 events") {
+	if _, stdout, _ := run(t, "status"); !strings.Contains(stdout, "hooks installed for 6 of 7 events") {
 		t.Errorf("status before the upgrade:\n%s", stdout)
 	}
 	code, stdout, stderr := run(t, "setup", "--claude")
@@ -389,7 +389,7 @@ func TestStatusSeparatesHookConfigurationFromEventReceipt(t *testing.T) {
 		t.Fatalf("status exit %d: %s", code, stderr)
 	}
 	for _, want := range []string{
-		"claude    hook configuration partial (5 of 6 events)",
+		"claude    hook configuration partial (6 of 7 events)",
 		"agentrec setup --claude",
 		"configuration does not prove event receipt",
 		"codex     hook configuration unreadable",

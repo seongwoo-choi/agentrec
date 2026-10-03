@@ -39,7 +39,7 @@
 不同的观察者获得，证据包会将它们明确区分开来。因此，无论是代码审查、事故调查、工作
 交接，还是决定是否信任新版智能体，都能从实际观察到的事实出发，而不是从一份摘要出发。
 
-[发布说明](docs/releases/v0.20.0.md) ·
+[发布说明](docs/releases/v0.21.0.md) ·
 [设计笔记](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 证据](docs/dogfood/2026-07-28-evidence.md) ·
@@ -60,14 +60,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.20.0_darwin_arm64.tar.gz
+archive=agentrec_0.21.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.20.0_darwin_arm64/agentrec version
+./agentrec_0.21.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.20.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.21.0
 ```
 
 每个版本附带 `darwin_amd64`、`darwin_arm64`、`linux_amd64`、`linux_arm64` 四个归档包和一个
@@ -184,6 +184,11 @@ agentrec events latest --json
 
 Codex 不发送 `PostToolUseFailure`，因此失败的命令表现为一条响应中写明失败的已完成操作；
 其 `apply_patch` 编辑在补丁头中写明文件。会话禁用的钩子留下的是空缺，而不是"不存在"。
+
+当 Claude Code 因 API 错误（用量上限、认证、计费）结束某一轮时，其 `StopFailure` 钩子会被
+记录为 `provider.error`，原样保留提供方的错误代码和消息，并在运行详情中显示在请求旁边。
+Codex 没有这类钩子：未能运行的一轮只会留下一条没有回复的请求。要为现有安装补上该钩子，
+请重新运行 `agentrec setup`。
 
 ## 命令
 
@@ -319,7 +324,7 @@ agentrec 不主张的事：
 
 ## 文档
 
-- [发布说明](docs/releases/) — 每个版本一个文件，最新为 [v0.20.0](docs/releases/v0.20.0.md)
+- [发布说明](docs/releases/) — 每个版本一个文件，最新为 [v0.21.0](docs/releases/v0.21.0.md)
 - [Flight recorder 设计](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner 设计](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 证据——记录器](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [Viewer 设计契约](DESIGN.md) · [第三方声明](THIRD_PARTY_NOTICES.md)
@@ -334,7 +339,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.20.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.21.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` 只在本地构建归档，不发布任何东西。`release.yml` 在 `v*.*.*` 标签上

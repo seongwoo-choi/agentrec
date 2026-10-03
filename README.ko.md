@@ -40,7 +40,7 @@
 이를 섞지 않습니다. 그래서 코드 리뷰, 장애 조사, 인수인계, 새 에이전트 버전을
 믿을지에 대한 판단이 요약이 아니라 관측된 사실에서 출발합니다.
 
-[릴리스 노트](docs/releases/v0.20.0.md) ·
+[릴리스 노트](docs/releases/v0.21.0.md) ·
 [설계 노트](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood 증거](docs/dogfood/2026-07-28-evidence.md) ·
@@ -62,14 +62,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.20.0_darwin_arm64.tar.gz
+archive=agentrec_0.21.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.20.0_darwin_arm64/agentrec version
+./agentrec_0.21.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.20.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.21.0
 ```
 
 릴리스마다 `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64` 아카이브와
@@ -194,6 +194,11 @@ agentrec events latest --json
 Codex는 `PostToolUseFailure`를 보내지 않으므로 실패한 명령은 응답에 실패가 적힌
 완료 액션으로 나타나고, `apply_patch` 편집은 패치 헤더에 파일을 적습니다. 세션이
 비활성화한 훅은 공백을 남기지, 없었던 것이 되지 않습니다.
+
+Claude Code가 API 오류(사용량 한도, 인증, 결제)로 턴을 끝내면 `StopFailure` 훅이
+프로바이더의 오류 코드와 메시지를 그대로 담은 `provider.error`로 기록되고, 실행 상세에서
+요청 옆에 표시됩니다. Codex에는 이런 훅이 없어서, 실행하지 못한 턴은 응답 없는
+요청으로만 남습니다. 기존 설치에 훅을 추가하려면 `agentrec setup`을 다시 실행하세요.
 
 ## 명령
 
@@ -337,7 +342,7 @@ agentrec이 주장하지 않는 것:
 
 ## 문서
 
-- [릴리스 노트](docs/releases/) — 릴리스마다 파일 하나, 최신은 [v0.20.0](docs/releases/v0.20.0.md)
+- [릴리스 노트](docs/releases/) — 릴리스마다 파일 하나, 최신은 [v0.21.0](docs/releases/v0.21.0.md)
 - [Flight recorder 설계](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner 설계](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood 증거 — 레코더](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [뷰어 설계 계약](DESIGN.md) · [서드파티 고지](THIRD_PARTY_NOTICES.md)
@@ -352,7 +357,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.20.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.21.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh`는 아카이브를 로컬에서 만들 뿐 아무것도 배포하지 않습니다.

@@ -30,7 +30,7 @@ const (
 // every source, tool or reason. Codex has no PostToolUseFailure: a command
 // that failed arrives as a PostToolUse whose response says so.
 var hookEvents = map[string][]string{
-	"claude": {hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookPostToolUseFailure, hookStop, hookSessionEnd},
+	"claude": {hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookPostToolUseFailure, hookStop, hookStopFailure, hookSessionEnd},
 	"codex":  {hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookStop, hookSessionEnd},
 }
 

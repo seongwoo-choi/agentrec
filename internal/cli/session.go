@@ -98,7 +98,10 @@ const (
 	hookPostToolUse        = "PostToolUse"
 	hookPostToolUseFailure = "PostToolUseFailure"
 	hookStop               = "Stop"
-	hookSessionEnd         = "SessionEnd"
+	// StopFailure (Claude Code only) ends a turn on an API error — rate
+	// limit, authentication, billing — instead of Stop.
+	hookStopFailure = "StopFailure"
+	hookSessionEnd  = "SessionEnd"
 )
 
 // Action lifecycle statuses, in the vocabulary the stream parsers use.
@@ -132,6 +135,8 @@ type hookEnvelope struct {
 	ToolUseID            string          `json:"tool_use_id"`
 	DurationMs           *int64          `json:"duration_ms"`
 	Error                string          `json:"error"`
+	// ErrorDetails is StopFailure's provider-supplied detail for Error.
+	ErrorDetails string `json:"error_details"`
 	// AgentID and AgentType are set on hooks a subagent's tool calls fire. They
 	// arrive under the parent's session_id, so without them a subagent's write
 	// would read as the operator-facing agent's.
@@ -751,6 +756,8 @@ func (s *sessionRecorder) take(d delivery) (ended bool) {
 		s.recordText(env, dropped, d.at)
 	case hookStop:
 		s.recordText(env, dropped, d.at)
+	case hookStopFailure:
+		s.recordFailure(env, dropped, d.at)
 	case hookPostToolUse, hookPostToolUseFailure:
 		s.recordAction(env, dropped, d.at)
 	case hookSessionEnd:
@@ -916,6 +923,50 @@ func (s *sessionRecorder) recordText(env hookEnvelope, dropped string, at time.T
 		AgentID:        env.AgentID,
 		AgentType:      env.AgentType,
 		Dropped:        dropped,
+	})
+}
+
+// recordFailure files a turn the provider ended on an API error (Claude Code's
+// StopFailure) as that provider's error: its error type, details and message,
+// verbatim, under the turn. It says the provider failed the turn, nothing about
+// the repository or the work.
+func (s *sessionRecorder) recordFailure(env hookEnvelope, dropped string, at time.Time) {
+	turn := env.PromptID
+	if turn == "" {
+		turn = env.TurnID
+	}
+	if !s.first(env.HookEventName+":"+turn+":"+env.Error+":"+env.ErrorDetails, duplicateDeliveryWindow, at) {
+		return
+	}
+	s.actions++
+	id := fmt.Sprintf("hook-%d", s.actions)
+	if turn != "" {
+		id = "failure-" + turn
+		if !s.first("id:"+id, 0, at) {
+			id = fmt.Sprintf("%s-%d", id, s.actions)
+		}
+	}
+	input := map[string]string{}
+	if dropped == "" {
+		input = map[string]string{"error": env.Error, "errorDetails": env.ErrorDetails, "message": env.LastAssistantMessage}
+	}
+	raw, _ := json.Marshal(input)
+	now := time.Now()
+	s.fileAction(action.Action{
+		ID:         id,
+		Type:       action.TypeProviderError,
+		Provider:   s.provider,
+		Assurance:  action.AssuranceProviderReported,
+		StartedAt:  now,
+		FinishedAt: now,
+		Status:     hookStatusFailed,
+		Input:      raw,
+	}, hookActionResult{
+		Source:    "hook." + env.HookEventName,
+		Turn:      turn,
+		AgentID:   env.AgentID,
+		AgentType: env.AgentType,
+		Dropped:   dropped,
 	})
 }
 

@@ -896,7 +896,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	}
 	snapshot.actionPromptRanks = scan.promptRanks
 	snapshot.promptOffsets = scan.promptOffsets
-	actionCount, lastMessage, promptCount := scan.count, scan.last, scan.prompts
+	actionCount, lastMessage, promptCount, providerError := scan.count, scan.last, scan.prompts, scan.providerError
 	eventCount := 0
 	if snapshot.events != nil {
 		eventCount, err = countViewEventsContext(ctx, snapshot.events, snapshot.eventSize)
@@ -937,6 +937,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 		ActionCount:      actionCount,
 		EventCount:       eventCount,
 		LastAgentMessage: lastMessage,
+		ProviderError:    providerError,
 		PromptCount:      promptCount,
 		Run: viewRunInfo{
 			SessionGroup: viewSessionGroup(manifestRaw),
@@ -1235,6 +1236,10 @@ func countViewActionsContext(ctx context.Context, file *os.File, size int64) (in
 // agent message; the full record stays in the action stream.
 const viewLastMessageMaxBytes = 64 * 1024
 
+// viewProviderErrorMaxBytes bounds each provider error field the detail carries;
+// the full record stays in the action.
+const viewProviderErrorMaxBytes = 4 * 1024
+
 // viewActionScan is what one pass over actions.jsonl yields for the run detail.
 type viewActionScan struct {
 	count         int
@@ -1242,6 +1247,7 @@ type viewActionScan struct {
 	promptRanks   map[int64]int
 	promptOffsets []int64
 	last          *viewLastAgentMessage
+	providerError *viewProviderError
 }
 
 // scanViewActionsContext counts the recorded actions and the user.prompt
@@ -1256,6 +1262,7 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 	promptRanks := make(map[int64]int)
 	promptOffsets := make([]int64, 0)
 	var last *viewLastAgentMessage
+	var providerError *viewProviderError
 	// Track each line's start the way readViewActionPage does, so the offset is
 	// a cursor the page endpoint accepts.
 	position := int64(0)
@@ -1284,6 +1291,18 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 			promptRanks[lineStart] = prompts
 			promptOffsets = append(promptOffsets, lineStart)
 		}
+		if item.Type == action.TypeProviderError {
+			var input struct {
+				Error        string `json:"error"`
+				ErrorDetails string `json:"errorDetails"`
+				Message      string `json:"message"`
+			}
+			// Unreadable input still names where the error sits; the fields stay empty.
+			_ = json.Unmarshal(item.Input, &input)
+			bound := func(v string) string { text, _ := boundUTF8(v, viewProviderErrorMaxBytes); return text }
+			providerError = &viewProviderError{ActionID: item.ID, Position: count, Offset: lineStart,
+				Error: bound(input.Error), ErrorDetails: bound(input.ErrorDetails), Message: bound(input.Message)}
+		}
 		if item.Type == action.TypeAgentMessage {
 			var input struct {
 				Text string `json:"text"`
@@ -1301,7 +1320,7 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 	if err := scanner.Err(); err != nil {
 		return viewActionScan{}, fmt.Errorf("cli: read %s: %w", actionsFile, err)
 	}
-	return viewActionScan{count: count, prompts: prompts, promptRanks: promptRanks, promptOffsets: promptOffsets, last: last}, nil
+	return viewActionScan{count: count, prompts: prompts, promptRanks: promptRanks, promptOffsets: promptOffsets, last: last, providerError: providerError}, nil
 }
 
 // splitViewLines keeps a trailing carriage return in the token so callers that

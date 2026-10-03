@@ -189,7 +189,10 @@ type viewRunResponse struct {
 	// verbatim and bounded; absent when the run has none. It is a record, not
 	// a summary or a verdict.
 	LastAgentMessage *viewLastAgentMessage `json:"lastAgentMessage,omitempty"`
-	PromptCount      int                   `json:"promptCount"` // user.prompt actions in the record
+	// ProviderError is the last recorded provider.error, verbatim and bounded;
+	// absent when the run has none. It is the provider's report, not a verdict.
+	ProviderError *viewProviderError `json:"providerError,omitempty"`
+	PromptCount   int                `json:"promptCount"` // user.prompt actions in the record
 }
 
 type viewRecordingStatus struct {
@@ -282,6 +285,15 @@ func sessionRecorderActive(socket, sessionID string) bool {
 		return false
 	}
 	return probeSession(socket, sessionID, sessionProbeTimeout) == nil
+}
+
+type viewProviderError struct {
+	ActionID     string `json:"actionId"`
+	Position     int    `json:"position"`
+	Offset       int64  `json:"offset"`
+	Error        string `json:"error"`
+	ErrorDetails string `json:"errorDetails"`
+	Message      string `json:"message"`
 }
 
 type viewLastAgentMessage struct {
