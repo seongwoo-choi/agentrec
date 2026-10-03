@@ -1299,9 +1299,15 @@ func scanViewActionsContext(ctx context.Context, file *os.File, size int64) (vie
 			}
 			// Unreadable input still names where the error sits; the fields stay empty.
 			_ = json.Unmarshal(item.Input, &input)
-			bound := func(v string) string { text, _ := boundUTF8(v, viewProviderErrorMaxBytes); return text }
+			cut := false
+			bound := func(v string) string {
+				text, truncated := boundUTF8(v, viewProviderErrorMaxBytes)
+				cut = cut || truncated
+				return text
+			}
 			providerError = &viewProviderError{ActionID: item.ID, Position: count, Offset: lineStart,
 				Error: bound(input.Error), ErrorDetails: bound(input.ErrorDetails), Message: bound(input.Message)}
+			providerError.Truncated = cut
 		}
 		if item.Type == action.TypeAgentMessage {
 			var input struct {

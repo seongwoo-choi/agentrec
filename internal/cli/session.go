@@ -946,7 +946,9 @@ func (s *sessionRecorder) recordFailure(env hookEnvelope, dropped string, at tim
 			id = fmt.Sprintf("%s-%d", id, s.actions)
 		}
 	}
-	input := map[string]string{}
+	// The code is a short provider enum, kept even when the payload's bulk was
+	// dropped; details and message go with the payload.
+	input := map[string]string{"error": bounded(env.Error, droppedFieldLimit)}
 	if dropped == "" {
 		input = map[string]string{"error": env.Error, "errorDetails": env.ErrorDetails, "message": env.LastAssistantMessage}
 	}

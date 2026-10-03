@@ -89,6 +89,7 @@
       'Provider error reported by {provider}': '{provider}가 보고한 프로바이더 오류',
       "The provider's own report of a turn it could not complete; not a verdict on the run.": '완료하지 못한 턴에 대한 프로바이더 자체 보고이며, 실행 결과 판정이 아닙니다.',
       'Details': '세부 정보',
+      'Shown up to 4 KiB per field; the full report is in the action record.': '필드마다 4 KiB까지만 표시합니다. 전체 보고는 액션 기록에 있습니다.',
       'Message': '메시지',
       'Action {n} of {total} — the final recorded action': '액션 {n}/{total} — 기록된 마지막 액션',
       'Action {n} of {total} — {after} recorded after it': '액션 {n}/{total} — 이후 {after}개 더 기록됨',
@@ -507,6 +508,7 @@
       'Provider error reported by {provider}': '{provider} が報告したプロバイダーエラー',
       "The provider's own report of a turn it could not complete; not a verdict on the run.": '完了できなかったターンについてのプロバイダー自身の報告であり、run の判定ではありません。',
       'Details': '詳細',
+      'Shown up to 4 KiB per field; the full report is in the action record.': '各フィールドは 4 KiB まで表示します。完全な報告はアクション記録にあります。',
       'Message': 'メッセージ',
       'Action {n} of {total} — the final recorded action': 'アクション {n}/{total} — 記録された最後のアクション',
       'Action {n} of {total} — {after} recorded after it': 'アクション {n}/{total} — この後さらに {after} 件を記録',
@@ -925,6 +927,7 @@
       'Provider error reported by {provider}': '{provider} 报告的提供方错误',
       "The provider's own report of a turn it could not complete; not a verdict on the run.": '这是提供方对未能完成的轮次的自行报告，不是对本次运行的结论。',
       'Details': '详情',
+      'Shown up to 4 KiB per field; the full report is in the action record.': '每个字段最多显示 4 KiB；完整报告在操作记录中。',
       'Message': '消息',
       'Action {n} of {total} — the final recorded action': '操作 {n}/{total} — 记录的最后一个操作',
       'Action {n} of {total} — {after} recorded after it': '操作 {n}/{total} — 之后还记录了 {after} 个',
@@ -3673,6 +3676,7 @@ function shortID(id) {
     $('provider-error-details-row').classList.toggle('hidden', !failure.errorDetails);
     $('provider-error-message').textContent = failure.message || '';
     $('provider-error-message-row').classList.toggle('hidden', !failure.message);
+    $('provider-error-truncated').classList.toggle('hidden', !failure.truncated);
     const total = data.actionCount || 0;
     $('provider-error-position').textContent = failure.position === total
       ? t('Action {n} of {total} — the final recorded action', { n: failure.position, total })

@@ -294,7 +294,7 @@ var detailKeys = map[string][]string{
 	action.TypeWebFetch:      {"url"},
 	action.TypeMCPCall:       {"tool", "name"},
 	action.TypeSubagentSpawn: {"name"},
-	action.TypeProviderError: {"message"},
+	action.TypeProviderError: {"message", "errorDetails", "error"},
 	action.TypeUserPrompt:    {"prompt"},
 	action.TypeAgentMessage:  {"text"},
 }

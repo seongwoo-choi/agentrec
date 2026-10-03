@@ -294,6 +294,8 @@ type viewProviderError struct {
 	Error        string `json:"error"`
 	ErrorDetails string `json:"errorDetails"`
 	Message      string `json:"message"`
+	// Truncated says a field was cut at the detail bound; the action holds all of it.
+	Truncated bool `json:"truncated"`
 }
 
 type viewLastAgentMessage struct {
