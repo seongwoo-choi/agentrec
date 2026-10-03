@@ -896,7 +896,7 @@ func TestHooksPrintEmitsTheClaudeSettingsFragment(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &settings); err != nil {
 		t.Fatalf("stdout is not a settings fragment: %v\n%s", err, stdout)
 	}
-	for _, event := range []string{hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookPostToolUseFailure, hookStop, hookSessionEnd} {
+	for _, event := range []string{hookSessionStart, hookUserPromptSubmit, hookPostToolUse, hookPostToolUseFailure, hookStop, hookStopFailure, hookSessionEnd} {
 		groups := settings.Hooks[event]
 		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
 			t.Fatalf("%s: groups = %+v, want one command", event, groups)
@@ -906,8 +906,8 @@ func TestHooksPrintEmitsTheClaudeSettingsFragment(t *testing.T) {
 			t.Errorf("%s: hook = %+v", event, h)
 		}
 	}
-	if len(settings.Hooks) != 6 {
-		t.Errorf("events = %d, want 6", len(settings.Hooks))
+	if len(settings.Hooks) != 7 {
+		t.Errorf("events = %d, want 7", len(settings.Hooks))
 	}
 	if !strings.Contains(stderr, "next session") {
 		t.Errorf("stderr = %q, want the note that open sessions are not recorded", stderr)

@@ -300,6 +300,22 @@ func TestProviderErrorMessageIsVisibleAsBoundedActionDetail(t *testing.T) {
 	}
 }
 
+// A Claude StopFailure may carry no message; its details or error code still
+// say why the turn failed.
+func TestProviderErrorWithoutMessageShowsDetailsThenCode(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{`{"error":"rate_limit","errorDetails":"429 Too Many Requests","message":""}`, "429 Too Many Requests"},
+		{`{"error":"authentication_failed","errorDetails":"","message":""}`, "authentication_failed"},
+	} {
+		report := Report{Actions: []action.Action{{Type: action.TypeProviderError, Status: "failed", Input: json.RawMessage(tc.input)}}}
+		for _, got := range []string{renderTerminal(t, report), renderMarkdown(t, report)} {
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("rendering =\n%s\nwant %q", got, tc.want)
+			}
+		}
+	}
+}
+
 // What a report says is only as good as which source is being quoted, so the
 // four sources are named apart from one another, in the same order, in both
 // renderings — never merged into one verdict about the run.

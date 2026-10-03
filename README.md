@@ -41,7 +41,7 @@ Each comes from a different observer and the bundle keeps them apart — so a co
 review, an incident investigation, a handoff, or a decision to trust a new agent
 version starts from what was observed rather than from a summary.
 
-[Release notes](docs/releases/v0.20.0.md) ·
+[Release notes](docs/releases/v0.21.0.md) ·
 [Design notes](docs/plans/2026-07-27-agentrec-flight-recorder.md) ·
 [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md) ·
 [Dogfood evidence](docs/dogfood/2026-07-28-evidence.md) ·
@@ -63,14 +63,14 @@ agentrec version
 ```
 
 ```sh
-archive=agentrec_0.20.0_darwin_arm64.tar.gz
+archive=agentrec_0.21.0_darwin_arm64.tar.gz
 awk -v file="$archive" '$2 == file { print }' SHA256SUMS | shasum -a 256 -c -
 tar -xzf "$archive"
-./agentrec_0.20.0_darwin_arm64/agentrec version
+./agentrec_0.21.0_darwin_arm64/agentrec version
 ```
 
 ```sh
-go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.20.0
+go install github.com/seongwoo-choi/agentrec/cmd/agentrec@v0.21.0
 ```
 
 Each release carries `darwin_amd64`, `darwin_arm64`, `linux_amd64` and
@@ -202,6 +202,13 @@ A completed shell action without a reported integer exit code is shown as
 Codex sends no `PostToolUseFailure`, so a failed command appears as a completed
 action whose response says so; its `apply_patch` edits name their files in the
 patch headers. A hook the session disabled leaves a gap, not an absence.
+
+When Claude Code ends a turn on an API error (rate limit, authentication,
+billing), its `StopFailure` hook is filed as a `provider.error` with the
+provider's error code and message verbatim, and the run detail shows it beside
+the request. Codex has no such hook: a turn it could not run shows only a
+prompt without a reply. Run `agentrec setup` again to add the hook to an
+existing installation.
 
 ## Commands
 
@@ -349,7 +356,7 @@ wait in `trash/`. `AGENTREC_HOME` must lie outside the repository being recorded
 
 ## Documentation
 
-- [Release notes](docs/releases/) — one file per release, latest [v0.20.0](docs/releases/v0.20.0.md)
+- [Release notes](docs/releases/) — one file per release, latest [v0.21.0](docs/releases/v0.21.0.md)
 - [Flight recorder design](docs/plans/2026-07-27-agentrec-flight-recorder.md) · [Shadow runner design](docs/plans/2026-07-29-shadow-runner.md)
 - [Dogfood evidence — recorder](docs/dogfood/2026-07-28-evidence.md) · [shadow run](docs/dogfood/2026-07-29-shadow-evidence.md)
 - [Viewer design contract](DESIGN.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
@@ -364,7 +371,7 @@ go test -race ./... -count=1 -timeout=600s
 go vet ./...
 gofmt -l .
 go build ./...
-scripts/build-release.sh v0.20.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
+scripts/build-release.sh v0.21.0 "$(git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" dist
 ```
 
 `scripts/build-release.sh` builds the archives locally and publishes nothing.
