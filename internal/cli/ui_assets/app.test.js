@@ -7034,6 +7034,19 @@ test('provider error: absent without one, and localized', async (t) => {
   assert.match(d.querySelector('#provider-error summary').textContent, /[가-힣]/);
   assert.match(d.querySelector('#provider-error summary').textContent, /rate_limit/, 'the provider\'s error code stays verbatim');
   assert.equal(d.querySelector('#provider-error-details-row').classList.contains('hidden'), true, 'empty details are not shown as blank facts');
+  assert.equal(d.querySelector('#provider-error-truncated').classList.contains('hidden'), true, 'an uncut report claims no cut');
+});
+
+test('provider error: a cut report says so', async (t) => {
+  const data = fixture('session_ended', '', 'NOT RUN');
+  data.details.actionCount = 1;
+  data.details.providerError = { actionId: 'f', position: 1, offset: 0, error: 'rate_limit', errorDetails: 'long…', message: '', truncated: true };
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const note = dom.window.document.querySelector('#provider-error-truncated');
+  assert.ok(note, 'a truncation note exists');
+  assert.equal(note.classList.contains('hidden'), false);
+  assert.match(note.textContent, /full report is in the action record/i);
 });
 
 test('truncated last message says so and is localized', async (t) => {

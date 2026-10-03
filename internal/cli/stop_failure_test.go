@@ -144,3 +144,74 @@ func TestViewRunDetailCarriesLastProviderError(t *testing.T) {
 		t.Errorf("run without provider errors must omit providerError, got %s", *without.ProviderError)
 	}
 }
+
+// A field longer than the detail bound is cut at a character boundary and the
+// detail says so, so a shortened report is never read as the whole of it.
+func TestViewProviderErrorSaysWhenItIsCut(t *testing.T) {
+	root := home(t)
+	startedAt := time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)
+	const runID = "20261003T090000.000000000Z-cccccccc"
+	b, err := storage.Create(root, runID, storage.Manifest{Provider: "claude", CWD: "/tmp", StartedAt: startedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("é", viewProviderErrorMaxBytes)
+	input, _ := json.Marshal(map[string]string{"error": "rate_limit", "errorDetails": long, "message": "short"})
+	if err := b.WriteAction(action.Action{ID: "failure-1", Type: action.TypeProviderError, Provider: "claude",
+		Assurance: action.AssuranceProviderReported, StartedAt: startedAt, Status: "failed", Input: input}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Finalize(storage.Finalization{EndedAt: startedAt.Add(time.Second), ExitReason: "session_ended"}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newViewHandler(root, "latest", false)
+	t.Cleanup(func() { _ = handler.Close() })
+	var detail struct {
+		ProviderError *struct {
+			ErrorDetails string `json:"errorDetails"`
+			Message      string `json:"message"`
+			Truncated    bool   `json:"truncated"`
+		} `json:"providerError"`
+	}
+	viewJSONRequest(t, handler, "/api/runs/"+runID, &detail)
+	pe := detail.ProviderError
+	if pe == nil || !pe.Truncated || len(pe.ErrorDetails) > viewProviderErrorMaxBytes || !strings.HasPrefix(long, pe.ErrorDetails) || pe.Message != "short" {
+		t.Fatalf("providerError = %+v, want details cut at a character boundary and marked truncated", pe)
+	}
+}
+
+// A StopFailure whose payload was too large to keep still says which error it
+// was: the code is a short provider enum, not bulk.
+func TestSessionServeKeepsStopFailureCodeWhenPayloadIsDropped(t *testing.T) {
+	root := home(t)
+	repo := cleanRepo(t)
+	sessionSocketHome(t)
+	const sessionID = "session-stop-failure-dropped"
+
+	socket, done, stderr := serveInProcess(t, sessionID, repo)
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionStart, map[string]any{"source": "startup"}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, "StopFailure", map[string]any{
+		"prompt_id":              "p-1",
+		"error":                  "server_error",
+		"error_details":          strings.Repeat("x", storage.MaxStreamLineBytes),
+		"last_assistant_message": "API Error: 500",
+	}))
+	deliver(t, socket, sessionEvent(t, sessionID, repo, hookSessionEnd, map[string]any{"reason": "other"}))
+	if code := waitExit(t, done); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	actions := readActionsFile(t, onlyRunDir(t, root))
+	if len(actions) != 1 || actions[0].Type != action.TypeProviderError {
+		t.Fatalf("actions = %+v, want the provider error filed despite the dropped payload", actions)
+	}
+	var input map[string]string
+	if err := json.Unmarshal(actions[0].Input, &input); err != nil || input["error"] != "server_error" {
+		t.Errorf("dropped failure input = %s (%v), want the error code kept", actions[0].Input, err)
+	}
+	if len(input["errorDetails"]) > 0 {
+		t.Errorf("dropped failure kept %d bytes of details, want none", len(input["errorDetails"]))
+	}
+	if !strings.Contains(string(actions[0].Result), `"dropped"`) {
+		t.Errorf("dropped failure result = %s, want the drop stated", actions[0].Result)
+	}
+}
