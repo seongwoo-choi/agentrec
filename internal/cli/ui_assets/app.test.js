@@ -82,6 +82,155 @@ test('same-session missing identity is neutral', async (t) => {
   assert.equal(panel.querySelectorAll('a').length, 0);
 });
 
+test('session gaps: an appended run page discloses its same-session peer exactly once', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.sessionGroup = 'appended-group';
+  const base = { ...data.list.runs[0], sessionGroup: 'appended-group' };
+  // The first page carries the selected run alone; the peer only arrives with the continuation page.
+  data.list = { runs: [base], total: 2, nextCursor: 'page-two', generation: 'same', unreadable: 0 };
+  const appended = { ...base, id: 'appended-peer', title: 'appended peer' };
+  const dom = await renderFixture({ ...data,
+    configure: (w) => w.history.replaceState(null, '', `/?run=${base.id}&scope=request&scopeStart=0&actionCursor=0`),
+    // The continuation page repeats the already loaded selected run: neither row may yield a second link.
+    intercept: (url) => url.pathname === '/api/runs' && url.searchParams.get('cursor') === 'page-two'
+      ? response({ runs: [base, appended], total: 2, nextCursor: '', generation: 'same', unreadable: 0 }) : null,
+  });
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document, panel = d.querySelector('#session-records');
+  assert.equal(panel.querySelectorAll('a').length, 0);
+  assert.match(panel.textContent, /No matching records loaded/);
+  panel.open = true;
+
+  const more = d.querySelector('#run-load-more');
+  assert.equal(more.classList.contains('hidden'), false);
+  more.click(); await settle();
+
+  assert.deepEqual(runIDs(d), [base.id, appended.id]);
+  assert.equal(panel.open, true, 'an append must not collapse the open disclosure');
+  const links = [...panel.querySelectorAll('a')];
+  assert.equal(links.length, 1, 'the appended peer appears once and the selected run never links to itself');
+  assert.equal(links[0].dataset.runId, appended.id);
+  assert.equal(links[0].textContent, 'appended peer');
+  assert.equal(new URL(links[0].href).search, '?run=appended-peer', 'the link must be run-only, dropping the current scope');
+  assert.equal(new URL(links[0].href).origin, w.location.origin);
+  assert.doesNotMatch(panel.textContent, /No matching records loaded/);
+  let blocked;
+  links[0].addEventListener('click', (event) => { blocked = event.defaultPrevented; event.preventDefault(); }, { once: true });
+  links[0].dispatchEvent(new w.MouseEvent('click', { cancelable: true }));
+  assert.equal(blocked, false, 'a peer disclosed by an appended page must be usable, not inert');
+});
+
+test('session gaps: a live refresh drops only the peer whose session identity changed', async (t) => {
+  // Focus may sit on the departing peer or on a surviving one; neither may be stranded.
+  for (const focusTarget of ['leaving-peer', 'staying-peer']) {
+    let poll;
+    const data = fixture('completed', 'pass', 'PASS');
+    data.details.run.sessionGroup = 'live-group';
+    const base = { ...data.list.runs[0], sessionGroup: 'live-group' };
+    data.list = {
+      runs: [base, { ...base, id: 'staying-peer', title: 'staying peer' }, { ...base, id: 'leaving-peer', title: 'leaving peer' }],
+      total: 3, generation: 'same', unreadable: 0,
+    };
+    const dom = await renderFixture({ ...data, configure: (w) => {
+      w.history.replaceState(null, '', `/?run=${base.id}`);
+      w.setInterval = (fn, ms) => { if (ms === 5000) poll = fn; return ms; }; w.clearInterval = () => {};
+    } });
+    t.after(() => dom.window.close());
+    const w = dom.window, d = w.document, panel = d.querySelector('#session-records');
+    const peerIDs = () => [...panel.querySelectorAll('a')].map((link) => link.dataset.runId);
+    assert.deepEqual(peerIDs(), ['staying-peer', 'leaving-peer'], focusTarget);
+    panel.open = true;
+    const leavingLink = panel.querySelector('a[data-run-id="leaving-peer"]');
+    panel.querySelector(`a[data-run-id="${focusTarget}"]`).focus();
+    assert.equal(d.activeElement.dataset.runId, focusTarget);
+
+    // Only the departing peer is re-keyed; the selected run and the other peer keep their identity.
+    data.list.runs = data.list.runs.map((row) => (row.id === 'leaving-peer' ? { ...row, sessionGroup: 'moved-group' } : row));
+    await poll(); await settle();
+
+    assert.equal(panel.open, true, 'a peer leaving the session must not collapse the disclosure');
+    assert.deepEqual(peerIDs(), ['staying-peer'], 'only the re-keyed peer disappears');
+    assert.doesNotMatch(panel.textContent, /No matching records loaded/, 'surviving peers keep the list meaningful');
+    const staying = panel.querySelector('a');
+    assert.equal(new URL(staying.href).search, '?run=staying-peer');
+    if (focusTarget === 'staying-peer') {
+      assert.equal(d.activeElement.dataset.runId, 'staying-peer', 'a surviving peer keeps keyboard focus');
+      assert.equal(panel.contains(d.activeElement), true);
+      assert.equal(d.activeElement.isConnected, true, 'focus must land on the live node, not a detached one');
+    } else {
+      assert.equal(d.activeElement.id, 'session-records-summary', 'focus follows the removed peer back to the disclosure');
+    }
+    let blocked;
+    staying.addEventListener('click', (event) => { blocked = event.defaultPrevented; event.preventDefault(); }, { once: true });
+    staying.dispatchEvent(new w.MouseEvent('click', { cancelable: true }));
+    assert.equal(blocked, false, 'the surviving peer stays usable after the refresh');
+    const stale = new w.MouseEvent('auxclick', { cancelable: true });
+    leavingLink.dispatchEvent(stale);
+    assert.equal(stale.defaultPrevented, true, 'the removed peer link must be inert, not a stale navigation');
+  }
+});
+
+test('session gaps: a late detail response for the previous run cannot reclaim the disclosure', async (t) => {
+  let poll, releaseLate;
+  let lateRun = false;
+  const data = fixture('completed', 'pass', 'PASS');
+  const x = { ...data.list.runs[0], id: 'run-x', sessionGroup: 'group-x' };
+  const y = { ...data.list.runs[0], id: 'run-y', sessionGroup: 'group-y' };
+  data.list = {
+    runs: [x, { ...x, id: 'peer-x', title: 'peer x' }, y, { ...y, id: 'peer-y', title: 'peer y' }],
+    total: 4, generation: 'same', unreadable: 0,
+  };
+  const detail = (id, extra = {}) => ({ ...data.details, run: { ...data.details.run, id, sessionGroup: id === 'run-y' ? 'group-y' : 'group-x', ...extra } });
+  const dom = await renderFixture({ ...data,
+    // Run X's refresh is held open deliberately so its result lands after the user has moved on.
+    details: (id) => (id === 'run-x' && lateRun
+      ? new Promise((resolve) => { releaseLate = () => resolve(detail('run-x', { warningCount: 1 })); })
+      : detail(id)),
+    configure: (w) => {
+      w.history.replaceState(null, '', '/?run=run-x');
+      w.setInterval = (fn, ms) => { if (ms === 5000) poll = fn; return ms; }; w.clearInterval = () => {};
+    },
+  });
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document, panel = d.querySelector('#session-records');
+  const peerIDs = () => [...panel.querySelectorAll('a')].map((link) => link.dataset.runId);
+  assert.equal(d.querySelector('#run-id').textContent, 'run-x');
+  assert.deepEqual(peerIDs(), ['peer-x']);
+  panel.open = true;
+  const boundToX = panel.querySelector('a');
+
+  // The refresh that will answer late is provoked by a changed summary fact for X.
+  lateRun = true;
+  data.list.runs = data.list.runs.map((row) => (row.id === 'run-x' ? { ...row, warningCount: 1 } : row));
+  const polling = poll();
+  await settle();
+  assert.equal(typeof releaseLate, 'function', "run X's detail refresh must be pending before the navigation");
+  assert.deepEqual(peerIDs(), ['peer-x'], 'the pending refresh alone does not change the disclosure');
+
+  d.querySelector('#run-list [data-run-id="run-y"]').click();
+  await settle();
+  assert.equal(d.querySelector('#run-id').textContent, 'run-y');
+  assert.equal(panel.open, false, 'a different run starts from a collapsed disclosure');
+  assert.deepEqual(peerIDs(), ['peer-y'], "Y's disclosure reflects Y");
+
+  releaseLate();
+  await polling;
+  await settle();
+
+  assert.equal(new URLSearchParams(w.location.search).get('run'), 'run-y');
+  assert.equal(d.querySelector('#run-id').textContent, 'run-y', 'a late detail for X must not render X as current');
+  assert.equal(d.querySelector('#run-list [aria-current="true"]').dataset.runId, 'run-y');
+  assert.deepEqual(peerIDs(), ['peer-y'], "X's late detail must not repopulate the disclosure with X's peers");
+  assert.doesNotMatch(panel.textContent, /peer x/);
+  const search = w.location.search;
+  for (const type of ['click', 'auxclick']) {
+    const event = new w.MouseEvent(type, { cancelable: true });
+    boundToX.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true, `an X-bound peer link must not ${type} its way into a stale run`);
+  }
+  assert.equal(w.location.search, search, 'the stale control navigated nowhere');
+});
+
 const response = (body) => Promise.resolve({
   ok: true,
   status: 200,
