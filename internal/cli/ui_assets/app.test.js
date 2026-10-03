@@ -6988,6 +6988,54 @@ test('last-message card is absent without one and hidden for live runs', async (
   assert.equal(liveDom.window.document.querySelector('#reply-disclosure').classList.contains('hidden'), true);
 });
 
+// --- Provider error card: the provider's own report of a turn that failed ---
+
+test('provider error: run detail states the recorded provider error verbatim with its source link', async (t) => {
+  const data = fixture('session_ended', '', 'NOT RUN');
+  data.details.actionCount = 2;
+  data.details.providerError = { actionId: 'failure-p-1', position: 2, offset: 120, error: 'authentication_failed', errorDetails: '401 OAuth <token> revoked', message: 'API Error: 401' };
+  data.actions = [
+    { id: 'prompt-p-1', type: 'user.prompt', status: 'completed', input: { prompt: 'do it' } },
+    { id: 'failure-p-1', type: 'provider.error', status: 'failed', input: { error: 'authentication_failed', errorDetails: '401 OAuth <token> revoked', message: 'API Error: 401' } },
+  ];
+  const dom = await renderFixture(data);
+  t.after(() => dom.window.close());
+  const w = dom.window, d = w.document;
+  const card = d.querySelector('#provider-error');
+  assert.ok(card, 'a provider error card exists');
+  assert.equal(card.classList.contains('hidden'), false);
+  assert.match(card.querySelector('summary').textContent, /Provider error reported by claude/);
+  assert.match(card.querySelector('summary').textContent, /authentication_failed/);
+  // Literal, never parsed as markup or reinterpreted.
+  assert.equal(d.querySelector('#provider-error-details').textContent, '401 OAuth <token> revoked');
+  assert.equal(d.querySelector('#provider-error-message').textContent, 'API Error: 401');
+  assert.equal(card.querySelector('token'), null);
+  assert.match(card.textContent, /not a verdict/i, 'the card says it is the provider\'s report, not a run verdict');
+  assert.match(d.querySelector('#provider-error-position').textContent, /2 of 2/);
+  const link = d.querySelector('#provider-error-link');
+  const url = new w.URL(link.href);
+  assert.equal(url.searchParams.get('action'), 'failure-p-1');
+  assert.equal(url.searchParams.get('actionCursor'), '120');
+});
+
+test('provider error: absent without one, and localized', async (t) => {
+  const none = fixture('completed', 'pass', 'PASS');
+  const dom = await renderFixture(none);
+  t.after(() => dom.window.close());
+  assert.equal(dom.window.document.querySelector('#provider-error').classList.contains('hidden'), true);
+
+  const data = fixture('session_ended', '', 'NOT RUN');
+  data.details.actionCount = 1;
+  data.details.providerError = { actionId: 'f', position: 1, offset: 0, error: 'rate_limit', errorDetails: '', message: '' };
+  data.configure = (w) => w.localStorage.setItem('agentrec.lang', 'ko');
+  const ko = await renderFixture(data);
+  t.after(() => ko.window.close());
+  const d = ko.window.document;
+  assert.match(d.querySelector('#provider-error summary').textContent, /[가-힣]/);
+  assert.match(d.querySelector('#provider-error summary').textContent, /rate_limit/, 'the provider\'s error code stays verbatim');
+  assert.equal(d.querySelector('#provider-error-details-row').classList.contains('hidden'), true, 'empty details are not shown as blank facts');
+});
+
 test('truncated last message says so and is localized', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.actionCount = 1;
