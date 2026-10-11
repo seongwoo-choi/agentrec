@@ -8,6 +8,172 @@ const html = await readFile(new URL('index.html', here), 'utf8');
 const app = await readFile(new URL('app.js', here), 'utf8');
 const css = await readFile(new URL('app.css', here), 'utf8');
 
+test('markdown export cannot promote raw provider-event assurance', async (t) => {
+  for (const assurance of ['verification_observed', 'supervisor_observed']) {
+    const data=fixture('completed','pass','PASS');
+    data.details.eventCount=1;
+    data.events=[{type:'message',assurance}];
+    const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;
+    d.querySelector('#timeline-tab-events').click();await settle();
+    d.querySelector('.event-row').click();
+    const text=d.querySelector('#markdown-preview').value;
+    assert.match(text,/Attribution: Reported by claude/);
+    assert.doesNotMatch(text,/Attribution: Observed by (agentrec|verification checks)/);
+  }
+});
+
+test('markdown export refreshes after ungrouped request pagination', async (t) => {
+  const data=fixture('completed','pass','PASS');data.details.promptCount=2;
+  let copies=0;
+  const pages={100:{items:[{type:'user.prompt',id:'p1',offset:100,promptRank:1,input:{prompt:'first'}},{type:'shell.exec',id:'first',offset:200,input:{command:'first-command'}}],nextCursor:400,endCursor:400},400:{items:[{type:'shell.exec',id:'second',offset:400,input:{command:'second-command'}},{type:'user.prompt',id:'p2',offset:700,promptRank:2,input:{prompt:'excluded-next'}}],nextCursor:null}};
+  const dom=await requestResultsFixture([],{list:data.list,details:data.details,actions:cursor=>pages[cursor],configure:w=>{
+    w.history.replaceState(null,'',`/?run=${data.details.run.id}&focus=actions&scope=request&scopeStart=100&actionCursor=100`);
+    Object.defineProperty(w.navigator,'clipboard',{value:{writeText:async()=>{copies++;}}});
+  }});
+  t.after(()=>dom.window.close());const d=dom.window.document;
+  d.querySelector('#all-actions-toggle').click();assert.equal(d.querySelector('#all-actions-toggle').checked,true);
+  const oldCopy=d.querySelector('#markdown-copy');
+  assert.doesNotMatch(d.querySelector('#markdown-preview').value,/second.command/);
+  d.querySelector('#timeline .load-more').click();await settle();
+  const text=d.querySelector('#markdown-preview').value;
+  assert.match(text,/second\\?.command/);assert.match(text,/ends before recorded request 2/);assert.doesNotMatch(text,/excluded.next|end not loaded yet/);
+  oldCopy.click();await settle();assert.equal(copies,0,'obsolete request export control must be inert');
+  d.querySelector('#markdown-copy').click();await settle();assert.equal(copies,1);
+});
+
+test('markdown export preserves later verification timing and changed-HEAD caveat',async(t)=>{
+ const data=fixture('completed','pass','PASS');data.actions=[{type:'shell.exec',id:'x',offset:42}];
+ data.details.evidence.posthocVerification={status:'PASS',measuredAt:'2026-10-11T00:00:00Z',headMovedSince:true,caveat:'Measured against another HEAD',fields:[]};
+ const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;d.querySelector('.action-row').click();
+ const text=d.querySelector('#markdown-preview').value;
+ assert.match(text,/measuredAt:/);assert.match(text,/headMovedSince: true/);assert.match(text,/Measured against another HEAD/);
+});
+
+test('delivery observations keep declared commits and PR-head checks separate', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const head = 'a'.repeat(40), merged = 'b'.repeat(40);
+  data.details.delivery = { schemaVersion: 1, associations: [{ commit: head, pr: 'https://github.com/o/r/pull/1', observedAt: '2026-10-11T00:00:00Z', observation: { state: 'MERGED', headSha: head, mergeSha: merged, observedAt: '2026-10-11T00:00:00Z', headCI: { targetSha: head, status: 'failure', checkCount: 1 }, mergeCI: { status: 'unobserved' } } }] };
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#delivery-observations');
+  assert.ok(panel); assert.equal(panel.tagName, 'DETAILS'); assert.equal(panel.open, false);
+  assert.match(panel.textContent, /MERGED/); assert.match(panel.textContent, /PR head CI.*failure/s);
+  assert.match(panel.textContent, /Merge.*unobserved/s); assert.match(panel.textContent, /not.*causal/i);
+  assert.ok(panel.textContent.includes(head)); assert.ok(panel.textContent.includes(merged));
+  assert.equal(panel.querySelector('a').href, 'https://github.com/o/r/pull/1');
+  panel.open = true;
+  for (const lang of ['ko','ja','zh-CN','en']) {
+    d.querySelector('#lang').value=lang; d.querySelector('#lang').dispatchEvent(new dom.window.Event('change'));
+    assert.equal(panel.open, true); assert.equal(panel.querySelector('summary').textContent==='Delivery observations',lang==='en');
+  }
+});
+
+test('delivery observations show missing observations without inventing success', async (t) => {
+  const dom=await renderFixture(fixture('completed','pass','PASS'));t.after(()=>dom.window.close());
+  const panel=dom.window.document.querySelector('#delivery-observations');assert.ok(panel);
+  assert.match(panel.textContent,/No delivery observations/);assert.doesNotMatch(panel.textContent,/CI.*success/);
+});
+
+test('markdown export keeps verification boundary before any truncated evidence', async (t) => {
+  const dom=await requestResultsFixture(Array.from({length:65},(_,i)=>({type:'shell.exec',id:`long${i}`,offset:200+i,input:{command:'x'.repeat(3000)}})));
+  t.after(()=>dom.window.close()); const text=dom.window.document.querySelector('#markdown-preview').value;
+  assert.match(text,/Run-end verification/);assert.match(text,/Posthoc verification/);assert.match(text,/not a request verdict/);
+  assert.ok(text.indexOf('Run-end verification')<text.indexOf('## shell'));
+});
+
+test('markdown export offers explicit download and rejects obsolete controls', async(t)=>{
+  const data=fixture('completed','pass','PASS');data.actions=[{type:'shell.exec',id:'downloaded',offset:42,result:{exitCode:0}}];
+  let creates=0, filename='';data.configure=(w)=>{
+    w.URL.createObjectURL=()=>{creates++;return 'blob:local-preview'};w.URL.revokeObjectURL=()=>{};
+    w.HTMLAnchorElement.prototype.click=function(){filename=this.download;};
+  };
+  const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;d.querySelector('.action-row').click();
+  const download=d.querySelector('#markdown-download');assert.ok(download);download.click();assert.equal(creates,1);assert.match(filename,/\.md$/);
+  dom.window.history.replaceState(null,'','/?run=other');download.click();assert.equal(creates,1);
+});
+
+test('markdown export explicitly switches between a request interval and selected item',async(t)=>{
+ const dom=await requestResultsFixture([{type:'shell.exec',id:'scope-command',offset:200,input:{command:'echo scoped'}}]);
+ t.after(()=>dom.window.close());const d=dom.window.document;
+ assert.match(d.querySelector('#markdown-preview').value,/scope.command/);
+ const source=d.querySelector('#markdown-source');assert.ok(source);
+ source.value='selection';source.dispatchEvent(new dom.window.Event('change'));
+ assert.doesNotMatch(d.querySelector('#markdown-preview').value,/scope.command/);
+});
+
+test('markdown export preserves preview focus across language rerender',async(t)=>{
+ const data=fixture('completed','pass','PASS');data.actions=[{type:'shell.exec',id:'focus',offset:42}];
+ const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;d.querySelector('.action-row').click();
+ d.querySelector('#markdown-preview').focus();
+ d.querySelector('#lang').value='ko';d.querySelector('#lang').dispatchEvent(new dom.window.Event('change'));
+ assert.equal(d.activeElement.id,'markdown-preview');
+});
+
+test('markdown export previews only explicit selected evidence, literal hostile text and exact identity', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ type: 'shell.exec', id: 'selected', offset: 317, status: 'completed', input: { command: '<script>alert(1)</script>\n```\n# forged', secretPayload: 'OMIT_PAYLOAD' }, result: { stdout: 'OMIT_STDOUT' } }];
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.ok(d.querySelector('#markdown-export'));
+  assert.equal(d.querySelector('#markdown-preview'), null, 'no whole-run default export');
+  d.querySelector('.action-row').click();
+  const preview = d.querySelector('#markdown-preview'); assert.ok(preview?.readOnly);
+  assert.match(preview.value, /317/); assert.match(preview.value, /selected/);
+  assert.match(preview.value, /&lt;script&gt;/); assert.doesNotMatch(preview.value, /<script>|OMIT_STDOUT|OMIT_PAYLOAD/);
+  assert.match(preview.value, /Exit not recorded/); assert.match(preview.value, /run-wide/i);
+  assert.match(d.querySelector('#markdown-export').textContent, /redaction.*not guaranteed/i);
+  const link = d.querySelector('#markdown-export a'); assert.equal(new URL(link.href).searchParams.get('actionCursor'), '317');
+});
+
+test('markdown export handles async clipboard denial and blocks detached stale-run controls', async (t) => {
+  let rejectCopy, calls = 0;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ type: 'shell.exec', id: 'selected', offset: 42, input: { command: 'safe' } }];
+  data.configure = (w) => Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: () => { calls++; return new Promise((_, reject) => { rejectCopy = reject; }); } } });
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document; d.querySelector('.action-row').click();
+  let copy = d.querySelector('#markdown-copy'); assert.ok(copy); copy.click();
+  rejectCopy(new Error('denied')); await settle();
+  assert.match(d.querySelector('#markdown-export').textContent, /Clipboard unavailable/);
+  copy.click();
+  dom.window.history.replaceState(null, '', '/?run=other');
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate')); await settle();
+  rejectCopy(new Error('late denial')); await settle();
+  copy.click(); assert.equal(calls, 2);
+  assert.equal(d.querySelector('#markdown-preview'), null);
+});
+
+test('markdown export bounds request interval and clears on scope exit', async (t) => {
+  const dom = await requestResultsFixture(Array.from({ length: 65 }, (_, i) => ({ type: 'shell.exec', id: `a${i}`, offset: 200 + i, input: { command: 'x'.repeat(3000) } })));
+  t.after(() => dom.window.close()); const d = dom.window.document;
+  const preview = d.querySelector('#markdown-preview'); assert.ok(preview);
+  assert.ok(Buffer.byteLength(preview.value) <= 32768); assert.match(preview.value, /partial|truncated/i);
+  assert.match(preview.value, /loaded/i); assert.doesNotMatch(preview.value, /a64/);
+  d.querySelector('#request-scope-exit').click(); await settle();
+  assert.equal(d.querySelector('#markdown-preview'), null);
+});
+
+test('coverage explains accepted loaded exits without mode guarantees in four locales', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.mode = 'session';
+  data.details.changes.status = 'pending';
+  data.actions = [
+    { type: 'shell.exec', id: 'a', result: { exit_code: 0 } },
+    { type: 'shell.exec', id: 'b', result: { exit_code: '0', stdout: 'exit 0' } },
+    { type: 'shell.exec', id: 'c', exitCode: 0, result: { exit_code: 1 } },
+  ];
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#evidence-coverage');
+  assert.ok(panel, 'native coverage disclosure exists'); assert.equal(panel.tagName, 'DETAILS'); assert.equal(panel.open, false);
+  assert.match(panel.textContent, /3 loaded commands.*1 directly reported integer exits.*2 missing or ambiguous/s);
+  assert.match(panel.textContent, /not observed.*session/s); assert.match(panel.textContent, /pending/i);
+  assert.match(panel.textContent, /Run-end verification.*Posthoc verification/s);
+  panel.open = true;
+  for (const lang of ['ko', 'ja', 'zh-CN', 'en']) {
+    d.querySelector('#lang').value = lang; d.querySelector('#lang').dispatchEvent(new dom.window.Event('change'));
+    assert.equal(panel.open, true); assert.equal(panel.querySelector('summary').textContent === 'Evidence coverage', lang === 'en');
+  }
+});
+
 test('same-session loaded links isolate identities and clear old scope', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.run.sessionGroup = 'opaque-group';

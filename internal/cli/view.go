@@ -176,6 +176,7 @@ type viewChangeSummary struct {
 }
 
 type viewRunResponse struct {
+	Delivery       *deliveryDocument   `json:"delivery,omitempty"`
 	SchemaVersion  int                 `json:"schemaVersion"`
 	SnapshotID     string              `json:"snapshotId"`
 	ActionCount    int                 `json:"actionCount"`

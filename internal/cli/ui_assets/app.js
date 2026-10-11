@@ -2750,6 +2750,7 @@ function shortID(id) {
     renderTypeFilters(state.streams[streamName].items, MODES[streamName].typeOf);
     renderEmpty(timeline, streamName);
     renderTail(streamName);
+    renderMarkdownExport();
     if (focusNew) {
       const target = first || timeline.querySelector('.stream-tail .load-more:not(.hidden)');
       if (target) timelineRowControl(target).focus();
@@ -3226,6 +3227,7 @@ function shortID(id) {
     renderInspectorJump(row);
     selected.generation = state.loadGeneration;
     selected.runID = state.run?.run.id;
+    selected.snapshotID = state.run?.snapshotId;
     state.selected = selected;
     renderInspector();
     if (changed) $('inspector').closest('.inspector-panel').scrollTop = 0;
@@ -3341,7 +3343,124 @@ function shortID(id) {
     holder.append(controls);
   }
 
+  // Small allowlist projection: never serialize event objects, results, patches, or files.
+  function renderMarkdownExport() {
+    const holder = $('markdown-export');
+    if (!holder) return;
+    const priorBinding = holder.exportBinding;
+    const focused = holder.contains(document.activeElement) ? document.activeElement.id : '';
+    const selection = document.activeElement?.id === 'markdown-preview' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+    holder.replaceChildren();
+    const data = state.run, selected = state.selected, scope = state.requestScope;
+    const generation = state.loadGeneration, snapshot = data?.snapshotId, runID = data?.run.id;
+    const stream = state.streams?.actions;
+    const urlRun = () => new URLSearchParams(location.search).get('run');
+    const selectedValid = selected && selected.snapshotID === snapshot && selected.generation === generation && selected.runID === runID && ['action', 'change', 'event', 'live'].includes(selected.kind);
+    const requestValid = state.mode === 'actions' && scope?.rank > 0 && stream?.items[0]?.type === 'user.prompt' && stream.items[0].offset === scope.start && requestScopeFromURL()?.cursor === scope.start;
+    if (!data || state.runDetailLoading || urlRun() !== runID || (!selectedValid && !requestValid)) return;
+    if (priorBinding?.scope !== scope || priorBinding?.runID !== runID) holder.exportMode = '';
+    const kind = requestValid && (!selectedValid || holder.exportMode !== 'selection') ? 'request' : selected.kind;
+    const rows = kind === 'request' ? stream.items.slice(0, 20) : [selected.value];
+    const mode = state.mode;
+    const requestItems = kind === 'request' ? stream.items : null;
+    const boundary = scope?.boundary, nextRank = scope?.nextRank;
+    const current = () => holder.isConnected && holder.contains(preview) && state.run?.run.id === runID && state.run?.snapshotId === snapshot && state.loadGeneration === generation && !state.runDetailLoading && state.selected === selected && state.requestScope === scope && state.mode === mode && urlRun() === runID && (kind !== 'request' || (requestScopeFromURL()?.cursor === scope.start && state.streams?.actions === stream && stream.items === requestItems && scope.boundary === boundary && scope.nextRank === nextRank));
+    const literal = (value) => {
+      if (!['string', 'number', 'boolean'].includes(typeof value)) return t('Unknown');
+      const text = String(value);
+      return (text.slice(0, 240) + (text.length > 240 ? '… [truncated]' : '')).replace(/[\r\n\u2028\u2029]/g, ' ↵ ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/([\\`*_{}\[\]()#+.!|~-])/g, '\\$1');
+    };
+    const title = coverageText('Local Markdown preview', '로컬 Markdown 미리보기', 'ローカル Markdown プレビュー', '本地 Markdown 预览');
+    const warning = coverageText('Secret redaction is not guaranteed. Review before copying. Local only; no upload.', '비밀 정보 삭제는 보장되지 않습니다. 복사 전 검토하세요. 로컬 전용이며 업로드하지 않습니다.', '機密情報の削除は保証されません。コピー前に確認してください。ローカルのみ、アップロードなし。', '不保证秘密信息已脱敏。复制前请检查。仅限本地，不上传。');
+    const limits = coverageText('Loaded selection only; partial/truncated. Maximum 20 records, 240 characters per field, 32 KiB total. No payloads or file bodies.', '불러온 선택만 표시 · 부분/잘림. 최대 20개 기록, 필드당 240자, 총 32 KiB. 페이로드와 파일 본문 제외.', '読込済みの選択のみ・一部/省略。最大20記録、各項目240文字、合計32 KiB。ペイロードやファイル本文は含みません。', '仅限已加载的选择，部分/截断。最多20条记录，每字段240字符，总计32 KiB。不含载荷或文件正文。');
+    const verification = coverageText('Independent verification is run-wide, not a request verdict.', '독립 검증은 실행 전체에 해당하며 요청 판정이 아닙니다.', '独立検証は実行全体のもので、リクエストの判定ではありません。', '独立验证针对整个运行，不是请求结论。');
+    const text = [`# ${title}`, warning, limits, `${literal(kind)}: ${rows.length} / ${kind === 'request' ? stream.items.length : 1}`, `${t('Run')}: ${literal(runID)}`, `${t('Provider')}: ${literal(data.run.provider)}`];
+    text.push('', `## ${t('Verification')}`, verification, `${coverageText('Run-end verification', '실행 종료 검증', '実行終了時の検証', '运行结束验证')}: ${literal(fieldsMap(data.evidence.verification).get('Status'))}`, `${coverageText('Posthoc verification', '사후 검증', '事後検証', '事后验证')}: ${literal(data.evidence.posthocVerification?.status)}`);
+    if (data.evidence.posthocVerification) {
+      const later = data.evidence.posthocVerification;
+      text.push(`measuredAt: ${literal(later.measuredAt)}`, `headMovedSince: ${literal(later.headMovedSince)}`, `caveat: ${literal(later.caveat)}`);
+    }
+    if (kind === 'request') text.push(`${t('Original record')}: ${literal(scope.start)}`, literal($('request-scope-label').textContent));
+    const links = [];
+    rows.forEach((value) => {
+      text.push('', `## ${literal(value.type || value.kind || kind)}`);
+      for (const key of ['id', 'offset', 'path', 'status', 'kind', 'tracked', 'binary', 'additions', 'deletions', 'size']) {
+        if (value[key] !== undefined) text.push(`    ${key}: ${literal(value[key])}`);
+      }
+      const attribution = kind === 'event' ? 'provider_reported' : kind === 'change' ? state.streams?.changes.attribution : kind === 'live' ? 'Working tree' : value.assurance;
+      text.push(`    ${t('Attribution')}: ${literal(humanAttribution(attribution, data.run.provider))}`);
+      if (kind === 'action' || kind === 'request') {
+        const input = value.input;
+        const summary = typeof input === 'string' ? input : [input?.command, input?.cmd, input?.path, input?.file_path, input?.prompt, input?.text].find((v) => typeof v === 'string');
+        if (summary) text.push(`    ${t('SANITIZED INPUT')}: ${literal(summary)}`);
+        const exit = exactReportedExit(value);
+        if (value.type === 'shell.exec') text.push(`    ${exit === null ? t('Exit not recorded') + ' / ' + t('Exit uncertain') : t('Recorded exit: {exit}', { exit })}`);
+      }
+      let href = '';
+      if ((kind === 'action' || kind === 'request') && Number.isSafeInteger(value.offset) && value.offset >= 0) {
+        const url = new URL(location.pathname, location.origin);
+        for (const [key, val] of Object.entries({ run: runID, focus: 'actions', actionCursor: value.offset })) url.searchParams.set(key, String(val));
+        if (typeof value.id === 'string' && value.id) url.searchParams.set('action', value.id);
+        href = url.href;
+      } else if (kind === 'change') href = selectedEvidenceURL(selected);
+      if (href) {
+        links.push(href);
+        text.push(`[${t('Original record')}](${href.replace(/[()]/g, (c) => c === '(' ? '%28' : '%29')})`);
+      } else text.push(t('Exact link unavailable'));
+    });
+    const markdown = text.join('\n\n');
+    const preview = node('textarea', 'payload'); preview.id = 'markdown-preview'; preview.readOnly = true; preview.rows = 10; preview.setAttribute('aria-label', title);
+    // UTF-16 units take at most 3 UTF-8 bytes each; 8000 units stays below 32 KiB.
+    preview.value = markdown.length > 8000 ? markdown.slice(0, 7900) + '\n\n[partial / truncated]' : markdown;
+    const copy = node('button', 'markdown-copy', coverageText('Copy Markdown', 'Markdown 복사', 'Markdown をコピー', '复制 Markdown')); copy.id = 'markdown-copy'; copy.type = 'button';
+    const status = node('p', ''); status.setAttribute('role', 'status');
+    copy.addEventListener('click', async () => {
+      if (!current()) return;
+      copy.disabled = true;
+      try { await navigator.clipboard.writeText(preview.value); if (current()) status.textContent = t('Copied'); }
+      catch (_) { if (current()) status.textContent = coverageText('Clipboard unavailable or denied. Select and copy the preview manually.', '클립보드를 사용할 수 없습니다. 미리보기를 직접 선택해 복사하세요.', 'クリップボードを利用できません。プレビューを選択してコピーしてください。', '无法使用剪贴板。请手动选中预览并复制。'); }
+      finally { if (current()) copy.disabled = false; }
+    });
+    const download = node('button', 'markdown-download', coverageText('Download Markdown', 'Markdown 저장', 'Markdown を保存', '保存 Markdown'));
+    download.id = 'markdown-download'; download.type = 'button';
+    download.addEventListener('click', () => {
+      if (!current()) return;
+      let blobURL;
+      try {
+        blobURL = URL.createObjectURL(new Blob([preview.value], { type: 'text/markdown;charset=utf-8' }));
+        const a = node('a'); a.href = blobURL; a.download = `agentrec-${runID}.md`;
+        holder.append(a); a.click(); a.remove();
+        status.textContent = coverageText('Download requested.', '다운로드를 요청했습니다.', 'ダウンロードを要求しました。', '已请求下载。');
+      } catch (_) { status.textContent = coverageText('Download unavailable. Copy the preview manually.', '다운로드할 수 없습니다. 미리보기를 직접 복사하세요.', 'ダウンロードできません。プレビューをコピーしてください。', '无法下载。请手动复制预览。'); }
+      finally { if (blobURL) setTimeout(() => URL.revokeObjectURL(blobURL), 1000); }
+    });
+    holder.append(node('h3', '', title), node('p', '', warning));
+    if (requestValid && selectedValid) {
+      const source = node('select'); source.id = 'markdown-source';
+      source.setAttribute('aria-label', coverageText('Export source', '내보낼 범위', '書き出す範囲', '导出范围'));
+      for (const [value, label] of [['request', coverageText('Loaded request interval', '불러온 요청 구간', '読込済みリクエスト区間', '已加载请求区间')], ['selection', coverageText('Selected item', '선택 항목', '選択項目', '所选项目')]]) {
+        const option = node('option', '', label); option.value = value; source.append(option);
+      }
+      source.value = kind === 'request' ? 'request' : 'selection';
+      source.addEventListener('change', () => { if (current()) { holder.exportMode = source.value; renderMarkdownExport(); } });
+      holder.append(source);
+    }
+    holder.append(preview, copy, download, status);
+    holder.exportBinding = { selected, scope, runID, generation, snapshot };
+    if (priorBinding && priorBinding.selected === selected && priorBinding.scope === scope && priorBinding.runID === runID && priorBinding.generation === generation && priorBinding.snapshot === snapshot) {
+      const control = [...holder.querySelectorAll('[id]')].find(x => x.id === focused);
+      control?.focus({ preventScroll: true });
+      if (control === preview && selection) preview.setSelectionRange(...selection);
+    }
+    links.forEach((href) => {
+      const link = node('a', '', t('Original record')); link.href = href;
+      link.onclick = link.onauxclick = (e) => { if (!current()) e.preventDefault(); };
+      holder.append(link, ' ');
+    });
+  }
+
   function renderInspector() {
+    renderMarkdownExport();
     const holder = $('inspector');
     const cached = state.selected?.evidenceLink;
     const focused = cached?.url === selectedEvidenceURL() && cached?.controls.contains(document.activeElement)
@@ -3698,6 +3817,75 @@ function shortID(id) {
     return Number.isNaN(date.getTime()) ? t('Unavailable') : date.toLocaleString(state.lang);
   }
 
+  function renderDeliveryObservations() {
+    const panel = $('delivery-observations');
+    if (!panel || !state.run) return;
+    const runID = state.run.run.id;
+    if (panel.dataset.run !== runID) panel.open = false;
+    panel.dataset.run = runID;
+    panel.querySelector('summary').textContent = coverageText('Delivery observations', '이후 전달 내역', '記録後の反映状況', '记录后的交付情况');
+    const body = panel.querySelector('div');
+    body.replaceChildren(node('p', '', coverageText('Explicit user association, not causal proof. Later observations are separate from the original recording; they may be stale.', '사용자가 명시한 연결이며 인과 증명이 아닙니다. 이후 관측은 원래 기록과 별개이고 오래된 상태일 수 있습니다.', 'ユーザーによる明示的な関連付けで、因果関係の証明ではありません。後続の観測は元の記録と別で、現在の状態とは限りません。', '这是用户显式关联，不证明因果关系。后续观测与原始记录分开，可能不是当前状态。')));
+    const entries = state.run.delivery?.associations || [];
+    if (!entries.length) body.append(node('p', '', coverageText('No delivery observations. Add one explicitly with the CLI, then reload this view.', '전달 관측이 없습니다. CLI로 명시적으로 연결한 뒤 화면을 새로 고치세요.', '反映状況の観測はありません。CLI で明示的に追加し、画面を再読み込みしてください。', '没有交付观测。请通过 CLI 显式添加，然后刷新页面。')));
+    for (const entry of entries.slice(-32).reverse()) {
+      const section = node('section', 'delivery-entry');
+      section.append(node('p', '', `${coverageText('Observed at', '관측 시점', '観測時点', '观测时间')}: ${recordingTime(entry.observedAt)}`));
+      if (entry.commit) section.append(node('p', '', `${coverageText('User-supplied commit', '사용자가 연결한 커밋', 'ユーザー指定コミット', '用户指定提交')}: ${entry.commit}`));
+      if (entry.pr) {
+        const link = node('a', '', entry.pr);
+        if (/^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/.test(entry.pr)) {
+          link.href = entry.pr; link.rel = 'noopener noreferrer';
+        }
+        section.append(link);
+      }
+      const o = entry.observation;
+      if (o) {
+        section.append(node('p', '', `PR: ${o.state}`));
+        section.append(node('p', '', `${coverageText('PR head CI', 'PR head 검사', 'PR head チェック', 'PR head 检查')}: ${o.headCI.status} · ${o.headCI.targetSha}`));
+        section.append(node('p', '', `${coverageText('Merge commit', 'merge 커밋', 'マージコミット', '合并提交')}: ${o.mergeSha || t('Unavailable')}`));
+        section.append(node('p', '', coverageText('Merge/main CI: unobserved. A merged PR is not evidence of passing main checks.', 'Merge/main 검사: 미관측. PR 병합만으로 main 검사 통과를 알 수 없습니다.', 'Merge/main チェック：未観測。PR のマージは main の検査成功の証拠ではありません。', 'Merge/main 检查：未观测。PR 已合并不表示 main 检查通过。')));
+      }
+      body.append(section);
+    }
+  }
+
+  function coverageText(en, ko, ja, zh) {
+    return ({ en, ko, ja, 'zh-CN': zh })[state.lang] || en;
+  }
+
+  function exactReportedExit(action) {
+    const fields = [action.exitCode, action.exit_code, action.output?.exitCode, action.output?.exit_code, action.result?.exitCode, action.result?.exit_code].filter((v) => v !== undefined);
+    return fields.length && fields.every(Number.isSafeInteger) && new Set(fields).size === 1 ? fields[0] : null;
+  }
+
+  function renderCoverage() {
+    renderDeliveryObservations();
+    const panel = $('evidence-coverage');
+    if (!panel || !state.run) return;
+    if (panel.dataset.run !== state.run.run.id) panel.open = false;
+    panel.dataset.run = state.run.run.id;
+    panel.querySelector('summary').textContent = coverageText('Evidence coverage', '증거 범위', '証拠の範囲', '证据覆盖范围');
+    const stream = state.streams?.actions;
+    const commands = (stream?.items || []).filter((a) => a.type === 'shell.exec');
+    const exact = commands.filter((a) => exactReportedExit(a) !== null).length;
+    const supervisor = fieldsMap(state.run.evidence.supervisor);
+    const observed = supervisor.has('Exit Code') || supervisor.has('Signal');
+    const mode = state.run.run.mode;
+    const lines = [
+      `${t('Recording mode')}: ${mode || t('Unknown')}`,
+      observed ? `${t('Process result')}: ${[...supervisor].filter(([k]) => ['Exit Code', 'Signal'].includes(k)).map(([k,v]) => `${t(k)}: ${v}`).join(' · ')}` : coverageText(`Supervisor result not observed${mode === 'session' ? ' for this session recording' : ''}.`, '감독 프로세스 결과가 관측되지 않았습니다. 세션 기록은 프로세스 감독 증거가 아닙니다.', '監督プロセスの結果は未観測です。セッション記録は監督の証拠ではありません。', '未观测到监督进程结果。会话记录不代表进程监督证据。'),
+      `${t('Repository evidence')}: ${['pending', 'unavailable', 'available'].includes(state.run.changes?.status) ? t(state.run.changes.status) : t('Unknown')}`,
+      `${coverageText('Run-end verification', '실행 종료 검증', '実行終了時の検証', '运行结束验证')}: ${verificationSummary(state.run.evidence.verification).value}`,
+      `${coverageText('Posthoc verification', '사후 검증', '事後検証', '事后验证')}: ${state.run.evidence.posthocVerification ? t('Available') : t('Unavailable')}`,
+      coverageText(`${commands.length} loaded commands · ${exact} directly reported integer exits · ${commands.length - exact} missing or ambiguous`, `불러온 명령 ${commands.length}개 · 직접 보고된 정수 종료 코드 ${exact}개 · 누락 또는 모호 ${commands.length - exact}개`, `読込済みコマンド ${commands.length} 件 · 直接報告された整数終了コード ${exact} 件 · 未記録または曖昧 ${commands.length - exact} 件`, `已加载命令 ${commands.length} 条 · 直接报告整数退出码 ${exact} 条 · 缺失或不明确 ${commands.length - exact} 条`),
+      coverageText('Loaded evidence only; not a completeness guarantee. Independent verification is run-wide, not a request verdict.', '불러온 증거만 표시하며 완전성을 보장하지 않습니다. 독립 검증은 실행 전체에 해당하며 요청 판정이 아닙니다.', '読込済みの証拠のみ。完全性を保証しません。独立検証は実行全体のもので、リクエストの判定ではありません。', '仅限已加载证据，不保证完整。独立验证针对整个运行，不是请求结论。'),
+    ];
+    if (!stream?.loaded || stream.loading || stream.error || stream.nextCursor !== null || stream.startCursor > 0) lines.push(coverageText('Partial / loading / unavailable pages: counts cover loaded records only.', '부분 / 로딩 / 이용 불가 페이지: 불러온 기록만 집계합니다.', '一部 / 読込中 / 利用不可のページ：読込済み記録のみ集計。', '部分 / 加载中 / 不可用页面：仅统计已加载记录。'));
+    if (commands.length > exact && mode === 'session') lines.push(coverageText('For future process evidence, consider supervised trace; it cannot recover missing hook exits retroactively.', '향후 프로세스 증거에는 감독 추적을 고려하세요. 누락된 훅 종료 코드를 소급 복구하지는 못합니다.', '今後のプロセス証拠には監督トレースを検討してください。未記録のフック終了コードは遡って復元できません。', '未来可考虑监督跟踪以记录进程证据，但无法追溯恢复缺失的钩子退出码。'));
+    panel.querySelector('div').replaceChildren(...lines.map((line) => node('p', '', line)));
+  }
+
   function renderRecordingStatus() {
     const card = $('recording-status');
     const recording = state.run.recording || { state: 'unavailable', evidence: 'unavailable', persistence: 'not_proven' };
@@ -3736,6 +3924,8 @@ function shortID(id) {
     $('run-project').textContent = run.project || t('unknown');
     renderRunIdentity();
     renderRecordingStatus();
+    renderCoverage();
+    renderMarkdownExport();
     renderRequest();
     renderRequestIndex();
     renderReply();
@@ -4008,6 +4198,7 @@ function shortID(id) {
       }
     } finally {
       stream.loading = false;
+      renderCoverage();
       if (retryFreshSnapshot && generation === state.loadGeneration && stream === state.streams?.[streamName] && cursor === stream.currentCursor) {
         await loadStreamPage(streamName, cursor, append, generation, focusNew);
         return;
@@ -5069,6 +5260,7 @@ function shortID(id) {
     const controller = new AbortController();
     state.runAbortController = controller;
     const generation = ++state.loadGeneration;
+    $('markdown-export').replaceChildren();
     $('request-results').classList.add('hidden');
     $('request-results-note').classList.add('hidden');
     $('request-results-verification').classList.add('hidden');

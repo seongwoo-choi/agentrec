@@ -26,6 +26,8 @@ Usage:
   agentrec trash restore <run-id>
   agentrec trash empty
   agentrec trash sweep <age> [--dry-run]
+  agentrec delivery add <run-id> [--commit <FULL_SHA>] [--pr <https://github.com/OWNER/REPO/pull/N>]
+  agentrec delivery show <run-id> [--json]
   agentrec verify <run-id>|latest
   agentrec hooks print --claude|--codex [--verify]
   agentrec version [--verbose]
@@ -76,6 +78,8 @@ func Run(args []string, stdout, stderr io.Writer) (exitCode int) {
 			return runShadowShow(args[2:], stdout, stderr)
 		}
 		return runShadow(args[1:], stdout, stderr)
+	case "delivery":
+		return runDelivery(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
 	case "list":

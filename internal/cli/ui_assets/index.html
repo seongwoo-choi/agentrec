@@ -102,6 +102,8 @@
 
         <div id="timeline-warning" class="timeline-warning hidden" role="alert"></div>
 
+        <details id="delivery-observations" class="session-records"><summary>Delivery observations</summary><div></div></details>
+        <details id="evidence-coverage" class="session-records"><summary>Evidence coverage</summary><div></div></details>
         <section id="recording-status" class="recording-status" aria-labelledby="recording-status-title"></section>
 
         <section id="failure-triage" class="failure-triage hidden" aria-labelledby="failure-triage-title">
@@ -200,6 +202,7 @@
           <aside id="inspector-panel" class="inspector-panel" tabindex="-1" aria-labelledby="inspector-title">
             <div id="inspector-title" class="section-label" data-i18n="Evidence inspector">Evidence inspector</div>
             <div id="inspector-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+            <section id="markdown-export" aria-label="Markdown"></section>
             <div id="inspector" class="inspector-empty">Select an action, change, or provider event to inspect its sanitized evidence.</div>
             <div class="evidence-sections" id="evidence-sections"></div>
           </aside>
