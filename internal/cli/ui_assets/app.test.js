@@ -50,6 +50,15 @@ test('markdown export offers explicit download and rejects obsolete controls', a
   dom.window.history.replaceState(null,'','/?run=other');download.click();assert.equal(creates,1);
 });
 
+test('markdown export explicitly switches between a request interval and selected item',async(t)=>{
+ const dom=await requestResultsFixture([{type:'shell.exec',id:'scope-command',offset:200,input:{command:'echo scoped'}}]);
+ t.after(()=>dom.window.close());const d=dom.window.document;
+ assert.match(d.querySelector('#markdown-preview').value,/scope.command/);
+ const source=d.querySelector('#markdown-source');assert.ok(source);
+ source.value='selection';source.dispatchEvent(new dom.window.Event('change'));
+ assert.doesNotMatch(d.querySelector('#markdown-preview').value,/scope.command/);
+});
+
 test('markdown export preserves preview focus across language rerender',async(t)=>{
  const data=fixture('completed','pass','PASS');data.actions=[{type:'shell.exec',id:'focus',offset:42}];
  const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;d.querySelector('.action-row').click();
