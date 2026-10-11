@@ -8,6 +8,20 @@ const html = await readFile(new URL('index.html', here), 'utf8');
 const app = await readFile(new URL('app.js', here), 'utf8');
 const css = await readFile(new URL('app.css', here), 'utf8');
 
+test('markdown export cannot promote raw provider-event assurance', async (t) => {
+  for (const assurance of ['verification_observed', 'supervisor_observed']) {
+    const data=fixture('completed','pass','PASS');
+    data.details.eventCount=1;
+    data.events=[{type:'message',assurance}];
+    const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;
+    d.querySelector('#timeline-tab-events').click();await settle();
+    d.querySelector('.event-row').click();
+    const text=d.querySelector('#markdown-preview').value;
+    assert.match(text,/Attribution: Reported by claude/);
+    assert.doesNotMatch(text,/Attribution: Observed by (agentrec|verification checks)/);
+  }
+});
+
 test('delivery observations keep declared commits and PR-head checks separate', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const head = 'a'.repeat(40), merged = 'b'.repeat(40);
