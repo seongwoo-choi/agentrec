@@ -3226,6 +3226,7 @@ function shortID(id) {
     renderInspectorJump(row);
     selected.generation = state.loadGeneration;
     selected.runID = state.run?.run.id;
+    selected.snapshotID = state.run?.snapshotId;
     state.selected = selected;
     renderInspector();
     if (changed) $('inspector').closest('.inspector-panel').scrollTop = 0;
@@ -3341,7 +3342,84 @@ function shortID(id) {
     holder.append(controls);
   }
 
+  // Small allowlist projection: never serialize event objects, results, patches, or files.
+  function renderMarkdownExport() {
+    const holder = $('markdown-export');
+    if (!holder) return;
+    holder.replaceChildren();
+    const data = state.run, selected = state.selected, scope = state.requestScope;
+    const generation = state.loadGeneration, snapshot = data?.snapshotId, runID = data?.run.id;
+    const stream = state.streams?.actions;
+    const urlRun = () => new URLSearchParams(location.search).get('run');
+    const selectedValid = selected && selected.snapshotID === snapshot && selected.generation === generation && selected.runID === runID && ['action', 'change', 'event', 'live'].includes(selected.kind);
+    const requestValid = !selected && state.mode === 'actions' && scope?.rank > 0 && stream?.items[0]?.type === 'user.prompt' && stream.items[0].offset === scope.start && requestScopeFromURL()?.cursor === scope.start;
+    if (!data || state.runDetailLoading || urlRun() !== runID || (!selectedValid && !requestValid)) return;
+    const kind = selectedValid ? selected.kind : 'request';
+    const rows = selectedValid ? [selected.value] : stream.items.slice(0, 20);
+    const mode = state.mode;
+    const current = () => holder.isConnected && holder.contains(preview) && state.run?.run.id === runID && state.run?.snapshotId === snapshot && state.loadGeneration === generation && !state.runDetailLoading && state.selected === selected && state.requestScope === scope && state.mode === mode && urlRun() === runID && (kind !== 'request' || requestScopeFromURL()?.cursor === scope.start);
+    const literal = (value) => {
+      if (!['string', 'number', 'boolean'].includes(typeof value)) return t('Unknown');
+      const text = String(value);
+      return (text.slice(0, 240) + (text.length > 240 ? '… [truncated]' : '')).replace(/[\r\n\u2028\u2029]/g, ' ↵ ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/([\\`*_{}\[\]()#+.!|~-])/g, '\\$1');
+    };
+    const title = coverageText('Local Markdown preview', '로컬 Markdown 미리보기', 'ローカル Markdown プレビュー', '本地 Markdown 预览');
+    const warning = coverageText('Secret redaction is not guaranteed. Review before copying. Local only; no upload.', '비밀 정보 삭제는 보장되지 않습니다. 복사 전 검토하세요. 로컬 전용이며 업로드하지 않습니다.', '機密情報の削除は保証されません。コピー前に確認してください。ローカルのみ、アップロードなし。', '不保证秘密信息已脱敏。复制前请检查。仅限本地，不上传。');
+    const limits = coverageText('Loaded selection only; partial/truncated. Maximum 20 records, 240 characters per field, 32 KiB total. No payloads or file bodies.', '불러온 선택만 표시 · 부분/잘림. 최대 20개 기록, 필드당 240자, 총 32 KiB. 페이로드와 파일 본문 제외.', '読込済みの選択のみ・一部/省略。最大20記録、各項目240文字、合計32 KiB。ペイロードやファイル本文は含みません。', '仅限已加载的选择，部分/截断。最多20条记录，每字段240字符，总计32 KiB。不含载荷或文件正文。');
+    const verification = coverageText('Independent verification is run-wide, not a request verdict.', '독립 검증은 실행 전체에 해당하며 요청 판정이 아닙니다.', '独立検証は実行全体のもので、リクエストの判定ではありません。', '独立验证针对整个运行，不是请求结论。');
+    const text = [`# ${title}`, warning, limits, `${literal(kind)}: ${rows.length} / ${selectedValid ? 1 : stream.items.length}`, `${t('Run')}: ${literal(runID)}`, `${t('Provider')}: ${literal(data.run.provider)}`];
+    if (kind === 'request') text.push(`${t('Original record')}: ${literal(scope.start)}`, literal($('request-scope-label').textContent));
+    const links = [];
+    rows.forEach((value) => {
+      text.push('', `## ${literal(value.type || value.kind || kind)}`);
+      for (const key of ['id', 'offset', 'path', 'status', 'kind', 'tracked', 'binary', 'additions', 'deletions', 'size']) {
+        if (value[key] !== undefined) text.push(`    ${key}: ${literal(value[key])}`);
+      }
+      const attribution = value.assurance || (kind === 'change' ? state.streams?.changes.attribution : kind === 'live' ? 'Working tree' : 'provider_reported');
+      text.push(`    ${t('Attribution')}: ${literal(humanAttribution(attribution, data.run.provider))}`);
+      if (kind === 'action' || kind === 'request') {
+        const input = value.input;
+        const summary = typeof input === 'string' ? input : [input?.command, input?.cmd, input?.path, input?.file_path, input?.prompt, input?.text].find((v) => typeof v === 'string');
+        if (summary) text.push(`    ${t('SANITIZED INPUT')}: ${literal(summary)}`);
+        const exit = exactReportedExit(value);
+        if (value.type === 'shell.exec') text.push(`    ${exit === null ? t('Exit not recorded') + ' / ' + t('Exit uncertain') : t('Recorded exit: {exit}', { exit })}`);
+      }
+      let href = '';
+      if ((kind === 'action' || kind === 'request') && Number.isSafeInteger(value.offset) && value.offset >= 0) {
+        const url = new URL(location.pathname, location.origin);
+        for (const [key, val] of Object.entries({ run: runID, focus: 'actions', actionCursor: value.offset })) url.searchParams.set(key, String(val));
+        if (typeof value.id === 'string' && value.id) url.searchParams.set('action', value.id);
+        href = url.href;
+      } else if (kind === 'change') href = selectedEvidenceURL(selected);
+      if (href) {
+        links.push(href);
+        text.push(`[${t('Original record')}](${href.replace(/[()]/g, (c) => c === '(' ? '%28' : '%29')})`);
+      } else text.push(t('Exact link unavailable'));
+    });
+    text.push('', `## ${t('Verification')}`, verification, `${coverageText('Run-end verification', '실행 종료 검증', '実行終了時の検証', '运行结束验证')}: ${literal(fieldsMap(data.evidence.verification).get('Status'))}`, `${coverageText('Posthoc verification', '사후 검증', '事後検証', '事后验证')}: ${literal(data.evidence.posthocVerification?.status)}`);
+    const markdown = text.join('\n\n');
+    const preview = node('textarea', 'payload'); preview.id = 'markdown-preview'; preview.readOnly = true; preview.rows = 10; preview.setAttribute('aria-label', title);
+    // UTF-16 units take at most 3 UTF-8 bytes each; 8000 units stays below 32 KiB.
+    preview.value = markdown.length > 8000 ? markdown.slice(0, 7900) + '\n\n[partial / truncated]' : markdown;
+    const copy = node('button', 'markdown-copy', coverageText('Copy Markdown', 'Markdown 복사', 'Markdown をコピー', '复制 Markdown')); copy.id = 'markdown-copy'; copy.type = 'button';
+    const status = node('p', ''); status.setAttribute('role', 'status');
+    copy.addEventListener('click', async () => {
+      if (!current()) return;
+      copy.disabled = true;
+      try { await navigator.clipboard.writeText(preview.value); if (current()) status.textContent = t('Copied'); }
+      catch (_) { if (current()) status.textContent = t('Clipboard unavailable or denied. Select and copy the local URL manually.'); }
+      finally { if (current()) copy.disabled = false; }
+    });
+    holder.append(node('h3', '', title), node('p', '', warning), preview, copy, status);
+    links.forEach((href) => {
+      const link = node('a', '', t('Original record')); link.href = href;
+      link.onclick = link.onauxclick = (e) => { if (!current()) e.preventDefault(); };
+      holder.append(link, ' ');
+    });
+  }
+
   function renderInspector() {
+    renderMarkdownExport();
     const holder = $('inspector');
     const cached = state.selected?.evidenceLink;
     const focused = cached?.url === selectedEvidenceURL() && cached?.controls.contains(document.activeElement)
@@ -3724,7 +3802,7 @@ function shortID(id) {
       observed ? `${t('Process result')}: ${[...supervisor].filter(([k]) => ['Exit Code', 'Signal'].includes(k)).map(([k,v]) => `${t(k)}: ${v}`).join(' · ')}` : coverageText(`Supervisor result not observed${mode === 'session' ? ' for this session recording' : ''}.`, '감독 프로세스 결과가 관측되지 않았습니다. 세션 기록은 프로세스 감독 증거가 아닙니다.', '監督プロセスの結果は未観測です。セッション記録は監督の証拠ではありません。', '未观测到监督进程结果。会话记录不代表进程监督证据。'),
       `${t('Repository evidence')}: ${['pending', 'unavailable', 'available'].includes(state.run.changes?.status) ? t(state.run.changes.status) : t('Unknown')}`,
       `${coverageText('Run-end verification', '실행 종료 검증', '実行終了時の検証', '运行结束验证')}: ${verificationSummary(state.run.evidence.verification).value}`,
-      `${coverageText('Posthoc verification', '사후 검증', '事後検証', '事后验证')}: ${state.run.posthocVerification ? t('Available') : t('Unavailable')}`,
+      `${coverageText('Posthoc verification', '사후 검증', '事後検証', '事后验证')}: ${state.run.evidence.posthocVerification ? t('Available') : t('Unavailable')}`,
       coverageText(`${commands.length} loaded commands · ${exact} directly reported integer exits · ${commands.length - exact} missing or ambiguous`, `불러온 명령 ${commands.length}개 · 직접 보고된 정수 종료 코드 ${exact}개 · 누락 또는 모호 ${commands.length - exact}개`, `読込済みコマンド ${commands.length} 件 · 直接報告された整数終了コード ${exact} 件 · 未記録または曖昧 ${commands.length - exact} 件`, `已加载命令 ${commands.length} 条 · 直接报告整数退出码 ${exact} 条 · 缺失或不明确 ${commands.length - exact} 条`),
       coverageText('Loaded evidence only; not a completeness guarantee. Independent verification is run-wide, not a request verdict.', '불러온 증거만 표시하며 완전성을 보장하지 않습니다. 독립 검증은 실행 전체에 해당하며 요청 판정이 아닙니다.', '読込済みの証拠のみ。完全性を保証しません。独立検証は実行全体のもので、リクエストの判定ではありません。', '仅限已加载证据，不保证完整。独立验证针对整个运行，不是请求结论。'),
     ];
@@ -3772,6 +3850,7 @@ function shortID(id) {
     renderRunIdentity();
     renderRecordingStatus();
     renderCoverage();
+    renderMarkdownExport();
     renderRequest();
     renderRequestIndex();
     renderReply();
@@ -5106,6 +5185,7 @@ function shortID(id) {
     const controller = new AbortController();
     state.runAbortController = controller;
     const generation = ++state.loadGeneration;
+    $('markdown-export').replaceChildren();
     $('request-results').classList.add('hidden');
     $('request-results-note').classList.add('hidden');
     $('request-results-verification').classList.add('hidden');
