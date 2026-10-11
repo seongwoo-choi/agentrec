@@ -8,6 +8,28 @@ const html = await readFile(new URL('index.html', here), 'utf8');
 const app = await readFile(new URL('app.js', here), 'utf8');
 const css = await readFile(new URL('app.css', here), 'utf8');
 
+test('coverage explains accepted loaded exits without mode guarantees in four locales', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.details.run.mode = 'session';
+  data.details.changes.status = 'pending';
+  data.actions = [
+    { type: 'shell.exec', id: 'a', result: { exit_code: 0 } },
+    { type: 'shell.exec', id: 'b', result: { exit_code: '0', stdout: 'exit 0' } },
+    { type: 'shell.exec', id: 'c', exitCode: 0, result: { exit_code: 1 } },
+  ];
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#evidence-coverage');
+  assert.ok(panel, 'native coverage disclosure exists'); assert.equal(panel.tagName, 'DETAILS'); assert.equal(panel.open, false);
+  assert.match(panel.textContent, /3 loaded commands.*1 directly reported integer exits.*2 missing or ambiguous/s);
+  assert.match(panel.textContent, /not observed.*session/s); assert.match(panel.textContent, /pending/i);
+  assert.match(panel.textContent, /Run-end verification.*Posthoc verification/s);
+  panel.open = true;
+  for (const lang of ['ko', 'ja', 'zh-CN', 'en']) {
+    d.querySelector('#lang').value = lang; d.querySelector('#lang').dispatchEvent(new dom.window.Event('change'));
+    assert.equal(panel.open, true); assert.equal(panel.querySelector('summary').textContent === 'Evidence coverage', lang === 'en');
+  }
+});
+
 test('same-session loaded links isolate identities and clear old scope', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.run.sessionGroup = 'opaque-group';
