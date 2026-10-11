@@ -22,6 +22,25 @@ test('markdown export cannot promote raw provider-event assurance', async (t) =>
   }
 });
 
+test('markdown export refreshes after ungrouped request pagination', async (t) => {
+  const data=fixture('completed','pass','PASS');data.details.promptCount=2;
+  let copies=0;
+  const pages={100:{items:[{type:'user.prompt',id:'p1',offset:100,promptRank:1,input:{prompt:'first'}},{type:'shell.exec',id:'first',offset:200,input:{command:'first-command'}}],nextCursor:400,endCursor:400},400:{items:[{type:'shell.exec',id:'second',offset:400,input:{command:'second-command'}},{type:'user.prompt',id:'p2',offset:700,promptRank:2,input:{prompt:'excluded-next'}}],nextCursor:null}};
+  const dom=await requestResultsFixture([],{list:data.list,details:data.details,actions:cursor=>pages[cursor],configure:w=>{
+    w.history.replaceState(null,'',`/?run=${data.details.run.id}&focus=actions&scope=request&scopeStart=100&actionCursor=100`);
+    Object.defineProperty(w.navigator,'clipboard',{value:{writeText:async()=>{copies++;}}});
+  }});
+  t.after(()=>dom.window.close());const d=dom.window.document;
+  d.querySelector('#all-actions-toggle').click();assert.equal(d.querySelector('#all-actions-toggle').checked,true);
+  const oldCopy=d.querySelector('#markdown-copy');
+  assert.doesNotMatch(d.querySelector('#markdown-preview').value,/second.command/);
+  d.querySelector('#timeline .load-more').click();await settle();
+  const text=d.querySelector('#markdown-preview').value;
+  assert.match(text,/second\\?.command/);assert.match(text,/ends before recorded request 2/);assert.doesNotMatch(text,/excluded.next|end not loaded yet/);
+  oldCopy.click();await settle();assert.equal(copies,0,'obsolete request export control must be inert');
+  d.querySelector('#markdown-copy').click();await settle();assert.equal(copies,1);
+});
+
 test('delivery observations keep declared commits and PR-head checks separate', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const head = 'a'.repeat(40), merged = 'b'.repeat(40);
