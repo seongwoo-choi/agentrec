@@ -3698,6 +3698,41 @@ function shortID(id) {
     return Number.isNaN(date.getTime()) ? t('Unavailable') : date.toLocaleString(state.lang);
   }
 
+  function coverageText(en, ko, ja, zh) {
+    return ({ en, ko, ja, 'zh-CN': zh })[state.lang] || en;
+  }
+
+  function exactReportedExit(action) {
+    const fields = [action.exitCode, action.exit_code, action.output?.exitCode, action.output?.exit_code, action.result?.exitCode, action.result?.exit_code].filter((v) => v !== undefined);
+    return fields.length && fields.every(Number.isSafeInteger) && new Set(fields).size === 1 ? fields[0] : null;
+  }
+
+  function renderCoverage() {
+    const panel = $('evidence-coverage');
+    if (!panel || !state.run) return;
+    if (panel.dataset.run !== state.run.run.id) panel.open = false;
+    panel.dataset.run = state.run.run.id;
+    panel.querySelector('summary').textContent = coverageText('Evidence coverage', '증거 범위', '証拠の範囲', '证据覆盖范围');
+    const stream = state.streams?.actions;
+    const commands = (stream?.items || []).filter((a) => a.type === 'shell.exec');
+    const exact = commands.filter((a) => exactReportedExit(a) !== null).length;
+    const supervisor = fieldsMap(state.run.evidence.supervisor);
+    const observed = supervisor.has('Exit Code') || supervisor.has('Signal');
+    const mode = state.run.run.mode;
+    const lines = [
+      `${t('Recording mode')}: ${mode || t('Unknown')}`,
+      observed ? `${t('Process result')}: ${[...supervisor].filter(([k]) => ['Exit Code', 'Signal'].includes(k)).map(([k,v]) => `${t(k)}: ${v}`).join(' · ')}` : coverageText(`Supervisor result not observed${mode === 'session' ? ' for this session recording' : ''}.`, '감독 프로세스 결과가 관측되지 않았습니다. 세션 기록은 프로세스 감독 증거가 아닙니다.', '監督プロセスの結果は未観測です。セッション記録は監督の証拠ではありません。', '未观测到监督进程结果。会话记录不代表进程监督证据。'),
+      `${t('Repository evidence')}: ${['pending', 'unavailable', 'available'].includes(state.run.changes?.status) ? t(state.run.changes.status) : t('Unknown')}`,
+      `${coverageText('Run-end verification', '실행 종료 검증', '実行終了時の検証', '运行结束验证')}: ${verificationSummary(state.run.evidence.verification).value}`,
+      `${coverageText('Posthoc verification', '사후 검증', '事後検証', '事后验证')}: ${state.run.posthocVerification ? t('Available') : t('Unavailable')}`,
+      coverageText(`${commands.length} loaded commands · ${exact} directly reported integer exits · ${commands.length - exact} missing or ambiguous`, `불러온 명령 ${commands.length}개 · 직접 보고된 정수 종료 코드 ${exact}개 · 누락 또는 모호 ${commands.length - exact}개`, `読込済みコマンド ${commands.length} 件 · 直接報告された整数終了コード ${exact} 件 · 未記録または曖昧 ${commands.length - exact} 件`, `已加载命令 ${commands.length} 条 · 直接报告整数退出码 ${exact} 条 · 缺失或不明确 ${commands.length - exact} 条`),
+      coverageText('Loaded evidence only; not a completeness guarantee. Independent verification is run-wide, not a request verdict.', '불러온 증거만 표시하며 완전성을 보장하지 않습니다. 독립 검증은 실행 전체에 해당하며 요청 판정이 아닙니다.', '読込済みの証拠のみ。完全性を保証しません。独立検証は実行全体のもので、リクエストの判定ではありません。', '仅限已加载证据，不保证完整。独立验证针对整个运行，不是请求结论。'),
+    ];
+    if (!stream?.loaded || stream.loading || stream.error || stream.nextCursor !== null || stream.startCursor > 0) lines.push(coverageText('Partial / loading / unavailable pages: counts cover loaded records only.', '부분 / 로딩 / 이용 불가 페이지: 불러온 기록만 집계합니다.', '一部 / 読込中 / 利用不可のページ：読込済み記録のみ集計。', '部分 / 加载中 / 不可用页面：仅统计已加载记录。'));
+    if (commands.length > exact && mode === 'session') lines.push(coverageText('For future process evidence, consider supervised trace; it cannot recover missing hook exits retroactively.', '향후 프로세스 증거에는 감독 추적을 고려하세요. 누락된 훅 종료 코드를 소급 복구하지는 못합니다.', '今後のプロセス証拠には監督トレースを検討してください。未記録のフック終了コードは遡って復元できません。', '未来可考虑监督跟踪以记录进程证据，但无法追溯恢复缺失的钩子退出码。'));
+    panel.querySelector('div').replaceChildren(...lines.map((line) => node('p', '', line)));
+  }
+
   function renderRecordingStatus() {
     const card = $('recording-status');
     const recording = state.run.recording || { state: 'unavailable', evidence: 'unavailable', persistence: 'not_proven' };
@@ -3736,6 +3771,7 @@ function shortID(id) {
     $('run-project').textContent = run.project || t('unknown');
     renderRunIdentity();
     renderRecordingStatus();
+    renderCoverage();
     renderRequest();
     renderRequestIndex();
     renderReply();
@@ -4008,6 +4044,7 @@ function shortID(id) {
       }
     } finally {
       stream.loading = false;
+      renderCoverage();
       if (retryFreshSnapshot && generation === state.loadGeneration && stream === state.streams?.[streamName] && cursor === stream.currentCursor) {
         await loadStreamPage(streamName, cursor, append, generation, focusNew);
         return;
