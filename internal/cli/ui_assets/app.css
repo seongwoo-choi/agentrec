@@ -350,6 +350,10 @@ html:lang(ko) .timeline-note { word-break: keep-all; overflow-wrap: anywhere; }
 .pill { border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; color: var(--muted); font: 12px var(--mono); background: var(--surface); overflow-wrap: anywhere; }
 .pill.path-correlation { color: var(--warn); border-color: transparent; background: var(--warn-bg); }
 .payload-label { margin: 14px 0 6px; }
+#markdown-preview { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; }
+#markdown-export button, #markdown-export select { margin: 4px 6px 4px 0; }
+.delivery-entry { border-top: 1px solid var(--border-subtle); padding: 8px 0; overflow-wrap: anywhere; }
+.delivery-entry p { margin: 5px 0; }
 .payload { margin: 0; padding: 10px 12px; border: 1px solid var(--border-subtle); background: var(--code-bg); border-radius: 8px; color: var(--secondary); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
 .diff-patch { max-height: 420px; white-space: pre; }
 .diff-line { display: block; }

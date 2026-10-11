@@ -129,6 +129,8 @@ agentrec events latest --json
 
 ## Viewer
 
+> 记录后的交付情况、证据范围和所选 Markdown 导出可在 main 源码构建中使用，尚未包含在 v0.21.0 发行版中。
+
 <table align="center">
   <tr>
     <td width="50%" align="center">
@@ -156,6 +158,9 @@ agentrec events latest --json
 - **新文件的已保存正文** — 在变更标签页选择未跟踪文件，再查看已保存的文本。仅在哈希校验通过后读取记录时已脱敏的正文，上限为 1 MiB。正文缺失、无法校验或超过上限时明确显示不可用，不会改读当前工作区的文件。
 - **按请求查看观测记录** — 在所选请求区间汇总已加载的文件提及和命令记录，列表有明确上限，并可直达对应的原始操作。保留部分加载、尚未结束区间和未知结果的区别，不把整次运行的独立验证当作单个请求的结论。
 - **同一会话的记录** — 在已加载记录中，按记录的提供方、会话和规范仓库标识精确匹配并跳转。标识不完整时不建立关联，不合并历史、用量或验证结果。链接只打开记录，不会恢复运行智能体。
+- **记录后的交付情况** — 为运行显式关联提交或 GitHub PR。后续观测与原始记录分开，关联本身不证明更改由该运行造成。PR 状态与 head 检查结果注明观测的 SHA 和时间，不视为整次运行成功的结论。
+- **证据范围** — 查看实际记录覆盖了哪些内容：进程监督、仓库测量、独立验证，以及已加载命令中的退出码。区分未观测、缺失和部分加载。
+- **导出所选证据** — 将当前选中项或已加载的请求区间预览为有长度上限的 Markdown，再复制或保存到本地。不导出整份原始日志，也不自动上传；分享前请检查是否包含敏感信息。
 - **跨运行** — 在所有运行中搜索一个词，直达匹配的操作或变更文件；并排比较任意两个运行；复制
   指向精确行的本地证据链接。
 - **实时** — 仍在进行的运行会自动刷新页面，并显示当前的工作树。
@@ -207,6 +212,7 @@ Codex 没有这类钩子：未能运行的一轮只会留下一条没有回复�
 | 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | 列出、恢复、清空或清理从 Viewer 删除的运行。 |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | 打印 `setup` 将安装的钩子片段。 |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` · `shadow show <group-id>` | 从同一个已提交基线在隔离的 worktree 中把一个任务记录两次 · 重新渲染比较。 |
+| `agentrec delivery add <run-id> [--commit <full-sha>] [--pr <GitHub-PR-URL>]` · `delivery show <run-id> [--json]` | 显式添加后续关联（至少一个标志）。PR 通过 `gh` 只读查询；显示带时间的本地历史，不证明因果关系。 |
 | 🏷️ `agentrec version [--verbose]` | 打印标签、提交和 UTC 构建时间；`--verbose` 列出 `PATH` 上的每一个 `agentrec`。 |
 
 每条命令都接受 `-h`/`--help`。`agentrec hook <provider>` 和 `agentrec session serve` 也存在；

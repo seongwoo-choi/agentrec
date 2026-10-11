@@ -99,8 +99,8 @@ func decodeDelivery(raw []byte) (*deliveryDocument, error) {
 		default:
 			return nil, errors.New("cli: invalid CI status")
 		}
-		if o.HeadCI.CheckCount == 0 && o.HeadCI.Status != "missing" {
-			return nil, errors.New("cli: absent checks cannot support a verdict")
+		if (o.HeadCI.CheckCount == 0) != (o.HeadCI.Status == "missing") || (o.HeadCI.CheckCount == 100 && o.HeadCI.Status == "success") {
+			return nil, errors.New("cli: CI state is inconsistent with observed check count")
 		}
 	}
 	return &doc, nil
@@ -223,8 +223,10 @@ func observeDeliveryPR(url string) (*deliveryObservation, error) {
 				result = "pending"
 			case "COMPLETED":
 				switch c.Conclusion {
-				case "SUCCESS", "NEUTRAL", "SKIPPED":
+				case "SUCCESS":
 					result = "success"
+				case "NEUTRAL", "SKIPPED":
+					result = "incomplete"
 				case "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE":
 					result = "failure"
 				case "":
@@ -329,6 +331,10 @@ func addDelivery(root, runID, commit, pr string) (*deliveryDocument, error) {
 		return nil, err
 	}
 	defer rr.Remove(tmp)
+	// Observation can block on GitHub; retain the selected run identity across it.
+	if err = requireInstalledRun(root, runID, rr); err != nil {
+		return nil, err
+	}
 	if err = rr.Rename(tmp, deliveryFile); err != nil {
 		return nil, err
 	}

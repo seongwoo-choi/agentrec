@@ -138,6 +138,8 @@ prove receipt, health or durable persistence.
 
 ## The Viewer
 
+> Delivery observations, evidence coverage, and selected Markdown export are available in a source build from main; they are not included in the v0.21.0 release.
+
 <table align="center">
   <tr>
     <td width="50%" align="center">
@@ -171,6 +173,9 @@ prove receipt, health or durable persistence.
 - **Stored new-file text** — select an untracked file in Changes, then choose **View stored text**. Reads only its recorded sanitized body after a digest check, up to 1 MiB; missing, unverified or larger bodies stay explicitly unavailable. The current workspace is never read.
 - **Request observations** — expand the selected request interval to see bounded loaded file mentions and command records with exact original-action links. Partial/open boundaries and unknown outcomes stay explicit; run-wide independent verification is not a request verdict.
 - **Same-session records** — move between matching loaded records using the recorded provider, session and canonical repository identity. Missing identity stays unlinked; histories, usage and verification remain separate. Links view records, not resume an agent.
+- **Delivery observations** — explicitly associate a recorded run with a commit or GitHub PR. Later observations stay separate from the original recording; an association is not causal proof. PR state and head-check evidence name their observed SHA and time, not a blanket success verdict.
+- **Evidence coverage** — inspect what this record actually contains: supervised process evidence, repository measurement, independent verification, and reported exits in loaded command records. Missing and partial evidence remain explicit.
+- **Selected evidence export** — preview a bounded Markdown handoff for the current selection or loaded request interval before copying or saving it locally. It does not export an entire raw log or upload anything; review the preview for sensitive information before sharing.
 - **Across runs** — search every run for a word and land on the matching action
   or changed file; compare any two runs side by side; copy a local evidence link
   to the exact row.
@@ -227,6 +232,7 @@ existing installation.
 | 🗑️ `agentrec trash [restore <run-id> \| empty \| sweep <age>]` | Lists, restores, erases or sweeps runs deleted from the viewer. |
 | 🎧 `agentrec hooks print --claude\|--codex [--verify]` | Prints the hooks fragment `setup` would install. |
 | ⚖️ `agentrec shadow run <task-file> --runner claude --runner codex` · `shadow show <group-id>` | Records one task twice from one committed baseline in isolated worktrees · re-renders the comparison. |
+| `agentrec delivery add <run-id> [--commit <full-sha>] [--pr <GitHub-PR-URL>]` · `delivery show <run-id> [--json]` | Adds an explicit later association (at least one flag); PR lookup uses read-only `gh`. Shows a timestamped local history, never causal proof. |
 | 🏷️ `agentrec version [--verbose]` | Prints the tag, commit and UTC build time; `--verbose` lists every `agentrec` on `PATH`. |
 
 Every command accepts `-h`/`--help`. `agentrec hook <provider>` and
