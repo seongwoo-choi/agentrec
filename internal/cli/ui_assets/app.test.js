@@ -8,6 +8,56 @@ const html = await readFile(new URL('index.html', here), 'utf8');
 const app = await readFile(new URL('app.js', here), 'utf8');
 const css = await readFile(new URL('app.css', here), 'utf8');
 
+test('delivery observations keep declared commits and PR-head checks separate', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  const head = 'a'.repeat(40), merged = 'b'.repeat(40);
+  data.details.delivery = { schemaVersion: 1, associations: [{ commit: head, pr: 'https://github.com/o/r/pull/1', observedAt: '2026-10-11T00:00:00Z', observation: { state: 'MERGED', headSha: head, mergeSha: merged, observedAt: '2026-10-11T00:00:00Z', headCI: { targetSha: head, status: 'failure', checkCount: 1 }, mergeCI: { status: 'unobserved' } } }] };
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document, panel = d.querySelector('#delivery-observations');
+  assert.ok(panel); assert.equal(panel.tagName, 'DETAILS'); assert.equal(panel.open, false);
+  assert.match(panel.textContent, /MERGED/); assert.match(panel.textContent, /PR head CI.*failure/s);
+  assert.match(panel.textContent, /Merge.*unobserved/s); assert.match(panel.textContent, /not.*causal/i);
+  assert.ok(panel.textContent.includes(head)); assert.ok(panel.textContent.includes(merged));
+  assert.equal(panel.querySelector('a').href, 'https://github.com/o/r/pull/1');
+  panel.open = true;
+  for (const lang of ['ko','ja','zh-CN','en']) {
+    d.querySelector('#lang').value=lang; d.querySelector('#lang').dispatchEvent(new dom.window.Event('change'));
+    assert.equal(panel.open, true); assert.equal(panel.querySelector('summary').textContent==='Delivery observations',lang==='en');
+  }
+});
+
+test('delivery observations show missing observations without inventing success', async (t) => {
+  const dom=await renderFixture(fixture('completed','pass','PASS'));t.after(()=>dom.window.close());
+  const panel=dom.window.document.querySelector('#delivery-observations');assert.ok(panel);
+  assert.match(panel.textContent,/No delivery observations/);assert.doesNotMatch(panel.textContent,/CI.*success/);
+});
+
+test('markdown export keeps verification boundary before any truncated evidence', async (t) => {
+  const dom=await requestResultsFixture(Array.from({length:65},(_,i)=>({type:'shell.exec',id:`long${i}`,offset:200+i,input:{command:'x'.repeat(3000)}})));
+  t.after(()=>dom.window.close()); const text=dom.window.document.querySelector('#markdown-preview').value;
+  assert.match(text,/Run-end verification/);assert.match(text,/Posthoc verification/);assert.match(text,/not a request verdict/);
+  assert.ok(text.indexOf('Run-end verification')<text.indexOf('## shell'));
+});
+
+test('markdown export offers explicit download and rejects obsolete controls', async(t)=>{
+  const data=fixture('completed','pass','PASS');data.actions=[{type:'shell.exec',id:'downloaded',offset:42,result:{exitCode:0}}];
+  let creates=0, filename='';data.configure=(w)=>{
+    w.URL.createObjectURL=()=>{creates++;return 'blob:local-preview'};w.URL.revokeObjectURL=()=>{};
+    w.HTMLAnchorElement.prototype.click=function(){filename=this.download;};
+  };
+  const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;d.querySelector('.action-row').click();
+  const download=d.querySelector('#markdown-download');assert.ok(download);download.click();assert.equal(creates,1);assert.match(filename,/\.md$/);
+  dom.window.history.replaceState(null,'','/?run=other');download.click();assert.equal(creates,1);
+});
+
+test('markdown export preserves preview focus across language rerender',async(t)=>{
+ const data=fixture('completed','pass','PASS');data.actions=[{type:'shell.exec',id:'focus',offset:42}];
+ const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;d.querySelector('.action-row').click();
+ d.querySelector('#markdown-preview').focus();
+ d.querySelector('#lang').value='ko';d.querySelector('#lang').dispatchEvent(new dom.window.Event('change'));
+ assert.equal(d.activeElement.id,'markdown-preview');
+});
+
 test('markdown export previews only explicit selected evidence, literal hostile text and exact identity', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.actions = [{ type: 'shell.exec', id: 'selected', offset: 317, status: 'completed', input: { command: '<script>alert(1)</script>\n```\n# forged', secretPayload: 'OMIT_PAYLOAD' }, result: { stdout: 'OMIT_STDOUT' } }];
