@@ -41,6 +41,14 @@ test('markdown export refreshes after ungrouped request pagination', async (t) =
   d.querySelector('#markdown-copy').click();await settle();assert.equal(copies,1);
 });
 
+test('markdown export preserves later verification timing and changed-HEAD caveat',async(t)=>{
+ const data=fixture('completed','pass','PASS');data.actions=[{type:'shell.exec',id:'x',offset:42}];
+ data.details.evidence.posthocVerification={status:'PASS',measuredAt:'2026-10-11T00:00:00Z',headMovedSince:true,caveat:'Measured against another HEAD',fields:[]};
+ const dom=await renderFixture(data);t.after(()=>dom.window.close());const d=dom.window.document;d.querySelector('.action-row').click();
+ const text=d.querySelector('#markdown-preview').value;
+ assert.match(text,/measuredAt:/);assert.match(text,/headMovedSince: true/);assert.match(text,/Measured against another HEAD/);
+});
+
 test('delivery observations keep declared commits and PR-head checks separate', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   const head = 'a'.repeat(40), merged = 'b'.repeat(40);
