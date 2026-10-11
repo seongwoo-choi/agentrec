@@ -8,6 +8,50 @@ const html = await readFile(new URL('index.html', here), 'utf8');
 const app = await readFile(new URL('app.js', here), 'utf8');
 const css = await readFile(new URL('app.css', here), 'utf8');
 
+test('markdown export previews only explicit selected evidence, literal hostile text and exact identity', async (t) => {
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ type: 'shell.exec', id: 'selected', offset: 317, status: 'completed', input: { command: '<script>alert(1)</script>\n```\n# forged', secretPayload: 'OMIT_PAYLOAD' }, result: { stdout: 'OMIT_STDOUT' } }];
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document;
+  assert.ok(d.querySelector('#markdown-export'));
+  assert.equal(d.querySelector('#markdown-preview'), null, 'no whole-run default export');
+  d.querySelector('.action-row').click();
+  const preview = d.querySelector('#markdown-preview'); assert.ok(preview?.readOnly);
+  assert.match(preview.value, /317/); assert.match(preview.value, /selected/);
+  assert.match(preview.value, /&lt;script&gt;/); assert.doesNotMatch(preview.value, /<script>|OMIT_STDOUT|OMIT_PAYLOAD/);
+  assert.match(preview.value, /Exit not recorded/); assert.match(preview.value, /run-wide/i);
+  assert.match(d.querySelector('#markdown-export').textContent, /redaction.*not guaranteed/i);
+  const link = d.querySelector('#markdown-export a'); assert.equal(new URL(link.href).searchParams.get('actionCursor'), '317');
+});
+
+test('markdown export handles async clipboard denial and blocks detached stale-run controls', async (t) => {
+  let rejectCopy, calls = 0;
+  const data = fixture('completed', 'pass', 'PASS');
+  data.actions = [{ type: 'shell.exec', id: 'selected', offset: 42, input: { command: 'safe' } }];
+  data.configure = (w) => Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: () => { calls++; return new Promise((_, reject) => { rejectCopy = reject; }); } } });
+  const dom = await renderFixture(data); t.after(() => dom.window.close());
+  const d = dom.window.document; d.querySelector('.action-row').click();
+  let copy = d.querySelector('#markdown-copy'); assert.ok(copy); copy.click();
+  rejectCopy(new Error('denied')); await settle();
+  assert.match(d.querySelector('#markdown-export').textContent, /Clipboard unavailable/);
+  copy.click();
+  dom.window.history.replaceState(null, '', '/?run=other');
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate')); await settle();
+  rejectCopy(new Error('late denial')); await settle();
+  copy.click(); assert.equal(calls, 2);
+  assert.equal(d.querySelector('#markdown-preview'), null);
+});
+
+test('markdown export bounds request interval and clears on scope exit', async (t) => {
+  const dom = await requestResultsFixture(Array.from({ length: 65 }, (_, i) => ({ type: 'shell.exec', id: `a${i}`, offset: 200 + i, input: { command: 'x'.repeat(3000) } })));
+  t.after(() => dom.window.close()); const d = dom.window.document;
+  const preview = d.querySelector('#markdown-preview'); assert.ok(preview);
+  assert.ok(Buffer.byteLength(preview.value) <= 32768); assert.match(preview.value, /partial|truncated/i);
+  assert.match(preview.value, /loaded/i); assert.doesNotMatch(preview.value, /a64/);
+  d.querySelector('#request-scope-exit').click(); await settle();
+  assert.equal(d.querySelector('#markdown-preview'), null);
+});
+
 test('coverage explains accepted loaded exits without mode guarantees in four locales', async (t) => {
   const data = fixture('completed', 'pass', 'PASS');
   data.details.run.mode = 'session';
