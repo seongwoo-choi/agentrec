@@ -92,6 +92,7 @@ type viewSnapshot struct {
 }
 
 var viewSnapshotFiles = []string{
+	deliveryFile,
 	manifestFile,
 	storage.RecordingReceiptFile,
 	promptFile,
@@ -110,6 +111,7 @@ var viewSnapshotFiles = []string{
 }
 
 var viewSnapshotFileLimits = map[string]int64{
+	deliveryFile:                                  deliveryMaxBytes,
 	manifestFile:                                  maxDocumentBytes,
 	storage.RecordingReceiptFile:                  maxDocumentBytes,
 	promptFile:                                    maxDocumentBytes,
@@ -911,6 +913,10 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	if !sameViewFingerprint(before, after) {
 		return fail(errors.New("cli: run changed while the viewer snapshot was being created; retry"))
 	}
+	delivery, err := decodeDelivery(snapshot.documents[deliveryFile])
+	if err != nil {
+		return fail(err)
+	}
 	receiptRaw := snapshot.documents[storage.RecordingReceiptFile]
 	snapshot.documents = nil
 	// Transfer ownership only after capture validation. fail and eviction now
@@ -932,6 +938,7 @@ func (s *viewSnapshotStore) createContext(ctx context.Context, runID string) (vi
 	exitReason := viewExitReason(manifest, evidence.processResult)
 	statusClass, statusLabel := viewRunStatusWithFailure(exitReason, evidence.verificationStatus, evidence.verificationWarnings, evidence.failure)
 	return viewRunResponse{
+		Delivery:         delivery,
 		SchemaVersion:    1,
 		SnapshotID:       snapshot.id,
 		ActionCount:      actionCount,
